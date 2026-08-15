@@ -82,12 +82,12 @@ from .service import (
     load_entries_range,
     load_rates,
     load_salaries,
+    locked_employee_ids,
+    locked_ids_for_date,
     now_iso,
     overtime_applies,
     parse_week_param,
     rate_on,
-    settled_employee_ids,
-    settled_ids_for_date,
     shift_gross_hours,
     week_days,
     week_start_for,
@@ -462,6 +462,8 @@ def get_employee(emp_id: str, user=Depends(_get_timesheet)):
             advances=s["advances"] if with_money else None,
             to_pay=s["to_pay"] if with_money else None,
             overpaid=s["overpaid"] if with_money else None,
+            settlements=s["settlements"] if with_money else None,
+            payout_status=s["payout_status"] if with_money else None,
             settled=bool(s["settled"]),
         ),
         attendance=AttendanceBlock(**attendance),
@@ -815,9 +817,9 @@ def fill_fact(body: FillFactRequest, user=Depends(_get_timesheet)):
     filled = 0
     with get_connection() as conn:
         entries = load_entries_range(conn, days[0].isoformat(), days[-1].isoformat())
-        settled = settled_employee_ids(conn, days[0].isoformat(), days[-1].isoformat())
+        locked = locked_employee_ids(conn, days[0].isoformat(), days[-1].isoformat())
         for (emp_id, day_iso), entry in entries.items():
-            if emp_id in settled:  # неделя закрыта расчётом — факт не трогаем
+            if emp_id in locked:  # неделя закрыта расчётом — факт не трогаем
                 continue
             if day_iso > today_iso:  # факт за ненаступивший день не проставляем
                 continue
@@ -869,12 +871,12 @@ def day_fact_bulk(body: DayFactBulkRequest, user=Depends(_get_timesheet)):
     saved = 0
 
     with get_connection() as conn:
-        settled = settled_ids_for_date(conn, work_date)
+        locked = locked_ids_for_date(conn, work_date)
         for item in body.items:
             emp_id = str(item.employee_id or "").strip()
             if not emp_id:
                 continue
-            if emp_id in settled:  # неделя закрыта расчётом — факт не трогаем
+            if emp_id in locked:  # неделя закрыта расчётом — факт не трогаем
                 continue
             if not conn.execute(
                 "SELECT 1 FROM employees WHERE id = ? AND COALESCE(is_deleted, 0) = 0", (emp_id,)
@@ -1087,7 +1089,7 @@ def settle_all(
         data = build_payroll(conn, sat)
         period_start, period_end = data["week_start"], data["week_end"]
         for r in data["rows"]:
-            if r["settled"]:
+            if int(r["to_pay"]) <= 0:  # выдавать нечего — строка уже закрыта
                 continue
             _record_payment(
                 conn,
@@ -1097,7 +1099,7 @@ def settle_all(
                 paid_on=today_iso,
                 period_start=period_start,
                 period_end=period_end,
-                comment="Пятничный расчёт",
+                comment="Доплата за неделю" if int(r["settlements"]) > 0 else "Пятничный расчёт",
                 uid=uid,
             )
             settled += 1

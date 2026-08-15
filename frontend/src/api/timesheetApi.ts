@@ -5,6 +5,7 @@ import { request } from './http'
 export type EmployeeStatus = 'active' | 'archived'
 export type DayStatus = 'worked' | 'planned' | 'absent' | 'noplan' | 'not_called' | 'off'
 export type PayKind = 'settlement' | 'advance'
+export type PayoutStatus = 'pending' | 'partial' | 'settled' | 'overpaid'
 
 export type CompType = 'hourly' | 'fixed'
 
@@ -58,6 +59,8 @@ export type EmployeeWeekSummary = {
   advances: number | null
   to_pay: number | null
   overpaid: number | null
+  settlements: number | null
+  payout_status: PayoutStatus | null
   settled: boolean
 }
 export type AttendanceStatus = DayStatus | 'prehire' | 'future'
@@ -229,19 +232,24 @@ export type PayrollRow = {
   overtime_hours: number
   overtime_pay: number
   advances: number
+  settlements: number
   to_pay: number
   overpaid: number
+  payout_status: PayoutStatus
   settled: boolean
   archived: boolean
 }
 export type PayrollTotals = {
   earned: number
   advances: number
+  paid: number
+  settlements: number
   to_pay: number
   overtime_hours: number
   overtime_pay: number
   employees: number
   left: number
+  partial: number
 }
 export type PayrollResponse = {
   week_start: string
@@ -432,6 +440,20 @@ export const DAY_STATUS_LABELS: Record<DayStatus, string> = {
   noplan: 'Без плана',
   not_called: 'Не вызван',
   off: 'Выходной',
+}
+
+export const PAYOUT_STATUS_LABELS: Record<PayoutStatus, string> = {
+  pending: 'Ожидает',
+  partial: 'Частично',
+  settled: 'Рассчитан',
+  overpaid: 'Переплата',
+}
+
+export const PAYOUT_STATUS_TONE: Record<PayoutStatus, string> = {
+  pending: '',
+  partial: 'warning',
+  settled: 'success',
+  overpaid: 'danger',
 }
 
 export const DAY_STATUS_TONE: Record<DayStatus, string> = {

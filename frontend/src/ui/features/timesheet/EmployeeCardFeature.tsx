@@ -303,9 +303,16 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
             icon="clock" title="Эта неделя" bodyPad={false}
             right={
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-                {canSettle && (w.settled
-                  ? <Badge tone="success" dot>Рассчитан</Badge>
-                  : <button className="btn primary sm" onClick={() => setSettleOpen(true)}><Icon name="wallet" size={13} />Рассчитать</button>)}
+                {canSettle && ((w.to_pay ?? 0) > 0
+                  ? (
+                    <button className="btn primary sm" onClick={() => setSettleOpen(true)}>
+                      <Icon name={(w.settlements ?? 0) > 0 ? 'plus' : 'wallet'} size={13} />
+                      {(w.settlements ?? 0) > 0 ? 'Доплатить' : 'Рассчитать'} {fmtMoney(w.to_pay)}
+                    </button>
+                  )
+                  : w.payout_status === 'settled' ? <Badge tone="success" dot>Рассчитан</Badge>
+                  : w.payout_status === 'overpaid' ? <Badge tone="danger" dot>Переплата</Badge>
+                  : null)}
                 <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>{e.week_label}</span>
               </span>
             }
@@ -410,6 +417,7 @@ export function EmployeeCardFeature({ empId }: { empId: string }) {
           employeeId={empId} employeeName={e.full_name}
           weekLabel={e.week_label} weekStart={e.week_start} weekEnd={e.week_end}
           earned={w.earned ?? 0} advances={w.advances ?? 0} toPay={w.to_pay ?? 0}
+          settlements={w.settlements ?? 0}
           hours={w.hours} rate={e.rate_kopecks} overtimePay={w.overtime_pay}
           onClose={() => setSettleOpen(false)} onSaved={reload}
         />
