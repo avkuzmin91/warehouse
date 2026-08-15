@@ -487,6 +487,85 @@ def test_advance_reduces_to_pay_then_settle(manager_client, employee):
                if x["employee_id"] == employee)
     assert row["settled"] is True
     assert row["to_pay"] == 0     # 385000 − 100000 аванс − 285000 расчёт
+    assert row["payout_status"] == "settled"
+
+
+def test_partial_settlement_keeps_row_open(manager_client, employee):
+    """Частичный расчёт не закрывает неделю: остаток виден и его можно доплатить."""
+    _add_worked_day(manager_client, employee)   # заработано 385000
+
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 200000, "kind": "settlement",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+
+    body = manager_client.get(f"/timesheet/payroll?week={WEEK}").json()
+    row = next(x for x in body["rows"] if x["employee_id"] == employee)
+    assert row["payout_status"] == "partial"
+    assert row["settled"] is False
+    assert row["settlements"] == 200000
+    assert row["to_pay"] == 185000
+
+    # Доплата остатка закрывает строку
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 185000, "kind": "settlement",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+    row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
+               if x["employee_id"] == employee)
+    assert row["payout_status"] == "settled"
+    assert row["to_pay"] == 0
+
+
+def test_settle_all_pays_remainder_after_partial(manager_client, employee):
+    """«Доплатить всем» добирает остаток по частично рассчитанным, а не пропускает их."""
+    _add_worked_day(manager_client, employee)
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 200000, "kind": "settlement",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+
+    r = manager_client.post("/timesheet/payroll/settle-all", json={"week": WEEK})
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] == "1"     # строка не пропущена
+
+    row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
+               if x["employee_id"] == employee)
+    assert row["to_pay"] == 0
+    assert row["settlements"] == 385000
+
+    # Повторный вызов доплачивать нечего
+    r = manager_client.post("/timesheet/payroll/settle-all", json={"week": WEEK})
+    assert r.json()["message"] == "0"
+
+
+def test_partial_settlement_does_not_lock_fact(manager_client, employee):
+    """Частичная выплата не запирает часы — иначе неделю уже не досчитать."""
+    _add_worked_day(manager_client, employee)
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": 100000, "kind": "settlement",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["fact_locked"] is False
+    assert manager_client.put("/timesheet/entry", json={
+        "employee_id": employee, "work_date": WORK_DATE,
+        "planned_start": "08:00", "planned_end": "20:00",
+        "actual_start": "09:00", "actual_end": "20:00",
+    }).status_code == 200
+
+    # Полное закрытие недели факт запирает
+    row = next(x for x in manager_client.get(f"/timesheet/payroll?week={WEEK}").json()["rows"]
+               if x["employee_id"] == employee)
+    assert manager_client.post("/timesheet/payments", json={
+        "employee_id": employee, "amount_kopecks": row["to_pay"], "kind": "settlement",
+        "period_start": "2025-01-04", "period_end": "2025-01-10",
+    }).status_code == 200
+    assert manager_client.get(
+        f"/timesheet/entry?employee_id={employee}&date={WORK_DATE}"
+    ).json()["fact_locked"] is True
 
 
 def test_payroll_hides_zero_hour_rows_but_keeps_money(manager_client, employee):

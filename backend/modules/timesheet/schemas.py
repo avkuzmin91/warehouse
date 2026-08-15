@@ -100,6 +100,8 @@ class EmployeeWeekSummary(BaseModel):
     advances:    int | None = None
     to_pay:      int | None = None
     overpaid:    int | None = None
+    settlements: int | None = None
+    payout_status: str | None = None
     settled:     bool = False
 
 
@@ -317,8 +319,10 @@ class PayrollRow(BaseModel):
     overtime_hours: float = 0.0
     overtime_pay:   int = 0
     advances:     int
+    settlements:  int = 0                              # уже проведённые расчёты за неделю
     to_pay:       int
     overpaid:     int
+    payout_status: str                                 # pending | partial | settled | overpaid
     settled:      bool
     archived:     bool = False                         # сотрудник в архиве — строка осталась за историю недели
 
@@ -326,11 +330,14 @@ class PayrollRow(BaseModel):
 class PayrollTotals(BaseModel):
     earned:    int
     advances:  int
+    paid:      int = 0                                 # выдано всего: авансы + расчёты
+    settlements: int = 0
     to_pay:    int
     overtime_hours: float = 0.0
     overtime_pay:   int = 0
     employees: int
-    left:      int
+    left:      int                                     # сотрудников с остатком к выдаче
+    partial:   int = 0                                 # из них — с уже начатым расчётом
 
 
 class PayrollResponse(BaseModel):

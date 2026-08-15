@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
+import { useConfirm } from '../../feedback/ConfirmDialog'
 import { useLookups } from '../../../hooks/useLookups'
 import { useCurrentUser } from '../../../hooks/useCurrentUser'
 import { canViewSalary } from '../../../utils/access'
 import { getUsers } from '../../../api/adminApi'
 import type { UserListItem } from '../../../api/domainTypes'
 import { ModalShell, FieldLabel, ReadRow, fmtMoney, fmtMoneyShort, fmtRate, fmtHours, rublesToKopecks } from './shared'
-import { addPayment, addEmployeeRate, addEmployeeSalary, createEmployee, updateEmployee, type CompType, type EmployeeDetail } from '../../../api/timesheetApi'
+import { addPayment, cancelPayment, getEmployee, addEmployeeRate, addEmployeeSalary, createEmployee, updateEmployee, type CompType, type EmployeeDetail, type PayHistoryItem } from '../../../api/timesheetApi'
 import { moscowTodayYmd } from '../../../utils/format'
 
 /** Загружает учётки для связи сотрудника с учётной записью (только для админа). */
@@ -87,35 +88,95 @@ export function AdvanceModal({
 
 // ── Рассчитать за неделю ──────────────────────────────────────────────────────
 
+/** Выплаты за расчётную неделю с возможностью отменить ошибочную. */
+function WeekPayments({
+  employeeId, weekStart, reloadKey, onCancelled,
+}: { employeeId: string; weekStart: string; reloadKey: number; onCancelled: () => void }) {
+  const toast = useToast()
+  const confirm = useConfirm()
+  const [items, setItems] = useState<PayHistoryItem[] | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    getEmployee(employeeId)
+      .then((e) => { if (alive) setItems(e.pay_history.filter((p) => p.period_start === weekStart)) })
+      .catch(() => { if (alive) setItems([]) })
+    return () => { alive = false }
+  }, [employeeId, weekStart, reloadKey])
+
+  const cancel = async (p: PayHistoryItem) => {
+    const ok = await confirm({
+      title: 'Отменить выплату?',
+      body: `${p.kind_label} ${fmtMoney(p.amount_kopecks)} будет отменён, сумма вернётся в «осталось выдать».`,
+      danger: true,
+      confirmLabel: 'Отменить выплату',
+    })
+    if (!ok) return
+    setBusyId(p.id)
+    try {
+      await cancelPayment(p.id)
+      toast('Выплата отменена', 'success')
+      onCancelled()
+    } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusyId(null) }
+  }
+
+  if (!items?.length) return null
+  return (
+    <div style={{ marginBottom: 14, border: '1px solid var(--c-border)', borderRadius: 'var(--r-lg)', overflow: 'hidden' }}>
+      <div style={{ padding: '8px 12px', background: 'var(--c-bg-sunken)', fontSize: 11, color: 'var(--c-text-subtle)', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Icon name="history" size={12} />Выплаты за эту неделю
+      </div>
+      {items.map((p) => (
+        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 12px', borderTop: '1px solid var(--c-border)' }}>
+          <span style={{ fontSize: 12, color: p.kind === 'advance' ? 'var(--c-warning)' : 'var(--c-text)', minWidth: 54 }}>{p.kind_label}</span>
+          <span className="mono" style={{ fontSize: 12.5, fontWeight: 600 }}>{fmtMoney(p.amount_kopecks)}</span>
+          <span style={{ fontSize: 11, color: 'var(--c-text-subtle)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {p.paid_on ?? ''}{p.comment ? ` · ${p.comment}` : ''}
+          </span>
+          <button className="btn ghost sm" disabled={busyId === p.id} onClick={() => cancel(p)} title="Отменить выплату">
+            <Icon name="x" size={13} />
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function SettleModal({
   employeeId, employeeName, weekLabel, weekStart, weekEnd, earned, advances, toPay, hours, rate,
-  overtimePay = 0, onClose, onSaved,
+  overtimePay = 0, settlements = 0, onClose, onSaved,
 }: {
   employeeId: string; employeeName: string; weekLabel: string; weekStart: string; weekEnd: string
   earned: number; advances: number; toPay: number; hours: number; rate: number | null
   overtimePay?: number | null
+  settlements?: number
   onClose: () => void; onSaved: () => void
 }) {
   const toast = useToast()
   const [amount, setAmount] = useState(String(Math.round(toPay / 100)))
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+
+  const topUp = settlements > 0
+  const kop = rublesToKopecks(amount)
+  const rest = Math.max(0, toPay - kop)
 
   const submit = async () => {
-    const kop = rublesToKopecks(amount)
     if (kop <= 0) { toast('Укажите сумму выплаты', 'error'); return }
     setBusy(true)
     try {
-      await addPayment({ employee_id: employeeId, amount_kopecks: kop, kind: 'settlement', paid_on: todayIso(), period_start: weekStart, period_end: weekEnd, comment: comment || 'Пятничный расчёт' })
-      toast('Расчёт зафиксирован', 'success')
+      await addPayment({ employee_id: employeeId, amount_kopecks: kop, kind: 'settlement', paid_on: todayIso(), period_start: weekStart, period_end: weekEnd, comment: comment || (topUp ? 'Доплата за неделю' : 'Пятничный расчёт') })
+      toast(topUp ? 'Доплата зафиксирована' : 'Расчёт зафиксирован', 'success')
       onSaved(); onClose()
     } catch (e) { toast(e instanceof Error ? e.message : 'Ошибка', 'error') } finally { setBusy(false) }
   }
 
   return (
     <ModalShell
-      title="Расчёт за неделю" subtitle={`${employeeName} · ${weekLabel}`} lead={lead('wallet', 'accent')} onClose={onClose}
-      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />Рассчитать</button></>}
+      title={topUp ? 'Доплата за неделю' : 'Расчёт за неделю'} subtitle={`${employeeName} · ${weekLabel}`} lead={lead('wallet', 'accent')} onClose={onClose}
+      footer={<><button className="btn" onClick={onClose}>Отмена</button><button className="btn primary" onClick={submit} disabled={busy}><Icon name="check" size={14} />{topUp ? 'Доплатить' : 'Рассчитать'}{kop > 0 ? ` ${fmtMoney(kop)}` : ''}</button></>}
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 1, background: 'var(--c-border)', borderRadius: 'var(--r-lg)', overflow: 'hidden', marginBottom: 16 }}>
         <div style={{ padding: '12px 14px', background: 'var(--c-bg-elev)' }}>
@@ -129,22 +190,40 @@ export function SettleModal({
           )}
         </div>
         <div style={{ padding: '12px 14px', background: 'var(--c-bg-elev)' }}>
-          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>Выдано (авансы)</div>
-          <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 3, color: 'var(--c-warning)' }}>−{fmtMoneyShort(advances)} ₽</div>
+          <div style={{ fontSize: 11, color: 'var(--c-text-subtle)' }}>Уже выдано</div>
+          <div className="mono" style={{ fontSize: 16, fontWeight: 600, marginTop: 3, color: 'var(--c-warning)' }}>−{fmtMoneyShort(advances + settlements)} ₽</div>
+          <div style={{ fontSize: 10.5, color: 'var(--c-text-faint)', marginTop: 1 }}>
+            {advances ? `аванс ${fmtMoneyShort(advances)}` : 'без авансов'}{settlements ? ` · расчёт ${fmtMoneyShort(settlements)}` : ''}
+          </div>
         </div>
         <div style={{ padding: '12px 14px', background: 'var(--c-accent-bg)' }}>
-          <div style={{ fontSize: 11, color: 'var(--c-accent-text)' }}>К выдаче</div>
+          <div style={{ fontSize: 11, color: 'var(--c-accent-text)' }}>Осталось выдать</div>
           <div className="mono" style={{ fontSize: 16, fontWeight: 700, marginTop: 3, color: 'var(--c-accent-text)' }}>{fmtMoney(toPay)}</div>
         </div>
       </div>
+
+      <WeekPayments
+        employeeId={employeeId} weekStart={weekStart} reloadKey={reloadKey}
+        onCancelled={() => { setReloadKey((k) => k + 1); onSaved() }}
+      />
+
       <div style={{ marginBottom: 14 }}>
         <FieldLabel required>Сумма выплаты, ₽</FieldLabel>
         <input className="input sm" style={input} inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
-        <div className="help">По умолчанию = к выдаче. Можно скорректировать (например, округлить).</div>
+        <div className="row gap-8" style={{ marginTop: 7 }}>
+          <button className="btn ghost sm" onClick={() => setAmount(String(Math.round(toPay / 100)))}>Остаток</button>
+          <button className="btn ghost sm" onClick={() => setAmount(String(Math.round(toPay / 200)))}>Половина</button>
+          <button className="btn ghost sm" onClick={() => setAmount(String(Math.floor(kop / 10000) * 100))}>Округлить до 100 ₽</button>
+        </div>
+        <div className="help">
+          {kop > 0 && rest > 0
+            ? `После выплаты останется ${fmtMoney(rest)} — строка будет «Частично».`
+            : 'По умолчанию = остаток. Можно скорректировать (например, округлить).'}
+        </div>
       </div>
       <div>
         <FieldLabel>Комментарий</FieldLabel>
-        <input className="input sm" style={input} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Напр. «расчёт за неделю, наличными»…" />
+        <input className="input sm" style={input} value={comment} onChange={(e) => setComment(e.target.value)} placeholder={topUp ? 'Напр. «доплата остатка»…' : 'Напр. «расчёт за неделю, наличными»…'} />
       </div>
     </ModalShell>
   )

@@ -16,6 +16,10 @@ from config import (
     EMPLOYEE_COMP_FIXED,
     EMPLOYEE_COMP_HOURLY,
     EMPLOYEE_STATUS_ACTIVE,
+    PAYOUT_STATUS_OVERPAID,
+    PAYOUT_STATUS_PARTIAL,
+    PAYOUT_STATUS_PENDING,
+    PAYOUT_STATUS_SETTLED,
     PAYROLL_KIND_ADVANCE,
     PAYROLL_KIND_SETTLEMENT,
     TIMESHEET_DAY_ABSENT,
@@ -393,32 +397,45 @@ def load_payments_period(connection, start_iso: str, end_iso: str) -> dict[str, 
 
 # ── Закрытие недели расчётом (блокировка факта) ───────────────────────────────
 
-def settled_employee_ids(connection, week_start_iso: str, week_end_iso: str) -> set[str]:
-    """ID сотрудников, по которым за расчётную неделю уже проведён расчёт (settlement).
-    Факт за такую неделю менять нельзя — суммы посчитаны и выплачены."""
-    rows = connection.execute(
-        "SELECT DISTINCT employee_id FROM payroll_payments "
-        "WHERE kind = ? AND COALESCE(is_deleted, 0) = 0 "
-        "AND period_start = ? AND period_end = ?",
-        (PAYROLL_KIND_SETTLEMENT, week_start_iso, week_end_iso),
-    ).fetchall()
-    return {str(r["employee_id"]) for r in rows}
+def locked_employee_ids(connection, week_start_iso: str, week_end_iso: str) -> set[str]:
+    """ID сотрудников с полностью закрытой расчётной неделей: расчёт проведён и остатка
+    к выдаче не осталось. Факт за такую неделю менять нельзя — суммы посчитаны и выданы.
+
+    Частичный расчёт неделю не запирает: иначе после первой же доплаты часы становятся
+    нередактируемыми, хотя расчёт ещё не закрыт."""
+    paid = load_payments_period(connection, week_start_iso, week_end_iso)
+    if not paid:
+        return set()
+    try:
+        sat = date.fromisoformat(week_start_iso[:10])
+    except ValueError:
+        return set()
+    days = week_days(sat)
+    today_iso = business_today().isoformat()
+    entries = load_entries_range(connection, week_start_iso, week_end_iso)
+    rates = load_rates(connection, list(paid.keys()))
+    locked: set[str] = set()
+    for emp_id, payments in paid.items():
+        s = week_stats(emp_id, days, entries, rates.get(emp_id), today_iso, payments)
+        if s["settlements"] > 0 and s["to_pay"] <= 0:
+            locked.add(emp_id)
+    return locked
 
 
-def settled_ids_for_date(connection, work_date: str) -> set[str]:
-    """ID сотрудников с проведённым расчётом за расчётную неделю, в которую попадает день."""
+def locked_ids_for_date(connection, work_date: str) -> set[str]:
+    """ID сотрудников с закрытой неделей, в которую попадает день."""
     try:
         d = date.fromisoformat(work_date[:10])
     except ValueError:
         return set()
     sat = week_start_for(d)
     fri = sat + timedelta(days=6)
-    return settled_employee_ids(connection, sat.isoformat(), fri.isoformat())
+    return locked_employee_ids(connection, sat.isoformat(), fri.isoformat())
 
 
 def is_fact_locked(connection, employee_id: str, work_date: str) -> bool:
-    """Факт за день закрыт, если по расчётной неделе этого дня уже проведён расчёт."""
-    return employee_id in settled_ids_for_date(connection, work_date)
+    """Факт за день закрыт, если расчётная неделя этого дня закрыта полностью."""
+    return employee_id in locked_ids_for_date(connection, work_date)
 
 
 # ── Производные числа за неделю по сотруднику ─────────────────────────────────
@@ -466,8 +483,16 @@ def week_stats(
         int(p["amount_kopecks"]) for p in (payments or [])
         if str(p["kind"]) == PAYROLL_KIND_SETTLEMENT
     )
-    settled = any(str(p["kind"]) == PAYROLL_KIND_SETTLEMENT for p in (payments or []))
     to_pay = max(0, earned - advances - settlements)
+    overpaid = max(0, advances - earned)
+    if overpaid > 0:
+        payout_status = PAYOUT_STATUS_OVERPAID
+    elif to_pay > 0:
+        payout_status = PAYOUT_STATUS_PARTIAL if settlements > 0 else PAYOUT_STATUS_PENDING
+    elif earned > 0 or settlements > 0 or advances > 0:
+        payout_status = PAYOUT_STATUS_SETTLED
+    else:
+        payout_status = PAYOUT_STATUS_PENDING
     return {
         "hours": round(hours, 1),
         "earned": earned,
@@ -479,8 +504,9 @@ def week_stats(
         "advances": advances,
         "settlements": settlements,
         "to_pay": to_pay,
-        "overpaid": max(0, advances - earned),
-        "settled": settled,
+        "overpaid": overpaid,
+        "payout_status": payout_status,
+        "settled": payout_status in (PAYOUT_STATUS_SETTLED, PAYOUT_STATUS_OVERPAID),
     }
 
 
@@ -677,7 +703,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
     emp_ids = [e["id"] for e in employees]
     entries = load_entries_range(connection, sat.isoformat(), fri.isoformat())
     rates = load_rates(connection, emp_ids) if with_money else {}
-    settled = settled_employee_ids(connection, sat.isoformat(), fri.isoformat())
+    locked = locked_employee_ids(connection, sat.isoformat(), fri.isoformat())
 
     day_meta = [
         {
@@ -740,7 +766,7 @@ def build_week(connection, sat: date, *, with_money: bool) -> dict:
             "earned": s["earned"] if with_money else None,
             "overtime_hours": s["overtime_hours"],
             "overtime_pay": s["overtime_pay"] if with_money else None,
-            "fact_locked": e["id"] in settled,
+            "fact_locked": e["id"] in locked,
             "archived": e["status"] != EMPLOYEE_STATUS_ACTIVE,
         }
         rows.append(row)
@@ -782,26 +808,29 @@ def build_payroll(connection, sat: date) -> dict:
     payments = load_payments_period(connection, sat.isoformat(), fri.isoformat())
 
     rows: list[dict] = []
-    t_earned = t_adv = t_pay = t_ot_pay = 0
+    t_earned = t_adv = t_paid = t_pay = t_ot_pay = 0
     t_ot_hours = 0.0
     with_hours = 0
-    left = 0
+    left = partial = 0
     for e in employees:
         s = week_stats(
             e["id"], days, entries, rates.get(e["id"]), today_iso, payments.get(e["id"])
         )
-        if s["hours"] <= 0 and s["advances"] <= 0 and not s["settled"]:
+        if s["hours"] <= 0 and s["advances"] <= 0 and s["settlements"] <= 0:
             continue
         cur = current_rate(rates.get(e["id"]))
         t_earned += s["earned"]
         t_adv += s["advances"]
+        t_paid += s["settlements"]
         t_pay += s["to_pay"]
         t_ot_hours += s["overtime_hours"]
         t_ot_pay += s["overtime_pay"]
         if s["hours"] > 0:
             with_hours += 1
-            if not s["settled"]:
-                left += 1
+        if s["to_pay"] > 0:
+            left += 1
+            if s["payout_status"] == PAYOUT_STATUS_PARTIAL:
+                partial += 1
         rows.append({
             "employee_id": e["id"],
             "full_name": e["full_name"],
@@ -812,8 +841,10 @@ def build_payroll(connection, sat: date) -> dict:
             "overtime_hours": s["overtime_hours"],
             "overtime_pay": s["overtime_pay"],
             "advances": s["advances"],
+            "settlements": s["settlements"],
             "to_pay": s["to_pay"],
             "overpaid": s["overpaid"],
+            "payout_status": s["payout_status"],
             "settled": s["settled"],
             "archived": e["status"] != EMPLOYEE_STATUS_ACTIVE,
         })
@@ -826,11 +857,14 @@ def build_payroll(connection, sat: date) -> dict:
         "totals": {
             "earned": t_earned,
             "advances": t_adv,
+            "paid": t_adv + t_paid,
+            "settlements": t_paid,
             "to_pay": t_pay,
             "overtime_hours": round(t_ot_hours, 1),
             "overtime_pay": t_ot_pay,
             "employees": with_hours,
             "left": left,
+            "partial": partial,
         },
     }
 

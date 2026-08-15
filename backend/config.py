@@ -1034,6 +1034,19 @@ PAYROLL_KIND_LABELS: dict[str, str] = {
     PAYROLL_KIND_ADVANCE:    "Аванс",
 }
 
+# Состояние расчёта сотрудника за неделю — выводится из денег, а не из факта платежа:
+# один частичный расчёт неделю не закрывает, остаток можно доплатить.
+PAYOUT_STATUS_PENDING  = "pending"    # расчёта не было
+PAYOUT_STATUS_PARTIAL  = "partial"    # расчёт был, но остаток к выдаче ещё есть
+PAYOUT_STATUS_SETTLED  = "settled"    # выдавать нечего — неделя закрыта
+PAYOUT_STATUS_OVERPAID = "overpaid"   # авансы больше заработка
+PAYOUT_STATUS_LABELS: dict[str, str] = {
+    PAYOUT_STATUS_PENDING:  "Ожидает",
+    PAYOUT_STATUS_PARTIAL:  "Частично",
+    PAYOUT_STATUS_SETTLED:  "Рассчитан",
+    PAYOUT_STATUS_OVERPAID: "Переплата",
+}
+
 # ---------------------------------------------------------------------------
 # Кабинет клиента — границы видимости
 # ---------------------------------------------------------------------------
