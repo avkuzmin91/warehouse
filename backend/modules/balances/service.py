@@ -1201,6 +1201,12 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
     суммам бакетов и перестановку не замечают. Товар вне «На хранении» привязан к
     строкам документов, поэтому движение дробится по атрибуции FIFO.
     """
+    _create_relocation_moves(connection, payload, user_id)
+    connection.commit()
+
+
+def _create_relocation_moves(connection, payload, user_id: str) -> None:
+    """Движения одного перемещения (см. create_zone_relocation). Без commit."""
     from fastapi import HTTPException
 
     if payload.quality not in (INV_Q_GOOD, INV_Q_DEFECT):
@@ -1254,7 +1260,48 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
             shipment_line_id=shipment_line_id, dispatch_line_id=dispatch_line_id,
             comment=comment,
         )
-    connection.commit()
+
+
+def create_zone_relocations_bulk(connection, payload, user_id: str) -> int:
+    """Массовая консолидация: разные позиции из разных мест в одно место, одной транзакцией.
+
+    Только бакет «На хранении»: товар в packing/packed/ready может прямо сейчас
+    набираться в подготовке отгрузки, массово его не двигаем (поштучно — можно).
+    Ошибка по любой позиции откатывает весь батч. Без commit. Возвращает итог шт.
+    """
+    from fastapi import HTTPException
+    from modules.balances.schemas import ZoneRelocationCreate
+
+    items = payload.items or []
+    if not items:
+        raise HTTPException(status_code=400, detail="Отметьте хотя бы одну позицию")
+    comment = (payload.comment or "").strip() or None
+    seen: set[tuple] = set()
+    total = 0
+    for item in items:
+        label = " · ".join(
+            x for x in [item.product_sku, item.color_name, item.size_name] if x
+        ) or (item.product_name or item.product_id)
+        key = (item.product_id, item.color_id, item.size_id, item.client_id, item.from_zone_id, item.quality)
+        # Дубль одной позиции из одного места прошёл бы две независимые проверки
+        # доступности и взял бы остаток дважды.
+        if key in seen:
+            raise HTTPException(status_code=400, detail=f"«{label}»: позиция указана дважды")
+        seen.add(key)
+        single = ZoneRelocationCreate(
+            **item.model_dump(),
+            op=INV_OP_STORAGE,
+            to_zone_id=payload.to_zone_id,
+            comment=comment,
+        )
+        try:
+            _create_relocation_moves(connection, single, user_id)
+        except HTTPException as e:
+            if e.status_code == 400:
+                raise HTTPException(status_code=400, detail=f"«{label}»: {e.detail}") from e
+            raise
+        total += int(item.qty)
+    return total
 
 
 def _split_by_attribution(connection, payload, *, op: str, quality: str, zone_id: str | None):

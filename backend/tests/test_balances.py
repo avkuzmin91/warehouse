@@ -1271,3 +1271,98 @@ def test_balances_grouped_pagination_by_groups(admin_client, client_id, product_
         with get_connection() as conn:
             conn.execute("DELETE FROM products WHERE id = ?", (pid2,))
             conn.commit()
+
+
+# ── bulk relocations (консолидация в одно место) ──────────────────────────────
+
+def test_bulk_relocation_moves_multiple_positions(admin_client, client_id, product_ids):
+    """Разные позиции из разных мест переезжают в одно место одним запросом."""
+    pid, color_id, size_id = product_ids
+    color2 = str(uuid.uuid4())
+    zone_a, zone_b, zone_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, (pid, color_id, size_id), zone_a, 10)
+        _seed_good_in_zone(conn, client_id, (pid, color2, size_id), zone_b, 8)
+    try:
+        r = admin_client.post("/balances/relocations/bulk", json={
+            "to_zone_id": zone_c,
+            "comment": "консолидация",
+            "items": [
+                {"product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+                 "quality": "good", "from_zone_id": zone_a, "qty": 10},
+                {"product_id": pid, "color_id": color2, "size_id": size_id, "client_id": client_id,
+                 "quality": "good", "from_zone_id": zone_b, "qty": 8},
+            ],
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["moved"] == 18
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone_a) == 0
+        assert _zone_bucket(items, zone_b) == 0
+        assert _zone_bucket(items, zone_c) == 18
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_bulk_relocation_insufficient_rolls_back_all(admin_client, client_id, product_ids):
+    """Нехватка по одной позиции откатывает весь батч; в ошибке — метка позиции."""
+    pid, color_id, size_id = product_ids
+    color2 = str(uuid.uuid4())
+    zone_a, zone_b, zone_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, (pid, color_id, size_id), zone_a, 10)
+        _seed_good_in_zone(conn, client_id, (pid, color2, size_id), zone_b, 5)
+    try:
+        r = admin_client.post("/balances/relocations/bulk", json={
+            "to_zone_id": zone_c,
+            "items": [
+                {"product_id": pid, "product_sku": "TST-A", "color_id": color_id, "size_id": size_id,
+                 "client_id": client_id, "quality": "good", "from_zone_id": zone_a, "qty": 10},
+                {"product_id": pid, "product_sku": "TST-B", "color_id": color2, "size_id": size_id,
+                 "client_id": client_id, "quality": "good", "from_zone_id": zone_b, "qty": 8},
+            ],
+        })
+        assert r.status_code == 400, r.text
+        assert "TST-B" in r.json()["detail"]
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone_a) == 10
+        assert _zone_bucket(items, zone_b) == 5
+        assert _zone_bucket(items, zone_c) == 0
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_bulk_relocation_duplicate_item_rejected(admin_client, client_id, product_ids):
+    """Одна позиция из одного места дважды в батче — 400 (двойной забор остатка)."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_c = str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 10)
+    try:
+        item = {"product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+                "quality": "good", "from_zone_id": zone_a, "qty": 6}
+        r = admin_client.post("/balances/relocations/bulk", json={
+            "to_zone_id": zone_c, "items": [item, item],
+        })
+        assert r.status_code == 400, r.text
+        assert "дважды" in r.json()["detail"]
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
+def test_bulk_relocation_empty_items_rejected(admin_client, client_id):
+    r = admin_client.post("/balances/relocations/bulk", json={
+        "to_zone_id": str(uuid.uuid4()), "items": [],
+    })
+    assert r.status_code == 400, r.text

@@ -175,6 +175,29 @@ class ZoneRelocationCreate(BaseModel):
     comment: str | None = None
 
 
+class ZoneRelocationBulkItem(BaseModel):
+    product_id: str
+    product_name: str | None = None
+    product_sku: str | None = None
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
+    client_id: str | None = None
+    client_name: str | None = None
+    quality: Literal["good", "defect"]
+    from_zone_id: str
+    qty: int = Field(ge=1)
+
+
+class ZoneRelocationBulkCreate(BaseModel):
+    # Массовая консолидация в одно место. Только бакет «На хранении» — товар в
+    # packing/packed/ready двигается поштучно через ZoneRelocationCreate.
+    to_zone_id: str
+    comment: str | None = None
+    items: list[ZoneRelocationBulkItem] = []
+
+
 class QualityChangeCreate(BaseModel):
     product_id: str
     product_name: str | None = None

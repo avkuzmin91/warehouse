@@ -17,6 +17,7 @@ from modules.balances.schemas import (
     StockHistoryResponse,
     TurnoverListResponse,
     WriteOffCreate,
+    ZoneRelocationBulkCreate,
     ZoneRelocationCreate,
     ZoneRelocationListResponse,
 )
@@ -25,6 +26,7 @@ from modules.balances.service import (
     create_stock_entry,
     create_write_off,
     create_zone_relocation,
+    create_zone_relocations_bulk,
     get_balances,
     get_balances_by_zone,
     get_balances_grouped,
@@ -169,6 +171,25 @@ def create_relocation(
             return stored
         create_zone_relocation(conn, payload, uid)
     return {"message": "ok"}
+
+
+@router.post("/balances/relocations/bulk")
+def create_relocations_bulk(
+    payload: ZoneRelocationBulkCreate,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_stock_operator),
+):
+    """Массовая консолидация: разные позиции (только «На хранении») в одно место, одна транзакция."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "balance_relocation_bulk")
+        if not proceed:
+            return stored
+        moved = create_zone_relocations_bulk(conn, payload, uid)
+        result = {"message": "ok", "moved": moved}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/balances/write-offs")

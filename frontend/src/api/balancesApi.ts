@@ -304,6 +304,35 @@ export function createZoneRelocation(payload: ZoneRelocationPayload) {
   })
 }
 
+export type ZoneRelocationBulkItem = {
+  product_id:    string
+  product_name:  string | null
+  product_sku:   string | null
+  color_id:      string | null
+  color_name:    string | null
+  size_id:       string | null
+  size_name:     string | null
+  client_id:     string | null
+  client_name:   string | null
+  quality:       InvQuality
+  from_zone_id:  string
+  qty:           number
+}
+
+export type ZoneRelocationBulkPayload = {
+  /** Массовая консолидация в одно место; только бакет «На хранении». */
+  to_zone_id: string
+  comment?:   string | null
+  items:      ZoneRelocationBulkItem[]
+}
+
+export function createZoneRelocationsBulk(payload: ZoneRelocationBulkPayload) {
+  return request<{ message: string; moved: number }>('/balances/relocations/bulk', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export type WriteOffPayload = {
   product_id:    string
   product_name:  string | null
