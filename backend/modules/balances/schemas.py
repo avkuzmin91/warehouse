@@ -185,14 +185,15 @@ class ZoneRelocationBulkItem(BaseModel):
     size_name: str | None = None
     client_id: str | None = None
     client_name: str | None = None
+    op: Literal["storage", "packing", "packed", "ready"] = "storage"
     quality: Literal["good", "defect"]
     from_zone_id: str
     qty: int = Field(ge=1)
 
 
 class ZoneRelocationBulkCreate(BaseModel):
-    # Массовая консолидация в одно место. Только бакет «На хранении» — товар в
-    # packing/packed/ready двигается поштучно через ZoneRelocationCreate.
+    # Массовая консолидация в одно место: меняется только место, операционный
+    # статус и качество каждой позиции сохраняются.
     to_zone_id: str
     comment: str | None = None
     items: list[ZoneRelocationBulkItem] = []

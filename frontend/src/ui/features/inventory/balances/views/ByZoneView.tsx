@@ -107,10 +107,10 @@ export function ByZoneView() {
 
   // ── массовая консолидация ──────────────────────────────────────────────────
   function bulkKey(item: BalanceZoneItem): string {
-    return [item.product_id, item.color_id, item.size_id, item.client_id, item.location_id, item.quality].join('|')
+    return [item.product_id, item.color_id, item.size_id, item.client_id, item.location_id, item.op_status, item.quality].join('|')
   }
   function bulkSelectable(item: BalanceZoneItem): boolean {
-    return item.op_status === 'storage' && !!item.location_id && item.qty > 0
+    return !!item.location_id && item.qty > 0
   }
   function toggleBulk(item: BalanceZoneItem) {
     const key = bulkKey(item)
@@ -146,6 +146,9 @@ export function ByZoneView() {
   const bulkMovable = selectedList.filter(([, e]) => e.item.location_id !== bulkToZoneId)
   const bulkSkipped = selectedCount - bulkMovable.length
   const bulkInvalid = selectedList.some(([, e]) => e.qty <= 0 || e.qty > e.item.qty)
+  // Товар вне «На хранении» привязан к документу: переезд корректен, но может
+  // разойтись с уже собранным набором подготовки — предупреждаем.
+  const bulkReservedCount = bulkMovable.filter(([, e]) => e.item.op_status !== 'storage').length
 
   async function submitBulk() {
     if (!bulkToZoneId) { toast('Выберите место назначения', 'error'); return }
@@ -175,6 +178,7 @@ export function ByZoneView() {
           size_name:    e.item.size_name,
           client_id:    e.item.client_id,
           client_name:  e.item.client_name,
+          op:           e.item.op_status,
           quality:      e.item.quality,
           from_zone_id: e.item.location_id!,
           qty:          e.qty,
@@ -553,7 +557,7 @@ export function ByZoneView() {
                     <span
                       className={`t-checkbox ${allIn ? 'checked' : ''}`}
                       style={{ flexShrink: 0, cursor: 'pointer', marginRight: 2 }}
-                      title={allIn ? 'Снять отметки с ячейки' : 'Отметить всю ячейку («На хранении»)'}
+                      title={allIn ? 'Снять отметки с ячейки' : 'Отметить всю ячейку'}
                       onClick={() => toggleBulkGroup(group)}
                     >
                       {allIn && <Icon name="check" size={10} />}
@@ -719,6 +723,13 @@ export function ByZoneView() {
           {bulkToZoneId && bulkSkipped > 0 && (
             <span style={{ fontSize: 12, color: 'var(--c-text-subtle)', width: '100%' }}>
               {bulkSkipped} поз. уже в этом месте — будут пропущены
+            </span>
+          )}
+          {bulkReservedCount > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--c-warning)', width: '100%' }}>
+              {bulkReservedCount} поз. вне «На хранении» — товар привязан к задаче упаковки
+              или отгрузке. Место сменится, но если его сейчас набирают, набор придётся
+              переделать.
             </span>
           )}
         </div>

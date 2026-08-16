@@ -179,7 +179,7 @@ def create_relocations_bulk(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(get_current_stock_operator),
 ):
-    """Массовая консолидация: разные позиции (только «На хранении») в одно место, одна транзакция."""
+    """Массовая консолидация: разные позиции в одно место, одна транзакция."""
     uid = str(user["id"])
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "balance_relocation_bulk")

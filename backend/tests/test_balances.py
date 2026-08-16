@@ -1340,6 +1340,55 @@ def test_bulk_relocation_insufficient_rolls_back_all(admin_client, client_id, pr
         _cleanup_test_docs(client_id)
 
 
+def test_bulk_relocation_moves_non_storage_buckets(admin_client, client_id, product_ids):
+    """Батч двигает и товар вне «На хранении»: статус сохраняется, дробление FIFO работает."""
+    pid, color_id, size_id = product_ids
+    zone_a, zone_b, zone_c = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    with get_connection() as conn:
+        _seed_good_in_zone(conn, client_id, product_ids, zone_a, 6)
+        s_doc = _insert_shipment(conn, client_id, "good", "packed")
+        _insert_shipment_line(conn, s_doc, pid, color_id, size_id, 4)
+        line_id = str(conn.execute(
+            "SELECT id FROM shipment_lines WHERE doc_id = ?", (s_doc,)
+        ).fetchone()["id"])
+        _insert_move(conn, client_id, product_ids, 4,
+                     from_op="packed", to_op="ready", from_quality="good", to_quality="good",
+                     from_zone_id=None, to_zone_id=zone_b, shipment_line_id=line_id)
+        conn.commit()
+    try:
+        r = admin_client.post("/balances/relocations/bulk", json={
+            "to_zone_id": zone_c,
+            "items": [
+                {"product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+                 "op": "storage", "quality": "good", "from_zone_id": zone_a, "qty": 6},
+                {"product_id": pid, "color_id": color_id, "size_id": size_id, "client_id": client_id,
+                 "op": "ready", "quality": "good", "from_zone_id": zone_b, "qty": 4},
+            ],
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["moved"] == 10
+
+        items = admin_client.get(f"/balances/zones?client_id={client_id}").json()["items"]
+        assert _zone_bucket(items, zone_a) == 0
+        assert _zone_bucket(items, zone_b, "ready", "good") == 0
+        # Переезд меняет только место: бакеты остаются раздельными.
+        assert _zone_bucket(items, zone_c) == 6
+        assert _zone_bucket(items, zone_c, "ready", "good") == 4
+
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT shipment_line_id FROM zone_relocations "
+                "WHERE product_id = ? AND from_zone_id = ? AND to_zone_id = ? AND from_op = 'ready'",
+                (pid, zone_b, zone_c),
+            ).fetchone()
+            assert str(row["shipment_line_id"]) == line_id
+    finally:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM zone_relocations WHERE product_id = ?", (pid,))
+            conn.commit()
+        _cleanup_test_docs(client_id)
+
+
 def test_bulk_relocation_duplicate_item_rejected(admin_client, client_id, product_ids):
     """Одна позиция из одного места дважды в батче — 400 (двойной забор остатка)."""
     pid, color_id, size_id = product_ids

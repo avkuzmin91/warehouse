@@ -1265,9 +1265,10 @@ def _create_relocation_moves(connection, payload, user_id: str) -> None:
 def create_zone_relocations_bulk(connection, payload, user_id: str) -> int:
     """Массовая консолидация: разные позиции из разных мест в одно место, одной транзакцией.
 
-    Только бакет «На хранении»: товар в packing/packed/ready может прямо сейчас
-    набираться в подготовке отгрузки, массово его не двигаем (поштучно — можно).
-    Ошибка по любой позиции откатывает весь батч. Без commit. Возвращает итог шт.
+    Меняется только место: операционный статус и качество каждой позиции сохраняются,
+    товар вне «На хранении» дробится по атрибуции FIFO так же, как при поштучном
+    перемещении. Ошибка по любой позиции откатывает весь батч. Без commit.
+    Возвращает итог шт.
     """
     from fastapi import HTTPException
     from modules.balances.schemas import ZoneRelocationCreate
@@ -1282,7 +1283,10 @@ def create_zone_relocations_bulk(connection, payload, user_id: str) -> int:
         label = " · ".join(
             x for x in [item.product_sku, item.color_name, item.size_name] if x
         ) or (item.product_name or item.product_id)
-        key = (item.product_id, item.color_id, item.size_id, item.client_id, item.from_zone_id, item.quality)
+        key = (
+            item.product_id, item.color_id, item.size_id, item.client_id,
+            item.from_zone_id, item.op, item.quality,
+        )
         # Дубль одной позиции из одного места прошёл бы две независимые проверки
         # доступности и взял бы остаток дважды.
         if key in seen:
@@ -1290,7 +1294,6 @@ def create_zone_relocations_bulk(connection, payload, user_id: str) -> int:
         seen.add(key)
         single = ZoneRelocationCreate(
             **item.model_dump(),
-            op=INV_OP_STORAGE,
             to_zone_id=payload.to_zone_id,
             comment=comment,
         )

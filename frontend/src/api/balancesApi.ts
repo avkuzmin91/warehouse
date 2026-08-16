@@ -314,13 +314,14 @@ export type ZoneRelocationBulkItem = {
   size_name:     string | null
   client_id:     string | null
   client_name:   string | null
+  op:            InvOpStatus
   quality:       InvQuality
   from_zone_id:  string
   qty:           number
 }
 
 export type ZoneRelocationBulkPayload = {
-  /** Массовая консолидация в одно место; только бакет «На хранении». */
+  /** Массовая консолидация в одно место; статус и качество позиций сохраняются. */
   to_zone_id: string
   comment?:   string | null
   items:      ZoneRelocationBulkItem[]

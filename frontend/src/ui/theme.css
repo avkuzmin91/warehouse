@@ -403,14 +403,15 @@ a { color: inherit; text-decoration: none; }
 .cell-link:hover { color: var(--c-accent); text-decoration: underline; text-underline-offset: 2px; }
 .t-cb { display: flex; align-items: center; justify-content: center; padding-left: 16px; }
 .t-checkbox {
+  flex-shrink: 0;
   width: 14px; height: 14px;
   border: 1.5px solid var(--c-border-strong);
   border-radius: 3px; background: white;
   cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
 }
 .t-checkbox.checked {
-  background: var(--c-accent); border-color: var(--c-accent);
-  display: flex; align-items: center; justify-content: center; color: white;
+  background: var(--c-accent); border-color: var(--c-accent); color: white;
 }
 .t-radio {
   flex-shrink: 0;
