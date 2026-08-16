@@ -3,6 +3,7 @@ import {
   getBalancesByZone,
   getBalancesSummary,
   createZoneRelocation,
+  createZoneRelocationsBulk,
   createQualityChange,
   createWriteOff,
   INV_OP_LABELS,
@@ -66,6 +67,13 @@ export function ByZoneView() {
   const { setMany } = useFilterParamsActions()
   const toast = useToast()
 
+  // Массовая консолидация: отмеченные строки «На хранении» → одно место. Ключ —
+  // бакет×место; выбор переживает смену страницы/фильтров (собрать с разных страниц).
+  const [selected, setSelected] = useState<Record<string, { item: BalanceZoneItem; qty: number }>>({})
+  const [bulkToZoneId, setBulkToZoneId] = useState('')
+  const [bulkComment, setBulkComment] = useState('')
+  const [bulkSaving, setBulkSaving] = useState(false)
+
   // Перемещение между местоположениями: любой нетерминальный статус — товар можно
   // временно переставить, даже когда он на упаковке или готов к отгрузке.
   const [reloc, setReloc] = useState<BalanceZoneItem | null>(null)
@@ -96,6 +104,97 @@ export function ByZoneView() {
     () => unloadingZones.filter((z) => z.is_active && !z.is_deleted),
     [unloadingZones],
   )
+
+  // ── массовая консолидация ──────────────────────────────────────────────────
+  function bulkKey(item: BalanceZoneItem): string {
+    return [item.product_id, item.color_id, item.size_id, item.client_id, item.location_id, item.op_status, item.quality].join('|')
+  }
+  function bulkSelectable(item: BalanceZoneItem): boolean {
+    return !!item.location_id && item.qty > 0
+  }
+  function toggleBulk(item: BalanceZoneItem) {
+    const key = bulkKey(item)
+    setSelected((prev) => {
+      if (prev[key]) {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      }
+      return { ...prev, [key]: { item, qty: item.qty } }
+    })
+  }
+  function setBulkQty(key: string, qty: number) {
+    setSelected((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], qty } } : prev))
+  }
+  function toggleBulkGroup(group: LocationGroup) {
+    const rows = group.items.filter(bulkSelectable)
+    const allIn = rows.length > 0 && rows.every((i) => selected[bulkKey(i)])
+    setSelected((prev) => {
+      const next = { ...prev }
+      for (const i of rows) {
+        if (allIn) delete next[bulkKey(i)]
+        else next[bulkKey(i)] = next[bulkKey(i)] ?? { item: i, qty: i.qty }
+      }
+      return next
+    })
+  }
+
+  const selectedList = Object.entries(selected)
+  const selectedCount = selectedList.length
+  const selectedSum = selectedList.reduce((s, [, e]) => s + (e.qty > 0 ? e.qty : 0), 0)
+  // Строки, уже лежащие в целевом месте, в перемещение не попадают.
+  const bulkMovable = selectedList.filter(([, e]) => e.item.location_id !== bulkToZoneId)
+  const bulkSkipped = selectedCount - bulkMovable.length
+  const bulkInvalid = selectedList.some(([, e]) => e.qty <= 0 || e.qty > e.item.qty)
+  // Товар вне «На хранении» привязан к документу: переезд корректен, но может
+  // разойтись с уже собранным набором подготовки — предупреждаем.
+  const bulkReservedCount = bulkMovable.filter(([, e]) => e.item.op_status !== 'storage').length
+
+  async function submitBulk() {
+    if (!bulkToZoneId) { toast('Выберите место назначения', 'error'); return }
+    if (bulkInvalid) { toast('Проверьте количества: от 1 до остатка строки', 'error'); return }
+    const movable = bulkMovable
+    if (movable.length === 0) { toast('Все отмеченные позиции уже в этом месте', 'error'); return }
+    const zoneName = activeZones.find((z) => z.id === bulkToZoneId)?.name ?? bulkToZoneId
+    const sum = movable.reduce((s, [, e]) => s + e.qty, 0)
+    const ok = await confirm({
+      title: 'Переместить отмеченное?',
+      body: `${movable.length} поз. · ${sum} шт будут перемещены в «${zoneName}»${bulkSkipped > 0 ? `. Ещё ${bulkSkipped} поз. уже там — будут пропущены` : ''}.`,
+      confirmLabel: 'Переместить',
+    })
+    if (!ok) return
+    setBulkSaving(true)
+    try {
+      const res = await createZoneRelocationsBulk({
+        to_zone_id: bulkToZoneId,
+        comment: bulkComment.trim() || null,
+        items: movable.map(([, e]) => ({
+          product_id:   e.item.product_id,
+          product_name: e.item.product_name,
+          product_sku:  e.item.product_sku,
+          color_id:     e.item.color_id,
+          color_name:   e.item.color_name,
+          size_id:      e.item.size_id,
+          size_name:    e.item.size_name,
+          client_id:    e.item.client_id,
+          client_name:  e.item.client_name,
+          op:           e.item.op_status,
+          quality:      e.item.quality,
+          from_zone_id: e.item.location_id!,
+          qty:          e.qty,
+        })),
+      })
+      toast(`Перемещено: ${res.moved} шт`, 'success')
+      setSelected({})
+      setBulkToZoneId('')
+      setBulkComment('')
+      await load()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Ошибка перемещения', 'error')
+    } finally {
+      setBulkSaving(false)
+    }
+  }
 
   function openReloc(item: BalanceZoneItem) {
     setReloc(item)
@@ -451,6 +550,20 @@ export function ByZoneView() {
           {groups.map((group) => (
             <Card key={group.locationId ?? '__none__'}>
               <CardHead>
+                {group.items.some(bulkSelectable) && (() => {
+                  const rows = group.items.filter(bulkSelectable)
+                  const allIn = rows.every((i) => selected[bulkKey(i)])
+                  return (
+                    <span
+                      className={`t-checkbox ${allIn ? 'checked' : ''}`}
+                      style={{ flexShrink: 0, cursor: 'pointer', marginRight: 2 }}
+                      title={allIn ? 'Снять отметки с ячейки' : 'Отметить всю ячейку'}
+                      onClick={() => toggleBulkGroup(group)}
+                    >
+                      {allIn && <Icon name="check" size={10} />}
+                    </span>
+                  )
+                })()}
                 <Icon name="boxes" size={15} className="ic-accent" />
                 <span className="card-head-title">{group.locationName}</span>
                 <Badge tone="accent" style={{ marginLeft: 6 }}>{group.items.length}</Badge>
@@ -460,6 +573,7 @@ export function ByZoneView() {
               <Table>
                 <thead>
                   <tr>
+                    <th style={{ width: 34 }} />
                     <th>Товар</th>
                     <th>Клиент</th>
                     <th style={{ width: 150 }}>Статус</th>
@@ -469,8 +583,23 @@ export function ByZoneView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {group.items.map((item, i) => (
+                  {group.items.map((item, i) => {
+                    const key = bulkKey(item)
+                    const entry = bulkSelectable(item) ? selected[key] : undefined
+                    return (
                     <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${item.op_status}-${item.quality}-${i}`}>
+                      <Td>
+                        {bulkSelectable(item) && (
+                          <span
+                            className={`t-checkbox ${entry ? 'checked' : ''}`}
+                            style={{ cursor: 'pointer' }}
+                            title="Отметить для массового перемещения"
+                            onClick={() => toggleBulk(item)}
+                          >
+                            {entry && <Icon name="check" size={10} />}
+                          </span>
+                        )}
+                      </Td>
                       <Td>
                         <div style={{ fontWeight: 500 }}>
                           <ProductLink productId={item.product_id}>{item.product_name}</ProductLink>
@@ -489,7 +618,25 @@ export function ByZoneView() {
                         <Badge tone={QUALITY_TONE[item.quality]}>{INV_QUALITY_LABELS[item.quality]}</Badge>
                       </Td>
                       <Td className="num" style={{ fontWeight: 600 }}>
-                        {item.qty.toLocaleString('ru-RU')}
+                        {entry ? (
+                          <input
+                            className="input sm num"
+                            inputMode="numeric"
+                            value={entry.qty === 0 ? '' : String(entry.qty)}
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(/\D/g, '')
+                              setBulkQty(key, raw === '' ? 0 : Math.max(0, parseInt(raw, 10)))
+                            }}
+                            style={{
+                              width: 76, textAlign: 'right',
+                              borderColor: entry.qty <= 0 || entry.qty > item.qty ? 'var(--c-warning)' : undefined,
+                              color: entry.qty <= 0 || entry.qty > item.qty ? 'var(--c-warning)' : undefined,
+                            }}
+                            title={`Остаток ${item.qty.toLocaleString('ru-RU')} шт`}
+                          />
+                        ) : (
+                          item.qty.toLocaleString('ru-RU')
+                        )}
                       </Td>
                       <Td>
                         <div style={{ display: 'flex', gap: 2 }}>
@@ -521,7 +668,8 @@ export function ByZoneView() {
                         </div>
                       </Td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </Table>
             </Card>
@@ -532,6 +680,58 @@ export function ByZoneView() {
       {!loading && total > ZONE_PAGE_SIZE && (
         <div style={{ marginTop: 16 }}>
           <Pagination page={page} pageSize={ZONE_PAGE_SIZE} total={total} onPage={setPage} />
+        </div>
+      )}
+
+      {selectedCount > 0 && (
+        <div style={{
+          position: 'sticky', bottom: 12, marginTop: 16, zIndex: 5,
+          display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+          padding: '10px 14px', borderRadius: 'var(--r-lg)',
+          border: '1px solid var(--c-accent)', background: 'var(--c-bg-elev)', boxShadow: 'var(--sh-1)',
+        }}>
+          <span style={{ fontSize: 13 }}>
+            Отмечено <b className="num">{selectedCount}</b> · <b className="num">{selectedSum.toLocaleString('ru-RU')}</b> шт
+          </span>
+          <button className="btn ghost sm" disabled={bulkSaving} onClick={() => setSelected({})}>
+            Снять отметки
+          </button>
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              className="input sm"
+              placeholder="Комментарий (необязательно)"
+              value={bulkComment}
+              disabled={bulkSaving}
+              onChange={(e) => setBulkComment(e.target.value)}
+              style={{ width: 200 }}
+            />
+            <Icon name="arrowRight" size={14} style={{ color: 'var(--c-text-subtle)' }} />
+            <div style={{ width: 220 }}>
+              <Combobox
+                value={bulkToZoneId || null}
+                placeholder="Куда переместить"
+                options={activeZones.map((z) => ({ value: z.id, label: z.name }))}
+                onChange={(v) => setBulkToZoneId(String(v ?? ''))}
+                disabled={bulkSaving}
+                clearable
+              />
+            </div>
+            <button className="btn primary sm" disabled={bulkSaving} onClick={() => void submitBulk()}>
+              <Icon name="check" size={13} />Переместить
+            </button>
+          </div>
+          {bulkToZoneId && bulkSkipped > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--c-text-subtle)', width: '100%' }}>
+              {bulkSkipped} поз. уже в этом месте — будут пропущены
+            </span>
+          )}
+          {bulkReservedCount > 0 && (
+            <span style={{ fontSize: 12, color: 'var(--c-warning)', width: '100%' }}>
+              {bulkReservedCount} поз. вне «На хранении» — товар привязан к задаче упаковки
+              или отгрузке. Место сменится, но если его сейчас набирают, набор придётся
+              переделать.
+            </span>
+          )}
         </div>
       )}
 
