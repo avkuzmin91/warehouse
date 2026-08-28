@@ -105,8 +105,6 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
   const draft = isInvoiceDraft(inv.status)
   const cancelled = inv.status === 'cancelled'
   const editable = draft || active          // состав отгрузок / файлов
-  const fullyPaid = inv.paid_amount >= inv.total_amount && inv.total_amount > 0
-  const remaining = Math.max(0, inv.total_amount - inv.paid_amount)
   const phase = invoicePhase(inv.status)
 
   const dueChanges = parseDueHistory(inv.ops)
@@ -227,11 +225,6 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
     if (!ok) return
     deleteInvoiceFile(inv.id, fileId).then(() => { toast('Файл удалён', 'success'); reload() }).catch((e) => toast(e.message, 'error'))
   }
-
-  const checklist = [
-    { ok: inv.shipments.length > 0, label: `Привязаны отгрузки (${inv.shipments.length})` },
-    { ok: fullyPaid, label: fullyPaid ? 'Оплачен полностью' : `Оплачен полностью — остаток ${formatMoneyKopecks(remaining)}` },
-  ]
 
   return (
     <div className="page">
@@ -619,7 +612,6 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
           />
 
           {draft && <ChecklistPanel title="Готовность к выставлению" items={issueChecklist} />}
-          {active && <ChecklistPanel title="Готовность к завершению" items={checklist} />}
 
           {inv.status === 'closed' && (
             <div className="card" style={{ padding: 16, display: 'flex', alignItems: 'center', gap: 10, background: 'var(--c-success-bg)', border: '1px solid transparent' }}>
