@@ -600,7 +600,7 @@ export function InvoiceDetailFeature({ invoiceId }: { invoiceId: string }) {
         </div>
 
         {/* Правая колонка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'sticky', top: 16, maxHeight: 'calc(100vh - var(--header-h) - 32px)', overflowY: 'auto' }}>
+        <div className="detail-side">
           <InvoiceRailPanel phase={phase} overdue={inv.overdue} dueReached={inv.due_reached} dueDate={fmtDate(inv.due_date)} duePrev={duePrevRaw ? fmtDate(duePrevRaw) : null} stamps={stamps} />
 
           <InvoiceSummaryPanel
