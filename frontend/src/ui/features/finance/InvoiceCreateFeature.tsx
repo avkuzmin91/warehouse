@@ -482,7 +482,7 @@ export function InvoiceCreateFeature() {
         </div>
 
         {/* Правая колонка — превью жизненного цикла + сводка */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, position: 'sticky', top: 16, maxHeight: 'calc(100vh - var(--header-h) - 32px)', overflowY: 'auto' }}>
+        <div className="detail-side">
           <InvoiceRailPanel phase="draft" overdue={false} dueDate={dueDate ? fmtDate(dueDate) : 'выбрать'} duePrev={null} stamps={{ draft: 'сейчас' }} />
           <InvoiceSummaryPanel
             clientName={clientName}

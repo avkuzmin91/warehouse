@@ -1376,6 +1376,19 @@ a { color: inherit; text-decoration: none; }
 
 /* === Detail page utility blocks === */
 
+/* Липкая правая колонка карточки (панели процесса + сводка).
+   flex-shrink: 0 обязателен: без него панели при нехватке высоты сжимаются, а
+   `.card { overflow: hidden }` срезает их содержимое вместо прокрутки колонки. */
+.detail-side {
+  display: flex; flex-direction: column; gap: 14px;
+  position: sticky; top: 16px;
+  max-height: calc(100vh - var(--header-h) - 32px);
+  overflow-y: auto;
+}
+.detail-side > * {
+  flex-shrink: 0;
+}
+
 /* Header строка с Badge + meta под page-title (receipt/shipment detail). */
 .detail-status-row {
   display: flex; gap: 8px; align-items: center;
