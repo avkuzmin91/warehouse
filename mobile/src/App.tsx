@@ -13,6 +13,7 @@ import { ProfileScreen } from './screens/ProfileScreen'
 import { ScanScreen } from './screens/ScanScreen'
 import { ScanProductScreen } from './screens/ScanProductScreen'
 import { ScanLocationScreen } from './screens/ScanLocationScreen'
+import { ScanCisScreen } from './screens/ScanCisScreen'
 import { StockScreen } from './screens/StockScreen'
 import { TripDetailScreen } from './screens/TripDetailScreen'
 import { ShipmentDetailScreen } from './screens/ShipmentDetailScreen'
@@ -85,6 +86,7 @@ function Main() {
     case 'scan':      screen = <ScanScreen />; break
     case 'scanProduct': screen = <ScanProductScreen match={route.match} />; break
     case 'scanLocation': screen = <ScanLocationScreen location={route.location} />; break
+    case 'scanCis':   screen = <ScanCisScreen cis={route.cis} />; break
     case 'stock':     screen = <StockScreen />; break
     case 'trip':      screen = <TripDetailScreen tripId={route.id} />; break
     case 'shipment':  screen = <ShipmentDetailScreen shipmentId={route.id} />; break

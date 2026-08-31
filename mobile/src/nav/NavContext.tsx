@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
 import type { BarcodeMatch } from '../api/productsApi'
 import type { LocationMatch } from '../api/locationsApi'
+import type { CisCode } from '../utils/cis'
 import { useAuth } from '../auth/AuthContext'
 import { tabsForRole, showScanForRole, type TabDef, type TabName } from './tabs'
 
@@ -29,6 +30,7 @@ export type Route =
   | { name: 'dispatchPrepare'; id: string }
   | { name: 'scanProduct'; match: BarcodeMatch }
   | { name: 'scanLocation'; location: LocationMatch }
+  | { name: 'scanCis'; cis: CisCode }
   | { name: 'receiptNew' }
   | { name: 'shipmentNew' }
   | { name: 'shipmentEdit'; id: string }
@@ -67,6 +69,7 @@ type NavState = {
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
   openScanLocation: (location: LocationMatch) => void
+  openScanCis: (cis: CisCode) => void
   openProfile: () => void
   openReceiptsList: () => void
   openPackingList: () => void
@@ -128,6 +131,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),
     openScanLocation: (location) => setStack((s) => [...s, { name: 'scanLocation', location }]),
+    openScanCis: (cis) => setStack((s) => [...s, { name: 'scanCis', cis }]),
     openProfile: () => setStack((s) => [...s, { name: 'profile' }]),
     openReceiptsList: () => setStack((s) => [...s, { name: 'mReceipts' }]),
     openPackingList: () => setStack((s) => [...s, { name: 'mPacking' }]),

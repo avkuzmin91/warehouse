@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon'
 import { scanSource } from '../scan/ScanSource'
 import { getProductByBarcode } from '../api/productsApi'
 import { getLocationByCode, isLocationCode } from '../api/locationsApi'
+import { isCisCode, parseCis } from '../utils/cis'
 import { isScanAutoStartEnabled } from '../utils/scanSettings'
 import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 
@@ -15,7 +16,7 @@ import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 let returningFromResult = false
 
 export function ScanScreen() {
-  const { back, openScanProduct, openScanLocation } = useNav()
+  const { back, openScanProduct, openScanLocation, openScanCis } = useNav()
   const [code, setCode] = useState('')
   const [looking, setLooking] = useState(false)
   const [error, setError] = useState('')
@@ -61,6 +62,20 @@ export function ScanScreen() {
           scanSuccessFeedback()
           returningFromResult = true
           openScanLocation(res.location)
+        } else {
+          scanNotFoundFeedback()
+          setNotFound(c)
+        }
+        return
+      }
+      // Код маркировки ЧЗ разбирается на клиенте: в нём GTIN, а не ШК варианта,
+      // поэтому по /products/by-barcode он бы не нашёлся.
+      if (isCisCode(c)) {
+        const cis = parseCis(c)
+        if (cis) {
+          scanSuccessFeedback()
+          returningFromResult = true
+          openScanCis(cis)
         } else {
           scanNotFoundFeedback()
           setNotFound(c)
@@ -118,7 +133,7 @@ export function ScanScreen() {
           <span className="corner br" />
           <span className="scan-laser" />
         </div>
-        <div className="scan-hint">Наведите камеру на штрихкод товара или места</div>
+        <div className="scan-hint">Наведите камеру на штрихкод товара, места или код маркировки</div>
 
         <div className="scan-sheet">
           <div className="scan-grip" />
