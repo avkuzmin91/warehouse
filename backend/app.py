@@ -47,6 +47,7 @@ from modules.box_pricing.router import router as box_pricing_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
 from modules.marketplaces.router import router as marketplaces_router
+from modules.marking.router import router as marking_router
 from modules.pallet_pricing.router import router as pallet_pricing_router
 from modules.pnl.router import router as pnl_router
 from modules.pricing.router import router as pricing_router
@@ -1130,6 +1131,7 @@ app.include_router(pnl_router)
 app.include_router(timesheet_router)
 app.include_router(logistics_router)
 app.include_router(marketplaces_router)
+app.include_router(marking_router)
 app.include_router(tasks_router)
 app.include_router(push_router)
 app.include_router(scan_router)

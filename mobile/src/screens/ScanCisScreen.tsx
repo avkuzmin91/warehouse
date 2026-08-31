@@ -1,13 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { barcodeVariantLabel, getProductByBarcode, type BarcodeMatch } from '../api/productsApi'
+import { scanMarkingCode, type MarkingScanResponse } from '../api/markingApi'
 import { cisGtinToEan13, cisRawForDisplay, type CisCode } from '../utils/cis'
+import { fmtDateTime } from '../utils/format'
+import { scanNotFoundFeedback } from '../utils/feedback'
 import { useNav } from '../nav/NavContext'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 
-// Карточка отсканированного кода маркировки «Честный знак»: что прочитано из GS1-строки
-// и какой товар за кодом стоит (GTIN → EAN-13 → существующий поиск по ШК).
-// Код никуда не сохраняется — таблиц под КИЗ в схеме пока нет, экран только читает.
+// Карточка отсканированного кода маркировки «Честный знак»: код уходит в реестр
+// (POST /marking/codes), рядом — что прочитано из GS1-строки и какой товар за кодом
+// стоит (GTIN → EAN-13 → существующий поиск по ШК).
+//
+// Регистрация автоматическая, без кнопки: на потоке КИЗ лишний тап на каждую единицу
+// стоит смены. Повтор кода — не ошибка, а сигнал оператору (status=duplicate).
 export function ScanCisScreen({ cis }: { cis: CisCode }) {
   const { back, openScanProduct } = useNav()
   const ean13 = cisGtinToEan13(cis.gtin)
@@ -15,6 +21,28 @@ export function ScanCisScreen({ cis }: { cis: CisCode }) {
   const [match, setMatch] = useState<BarcodeMatch | null>(null)
   const [loading, setLoading] = useState(ean13 !== null)
   const [error, setError] = useState('')
+
+  const [scan, setScan] = useState<MarkingScanResponse | null>(null)
+  const [saving, setSaving] = useState(true)
+  const [saveError, setSaveError] = useState('')
+
+  const save = useCallback(() => {
+    setSaving(true)
+    setSaveError('')
+    return scanMarkingCode(cis.raw)
+      .then((res) => {
+        setScan(res)
+        if (res.status === 'duplicate') scanNotFoundFeedback()
+      })
+      .catch((err) => {
+        setSaveError(err instanceof Error ? err.message : 'Не удалось записать код')
+      })
+      .finally(() => setSaving(false))
+  }, [cis.raw])
+
+  useEffect(() => {
+    void save()
+  }, [save])
 
   useEffect(() => {
     if (!ean13) return
@@ -44,6 +72,36 @@ export function ScanCisScreen({ cis }: { cis: CisCode }) {
       <AppBar title="Код маркировки" sub="Честный знак" onBack={back} />
 
       <div className="scroll pad-nav">
+        {saving ? (
+          <div className="line" style={{ marginTop: 0 }}>
+            <div className="line-row" style={{ marginTop: 0 }}>
+              <span className="spin spin-sm" />
+              <span>Регистрация кода…</span>
+            </div>
+          </div>
+        ) : saveError ? (
+          <div className="alert" style={{ marginBottom: 16 }}>
+            <Icon name="alert" size={15} />
+            <span style={{ flex: 1 }}>{saveError}</span>
+            <button className="btn ghost auto" onClick={() => void save()}>
+              Повторить
+            </button>
+          </div>
+        ) : scan?.status === 'duplicate' ? (
+          <div className="alert warn" style={{ marginBottom: 16 }}>
+            <Icon name="alert" size={15} />
+            Код уже отсканирован {fmtDateTime(scan.code.created_at)}
+            {scan.code.created_by_email ? `, ${scan.code.created_by_email}` : ''}.
+          </div>
+        ) : (
+          scan && (
+            <div className="alert ok" style={{ marginBottom: 16 }}>
+              <Icon name="check" size={15} />
+              Код записан в реестр.
+            </div>
+          )
+        )}
+
         <div className="summary" style={{ marginBottom: 16 }}>
           <div className="kv">
             <span className="k">GTIN</span>
