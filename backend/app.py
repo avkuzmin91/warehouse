@@ -850,6 +850,33 @@ async def _mp_sync_loop() -> None:
         await asyncio.sleep(interval)
 
 
+async def _mp_stock_push_loop() -> None:
+    """Выгрузка остатков WMS → маркетплейс по кабинетам с включённой синхронизацией.
+    Шлём только изменения против последнего выгруженного снапшота, поэтому холостой
+    тик стоит один SQL. Сбой одного кабинета изолирован внутри run_stock_push.
+    Тик блокирующий (БД + сеть МП) — уводим в поток, как остальные циклы.
+    Отключается MP_STOCK_SCHEDULER=0 (тесты, инстансы без FBS)."""
+    from modules.marketplaces.service import run_stock_push
+
+    try:
+        interval = max(60, int(os.environ.get("MP_STOCK_PUSH_INTERVAL_SECONDS", "300")))
+    except ValueError:
+        interval = 300
+
+    def _tick() -> None:
+        with get_connection() as conn:
+            run_stock_push(conn)
+
+    while True:
+        try:
+            await asyncio.to_thread(_tick)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("wms.mp").exception("Сбой цикла выгрузки остатков, повтор через интервал")
+        await asyncio.sleep(interval)
+
+
 async def _dispatch_autopromote_loop() -> None:
     """Авто-перевод отгрузок «Ожидание упаковки» → «Подготовка», как только весь товар
     покрыт готовым остатком (упаковка выдала годное). Отгрузку и упаковку не связывает
@@ -892,6 +919,11 @@ async def lifespan(app: FastAPI):
         if os.environ.get("MP_SCHEDULER", "1") == "1"
         else None
     )
+    mp_stock_task = (
+        asyncio.create_task(_mp_stock_push_loop())
+        if os.environ.get("MP_STOCK_SCHEDULER", "1") == "1"
+        else None
+    )
     dispatch_autopromote_task = (
         asyncio.create_task(_dispatch_autopromote_loop())
         if os.environ.get("DISPATCH_AUTOPROMOTE_SCHEDULER", "1") == "1"
@@ -900,6 +932,8 @@ async def lifespan(app: FastAPI):
     yield
     if dispatch_autopromote_task is not None:
         dispatch_autopromote_task.cancel()
+    if mp_stock_task is not None:
+        mp_stock_task.cancel()
     if mp_task is not None:
         mp_task.cancel()
     if push_task is not None:

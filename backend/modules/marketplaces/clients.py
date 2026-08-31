@@ -25,6 +25,7 @@ WB_CONTENT_BASE = "https://content-api.wildberries.ru"
 _TIMEOUT = 30.0
 _RETRIES = 3
 _PAGE_PAUSE = 0.5  # лимиты обоих МП: пауза между постраничными запросами
+_STOCKS_BATCH = 1000  # WB: не больше 1000 ШК в одном запросе остатков
 
 
 class MpApiError(Exception):
@@ -219,3 +220,43 @@ def wb_fetch_order_statuses(creds: dict, external_ids: list[int]) -> list[dict]:
         if i + 1000 < len(external_ids):
             time.sleep(_PAGE_PAUSE)
     return statuses
+
+
+def wb_fetch_warehouses(creds: dict) -> list[dict]:
+    """Склады продавца (FBS): к ним привязаны остатки."""
+    data = _request("GET", f"{WB_MARKETPLACE_BASE}/api/v3/warehouses", headers=_wb_headers(creds))
+    return list(data or [])
+
+
+def wb_push_stocks(creds: dict, warehouse_id: str, items: list[tuple[str, int]]) -> None:
+    """Выгрузить остатки на склад продавца, батчами по лимиту WB (1000 ШК на запрос).
+
+    `items` — пары (ШК WB, количество). Пустой список — не запрос, а no-op.
+    """
+    headers = _wb_headers(creds)
+    url = f"{WB_MARKETPLACE_BASE}/api/v3/stocks/{warehouse_id}"
+    for i in range(0, len(items), _STOCKS_BATCH):
+        chunk = items[i:i + _STOCKS_BATCH]
+        _request(
+            "PUT", url, headers=headers,
+            json_body={"stocks": [{"sku": sku, "amount": int(qty)} for sku, qty in chunk]},
+        )
+        if i + _STOCKS_BATCH < len(items):
+            time.sleep(_PAGE_PAUSE)
+
+
+def wb_fetch_stocks(creds: dict, warehouse_id: str, skus: list[str]) -> dict[str, int]:
+    """Остатки, которые сейчас видит WB: ШК → количество. Нужен для сверки."""
+    headers = _wb_headers(creds)
+    url = f"{WB_MARKETPLACE_BASE}/api/v3/stocks/{warehouse_id}"
+    result: dict[str, int] = {}
+    for i in range(0, len(skus), _STOCKS_BATCH):
+        chunk = skus[i:i + _STOCKS_BATCH]
+        data = _request("POST", url, headers=headers, json_body={"skus": chunk})
+        for entry in (data or {}).get("stocks") or []:
+            sku = str(entry.get("sku") or "")
+            if sku:
+                result[sku] = int(entry.get("amount") or 0)
+        if i + _STOCKS_BATCH < len(skus):
+            time.sleep(_PAGE_PAUSE)
+    return result

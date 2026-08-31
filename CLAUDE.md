@@ -70,7 +70,7 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 | `pricing`, `pallet_pricing`, `box_pricing` | клиентские тарифы: логистика, палеты, короба (все effective-dated) |
 | `storage_pricing` | платное хранение остатков: тариф клиента (единица/ставка/`free_days`, effective-dated), ежедневные начисления `storage_charges` в `_accrual_loop`, отчёт «Хранение»; в счёт — `invoice_storage_charges`, в P&L — источник `storage` |
 | `extra_income` | доп. доходы: реестр + словарь категорий, **суммы в копейках INTEGER**, привязка к счетам через `invoice_extra_income` |
-| `marketplaces` | интеграция с маркетплейсами (FBS Ozon/WB): аккаунты `mp_accounts`, товары/связки `mp_products`/`mp_product_links`, заказы `mp_orders`/`mp_order_lines`, журнал синка `mp_sync_log`, магазины клиентов `client_stores`; HTTP-клиенты площадок — `clients.py` (четвёртый файл модуля, осознанное исключение) |
+| `marketplaces` | интеграция с маркетплейсами (FBS Ozon/WB): аккаунты `mp_accounts`, товары/связки `mp_products`/`mp_product_links`, заказы `mp_orders`/`mp_order_lines`, журнал синка `mp_sync_log`, магазины клиентов `client_stores`; выгрузка остатков в МП (пока только WB) — склады продавца `mp_warehouses` + снапшот выгруженного `mp_stock_state`, доступное = «Хранение/Годный» − резерв отгрузок − незакрытые FBS-заказы; HTTP-клиенты площадок — `clients.py` (четвёртый файл модуля, осознанное исключение) |
 | `push` | FCM push-уведомления («Новая задача»): `/push/register`, `/push/unregister`, токены `push_tokens` |
 | `inventory` | вспомогательные lookup'ы инвентаря (исторически только router.py) |
 

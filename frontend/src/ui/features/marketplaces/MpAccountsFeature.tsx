@@ -1,17 +1,20 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   checkMpAccount,
   createMpAccount,
   deleteMpAccount,
   getMpAccounts,
+  getMpWarehouses,
   MARKETPLACE_LABELS,
   marketplaceTone,
   MP_ACCOUNT_STATUS_LABELS,
+  pushMpAccountStocks,
   syncMpAccountCatalog,
   syncMpAccountOrders,
+  syncMpAccountWarehouses,
   updateMpAccount,
 } from '../../../api/marketplacesApi'
-import type { Marketplace, MpAccountItem } from '../../../api/marketplacesApi'
+import type { Marketplace, MpAccountItem, MpWarehouseItem } from '../../../api/marketplacesApi'
 import { ListPage } from '../../layouts/ListPage'
 import { Table, Td } from '../../data/Table'
 import { Combobox } from '../../data/Combobox'
@@ -31,11 +34,12 @@ export function MpAccountsFeature() {
   const confirm = useConfirm()
   const [reloadKey, setReloadKey] = useState(0)
   const [modal, setModal] = useState<{ mode: 'create' } | { mode: 'edit'; account: MpAccountItem } | null>(null)
+  const [stockAccount, setStockAccount] = useState<MpAccountItem | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const { data, loading, error } = useApi((s) => getMpAccounts(s), [reloadKey])
   const items = data?.items ?? []
-  const colCount = 7
+  const colCount = 8
 
   const reload = () => setReloadKey((k) => k + 1)
 
@@ -105,6 +109,7 @@ export function MpAccountsFeature() {
             <th>Клиент</th>
             <th style={{ width: 90 }}>Статус</th>
             <th style={{ width: 150 }}>Последний синк</th>
+            <th style={{ width: 190 }}>Остатки</th>
             <th>Ошибка</th>
             <th style={{ width: 210 }} />
           </tr>
@@ -135,6 +140,7 @@ export function MpAccountsFeature() {
                 <Td style={{ color: 'var(--c-text-subtle)' }}>
                   {a.last_sync_at ? fmtDateTime(a.last_sync_at) : '—'}
                 </Td>
+                <Td><StockCell account={a} /></Td>
                 <Td>
                   {a.last_sync_error ? (
                     <span title={a.last_sync_error}>
@@ -166,6 +172,16 @@ export function MpAccountsFeature() {
                     >
                       <Icon name={a.status === 'active' ? 'pause' : 'play'} size={14} />
                     </button>
+                    {a.marketplace === 'wb' && (
+                      <button
+                        className="btn ghost icon sm"
+                        title="Остатки: склад и выгрузка"
+                        onClick={() => setStockAccount(a)}
+                        disabled={busyId === a.id}
+                      >
+                        <Icon name="boxes" size={14} />
+                      </button>
+                    )}
                     <button className="btn ghost icon sm" title="Изменить" onClick={() => setModal({ mode: 'edit', account: a })} disabled={busyId === a.id}>
                       <Icon name="edit" size={14} />
                     </button>
@@ -179,6 +195,14 @@ export function MpAccountsFeature() {
           )}
         </tbody>
       </Table>
+
+      {stockAccount && (
+        <StockSettingsModal
+          account={stockAccount}
+          onClose={() => setStockAccount(null)}
+          onDone={() => { setStockAccount(null); reload() }}
+        />
+      )}
 
       {modal && (
         <AccountModal
@@ -309,6 +333,133 @@ function AccountModal({ account, onClose, onDone }: {
             placeholder={isEdit ? 'Оставьте пустым, чтобы не менять' : 'Ключ не отображается после сохранения'}
             autoComplete="new-password"
           />
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+
+function StockCell({ account }: { account: MpAccountItem }) {
+  if (account.marketplace !== 'wb') {
+    return <span style={{ color: 'var(--c-text-faint)' }}>—</span>
+  }
+  if (account.last_stock_push_error) {
+    return (
+      <span title={account.last_stock_push_error}>
+        <Badge tone="danger" dot>ошибка выгрузки</Badge>
+      </span>
+    )
+  }
+  if (!account.stock_sync_enabled) {
+    return <Badge tone="warning">выключена</Badge>
+  }
+  return (
+    <>
+      <Badge tone="success">включена</Badge>
+      <div className="t-sub" style={{ fontSize: 12 }}>
+        {account.last_stock_push_at ? fmtDateTime(account.last_stock_push_at) : 'ещё не выгружались'}
+      </div>
+    </>
+  )
+}
+
+function StockSettingsModal({ account, onClose, onDone }: {
+  account: MpAccountItem
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [warehouses, setWarehouses] = useState<MpWarehouseItem[]>([])
+  const [warehouseId, setWarehouseId] = useState(account.stock_warehouse_id ?? '')
+  const [enabled, setEnabled] = useState(account.stock_sync_enabled)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    getMpWarehouses(account.id)
+      .then((res) => { if (alive) setWarehouses(res.items) })
+      .catch(() => { if (alive) setWarehouses([]) })
+    return () => { alive = false }
+  }, [account.id])
+
+  const run = async (fn: () => Promise<void>) => {
+    if (busy) return
+    setBusy(true)
+    try {
+      await fn()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось выполнить операцию', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleRefreshWarehouses = () => run(async () => {
+    const res = await syncMpAccountWarehouses(account.id)
+    const items = await getMpWarehouses(account.id)
+    setWarehouses(items.items)
+    toast(`Складов получено: ${res.stats.fetched ?? 0}`)
+  })
+
+  const handleSave = () => run(async () => {
+    await updateMpAccount(account.id, {
+      stock_warehouse_id: warehouseId,
+      stock_sync_enabled: enabled,
+    })
+    toast('Настройки остатков сохранены')
+    onDone()
+  })
+
+  const handlePushNow = () => run(async () => {
+    const res = await pushMpAccountStocks(account.id)
+    toast(`Выгружено в маркетплейс: ${res.stats.pushed ?? 0} ШК`)
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Остатки в маркетплейсе"
+      subtitle={`${account.name} · выгрузка идёт на выбранный склад продавца`}
+      width={520}
+      footer={
+        <>
+          <button className="btn ghost" onClick={onClose} disabled={busy}>Отмена</button>
+          <button className="btn primary" onClick={handleSave} disabled={busy}>Сохранить</button>
+        </>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div>
+          <div className="row gap-8" style={{ justifyContent: 'space-between', marginBottom: 4 }}>
+            <span style={{ fontSize: 12, color: 'var(--c-text-subtle)' }}>Склад продавца</span>
+            <button className="btn ghost sm" onClick={handleRefreshWarehouses} disabled={busy}>
+              <Icon name="refresh" size={12} />Обновить список
+            </button>
+          </div>
+          <Combobox
+            value={warehouseId || null}
+            options={warehouses.map((w) => ({
+              value: w.external_id,
+              label: `${w.name ?? 'Без названия'} (${w.external_id})`,
+            }))}
+            placeholder={warehouses.length ? 'Куда выгружать остатки…' : 'Сначала обновите список складов'}
+            onChange={(v) => setWarehouseId(v ? String(v) : '')}
+          />
+        </div>
+        <label className="row gap-8" style={{ cursor: 'pointer' }}>
+          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <span>Выгружать остатки автоматически</span>
+        </label>
+        <div className="t-sub" style={{ fontSize: 12 }}>
+          В маркетплейс уходит годный остаток на хранении за вычетом резерва клиентских отгрузок
+          и незакрытых FBS-заказов. Отправляются только изменившиеся штрих-коды.
+        </div>
+        <div>
+          <button className="btn" onClick={handlePushNow} disabled={busy || !account.stock_warehouse_id}>
+            <Icon name="upload" size={14} />Выгрузить сейчас
+          </button>
         </div>
       </div>
     </Modal>

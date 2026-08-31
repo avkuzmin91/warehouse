@@ -1,9 +1,13 @@
-"""FBS-маркетплейсы, Фаза 1: синхронизация заказов/карточек и выборки для UI.
+"""FBS-маркетплейсы: синхронизация заказов/карточек, выборки для UI и выгрузка
+остатков WMS → МП.
 
-Read-only контур: в маркетплейсы ничего не пишем. Статусы МП нормализуются
-в свой набор MP_ORDER_STATUS_* (сырой статус сохраняется в external_status);
-у WB сборочное задание — всегда одна позиция qty=1, сырой статус хранится
-парой «supplierStatus/wbStatus».
+Вход (заказы, карточки) — зеркало: статусы МП нормализуются в свой набор
+MP_ORDER_STATUS_* (сырой статус сохраняется в external_status); у WB сборочное
+задание — всегда одна позиция qty=1, сырой статус хранится парой
+«supplierStatus/wbStatus».
+
+Выход — пока единственный: остатки (только WB). Статусы заказов в МП не пишем —
+сборка заказов на складе живёт отдельной задачей.
 """
 
 from __future__ import annotations
@@ -15,6 +19,17 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from config import (
+    DISPATCH_CARGO_GOOD,
+    DISPATCH_CARGO_GOOD_UNPACKED,
+    DISPATCH_STATUS_AWAITING_PACKING,
+    DISPATCH_STATUS_AWAITING_TRIP,
+    DISPATCH_STATUS_PARTIALLY_SHIPPED,
+    DISPATCH_STATUS_PREPARING,
+    INV_OP_PACKED,
+    INV_OP_PACKING,
+    INV_OP_READY,
+    INV_OP_STORAGE,
+    INV_Q_GOOD,
     MP_ACCOUNT_STATUS_ACTIVE,
     MP_DEADLINE_SOURCE_API,
     MP_DEADLINE_SOURCE_ESTIMATED,
@@ -26,8 +41,13 @@ from config import (
     MP_ORDER_STATUS_SHIPPED,
     MP_ORDER_TERMINAL_STATUSES,
     MP_OZON,
+    MP_STOCK_NOTE_SHARED_VARIANT,
+    MP_STOCK_SKIP_NO_BARCODE,
+    MP_STOCK_SKIP_UNLINKED,
     MP_SYNC_KIND_CATALOG,
     MP_SYNC_KIND_ORDERS,
+    MP_SYNC_KIND_STOCKS,
+    MP_SYNC_KIND_WAREHOUSES,
     MP_WB,
 )
 from dbconn import ci_like_substring_param
@@ -37,6 +57,11 @@ from . import clients
 log = logging.getLogger("wms.mp")
 
 _SYNC_LOG_RETENTION_DAYS = 30
+_STOCK_PUSH_BATCH = 1000
+
+
+class MpStockNotConfigured(Exception):
+    """Кабинет не готов к выгрузке остатков (не тот МП, не выбран склад)."""
 
 
 def _now() -> str:
@@ -783,3 +808,402 @@ def unlink_mp_product(connection, mp_product_id: str) -> bool:
         (mp_product_id,),
     )
     return bool(getattr(cursor, "rowcount", 0))
+
+
+# ── Остатки: расчёт доступного и выгрузка в МП ────────────────────────────────
+
+# Клиентские отгрузки держат спрос с момента фиксации состава; черновик не резервирует
+# (как и в ядре: `ready_available_for_dispatch`).
+_STOCK_DISPATCH_STATUSES: tuple[str, ...] = (
+    DISPATCH_STATUS_AWAITING_PACKING, DISPATCH_STATUS_PREPARING,
+    DISPATCH_STATUS_AWAITING_TRIP, DISPATCH_STATUS_PARTIALLY_SHIPPED,
+)
+_STOCK_DISPATCH_CARGO: tuple[str, ...] = (DISPATCH_CARGO_GOOD, DISPATCH_CARGO_GOOD_UNPACKED)
+_STOCK_OPEN_ORDER_STATUSES: tuple[str, ...] = (MP_ORDER_STATUS_NEW, MP_ORDER_STATUS_IN_PROGRESS)
+
+# Корзины, куда товар уже физически вынесен под клиентские отгрузки: упаковка,
+# упаковано, зона отгрузки. Нужны, чтобы не вычесть спрос дважды (см. _target_qty).
+_STOCK_OUTBOUND_OPS: tuple[str, ...] = (INV_OP_PACKING, INV_OP_PACKED, INV_OP_READY)
+
+
+def _vkey(product_id, color_id, size_id) -> tuple[str, str, str]:
+    return (str(product_id or ""), str(color_id or ""), str(size_id or ""))
+
+
+def _stock_matrix(connection, client_id: str) -> dict[tuple[str, str, str], dict[str, int]]:
+    """Нетто журнала по позициям клиента: годный на хранении и годный, уже вынесенный
+    под отгрузки (упаковка + упаковано + зона отгрузки)."""
+    outbound_ph = ",".join("?" for _ in _STOCK_OUTBOUND_OPS)
+    rows = connection.execute(
+        f"""
+        SELECT product_id, color_id, size_id,
+               COALESCE(SUM(CASE WHEN to_op = ? AND to_quality = ? THEN qty ELSE 0 END), 0)
+             - COALESCE(SUM(CASE WHEN from_op = ? AND from_quality = ? THEN qty ELSE 0 END), 0) AS storage_good,
+               COALESCE(SUM(CASE WHEN to_op IN ({outbound_ph}) AND to_quality = ? THEN qty ELSE 0 END), 0)
+             - COALESCE(SUM(CASE WHEN from_op IN ({outbound_ph}) AND from_quality = ? THEN qty ELSE 0 END), 0) AS outbound_good
+        FROM zone_relocations
+        WHERE client_id IS NOT DISTINCT FROM ?
+        GROUP BY product_id, color_id, size_id
+        """,
+        (INV_OP_STORAGE, INV_Q_GOOD, INV_OP_STORAGE, INV_Q_GOOD,
+         *_STOCK_OUTBOUND_OPS, INV_Q_GOOD, *_STOCK_OUTBOUND_OPS, INV_Q_GOOD,
+         client_id),
+    ).fetchall()
+    return {
+        _vkey(r["product_id"], r["color_id"], r["size_id"]): {
+            "storage_good": max(0, int(r["storage_good"] or 0)),
+            "outbound_good": max(0, int(r["outbound_good"] or 0)),
+        }
+        for r in rows
+    }
+
+
+def _dispatch_demand(connection, client_id: str) -> dict[tuple[str, str, str], int]:
+    """Недовезённый объём зафиксированных клиентских отгрузок годного по позициям."""
+    status_ph = ",".join("?" for _ in _STOCK_DISPATCH_STATUSES)
+    cargo_ph = ",".join("?" for _ in _STOCK_DISPATCH_CARGO)
+    rows = connection.execute(
+        f"""
+        SELECT dl.product_id, dl.color_id, dl.size_id,
+               COALESCE(SUM(GREATEST(dl.qty - COALESCE(dl.shipped_qty, 0), 0)), 0) AS demand
+        FROM dispatch_lines dl
+        JOIN dispatch_docs dd ON dd.id = dl.doc_id
+        WHERE dd.client_id IS NOT DISTINCT FROM ?
+          AND dd.status IN ({status_ph})
+          AND COALESCE(dd.cargo_type, ?) IN ({cargo_ph})
+          AND COALESCE(dl.is_deleted, 0) = 0
+          AND COALESCE(dd.is_deleted, 0) = 0
+        GROUP BY dl.product_id, dl.color_id, dl.size_id
+        """,
+        (client_id, *_STOCK_DISPATCH_STATUSES, DISPATCH_CARGO_GOOD, *_STOCK_DISPATCH_CARGO),
+    ).fetchall()
+    return {
+        _vkey(r["product_id"], r["color_id"], r["size_id"]): max(0, int(r["demand"] or 0))
+        for r in rows
+    }
+
+
+def _fbs_demand(connection, client_id: str) -> dict[tuple[str, str, str], int]:
+    """Спрос незавершённых FBS-заказов клиента по всем его кабинетам (Ozon + WB):
+    товар ещё лежит у нас, но уже продан."""
+    status_ph = ",".join("?" for _ in _STOCK_OPEN_ORDER_STATUSES)
+    rows = connection.execute(
+        f"""
+        SELECT pl.product_id, v.color_id, v.size_id, COALESCE(SUM(l.qty), 0) AS demand
+        FROM mp_order_lines l
+        JOIN mp_orders o ON o.id = l.order_id
+        JOIN mp_accounts a ON a.id = o.account_id
+        JOIN mp_product_links pl ON pl.mp_product_id = l.mp_product_id
+          AND COALESCE(pl.is_deleted, 0) = 0
+        LEFT JOIN product_variants v ON v.id = pl.variant_id
+        WHERE a.client_id IS NOT DISTINCT FROM ?
+          AND COALESCE(a.is_deleted, 0) = 0
+          AND o.status IN ({status_ph})
+        GROUP BY pl.product_id, v.color_id, v.size_id
+        """,
+        (client_id, *_STOCK_OPEN_ORDER_STATUSES),
+    ).fetchall()
+    return {
+        _vkey(r["product_id"], r["color_id"], r["size_id"]): max(0, int(r["demand"] or 0))
+        for r in rows
+    }
+
+
+def _target_qty(bucket: dict[str, int], dispatch_demand: int, fbs_demand: int) -> int:
+    """Доступное к продаже на МП.
+
+    Хранение/годный минус спрос клиентских отгрузок, ЕЩЁ НЕ покрытый физически
+    вынесенным товаром (то, что уже уехало в упаковку/зону отгрузки, из хранения
+    журналом вычтено — вычитать его спрос второй раз значит занижать остаток),
+    минус незавершённые FBS-заказы.
+    """
+    uncovered = max(0, dispatch_demand - bucket.get("outbound_good", 0))
+    return max(0, bucket.get("storage_good", 0) - uncovered - fbs_demand)
+
+
+def compute_stock_rows(connection, account) -> list[dict]:
+    """Строка на каждую карточку МП кабинета: сколько выгружать и почему не выгружаем.
+
+    Несвязанную карточку не трогаем вовсе: её остаток нам неизвестен, а обнулять
+    чужой товар нельзя.
+    """
+    account_id = str(account["id"])
+    client_id = str(account["client_id"])
+    cards = connection.execute(
+        """
+        SELECT mp.id, mp.external_id, mp.external_size, mp.offer_id, mp.title, mp.barcodes,
+               pl.product_id, pl.variant_id, v.color_id, v.size_id,
+               p.name AS product_name,
+               COALESCE(NULLIF(v.sku, ''), p.sku) AS product_sku,
+               col.name AS color_name, s.name AS size_name
+        FROM mp_products mp
+        LEFT JOIN mp_product_links pl ON pl.mp_product_id = mp.id
+          AND COALESCE(pl.is_deleted, 0) = 0
+        LEFT JOIN product_variants v ON v.id = pl.variant_id
+        LEFT JOIN products p ON p.id = pl.product_id
+        LEFT JOIN colors col ON col.id = v.color_id
+        LEFT JOIN sizes s ON s.id = v.size_id
+        WHERE mp.account_id = ?
+        ORDER BY LOWER(COALESCE(mp.offer_id, mp.title, '')) ASC, mp.external_size ASC NULLS FIRST
+        """,
+        (account_id,),
+    ).fetchall()
+
+    matrix = _stock_matrix(connection, client_id)
+    dispatch_demand = _dispatch_demand(connection, client_id)
+    fbs_demand = _fbs_demand(connection, client_id)
+
+    variant_cards: dict[tuple[str, str, str], int] = {}
+    for row in cards:
+        if row["product_id"]:
+            key = _vkey(row["product_id"], row["color_id"], row["size_id"])
+            variant_cards[key] = variant_cards.get(key, 0) + 1
+
+    rows: list[dict] = []
+    for row in cards:
+        try:
+            barcodes = [str(b) for b in json.loads(row["barcodes"] or "[]") if str(b)]
+        except ValueError:
+            barcodes = []
+        item = {
+            "mp_product_id": str(row["id"]),
+            "external_id": str(row["external_id"]),
+            "external_size": row["external_size"],
+            "offer_id": row["offer_id"],
+            "title": row["title"],
+            "barcodes": barcodes,
+            "product_id": row["product_id"],
+            "variant_id": row["variant_id"],
+            "product_sku": row["product_sku"],
+            "product_name": row["product_name"],
+            "color_name": row["color_name"],
+            "size_name": row["size_name"],
+            "qty": None,
+            "skip_reason": None,
+            "note": None,
+        }
+        if not row["product_id"]:
+            item["skip_reason"] = MP_STOCK_SKIP_UNLINKED
+            rows.append(item)
+            continue
+        if not barcodes:
+            item["skip_reason"] = MP_STOCK_SKIP_NO_BARCODE
+            rows.append(item)
+            continue
+        key = _vkey(row["product_id"], row["color_id"], row["size_id"])
+        item["qty"] = _target_qty(
+            matrix.get(key, {}), dispatch_demand.get(key, 0), fbs_demand.get(key, 0),
+        )
+        if variant_cards.get(key, 0) > 1:
+            item["note"] = MP_STOCK_NOTE_SHARED_VARIANT
+        rows.append(item)
+    return rows
+
+
+def stock_targets(rows: list[dict]) -> dict[str, int]:
+    """ШК → количество к выгрузке. Один ШК в нескольких карточках — берём минимум:
+    завысить остаток дороже, чем недопродать."""
+    targets: dict[str, int] = {}
+    for row in rows:
+        if row["qty"] is None:
+            continue
+        for sku in row["barcodes"]:
+            if sku in targets:
+                targets[sku] = min(targets[sku], int(row["qty"]))
+            else:
+                targets[sku] = int(row["qty"])
+    return targets
+
+
+def _pushed_state(connection, account_id: str) -> dict[str, int]:
+    rows = connection.execute(
+        "SELECT sku, qty FROM mp_stock_state WHERE account_id = ?", (account_id,)
+    ).fetchall()
+    return {str(r["sku"]): int(r["qty"]) for r in rows}
+
+
+def _remember_pushed(connection, account_id: str, chunk: list[tuple[str, int]]) -> None:
+    now = _now()
+    for sku, qty in chunk:
+        updated = connection.execute(
+            "UPDATE mp_stock_state SET qty = ?, pushed_at = ? WHERE account_id = ? AND sku = ?",
+            (int(qty), now, account_id, sku),
+        )
+        if not getattr(updated, "rowcount", 0):
+            connection.execute(
+                "INSERT INTO mp_stock_state (id, account_id, sku, qty, pushed_at) VALUES (?,?,?,?,?)",
+                (str(uuid4()), account_id, sku, int(qty), now),
+            )
+
+
+def push_account_stocks(connection, account, *, full: bool = False) -> dict:
+    """Выгрузить остатки кабинета в МП. Шлём только изменения против последнего
+    успешно выгруженного снапшота (`full=True` — весь каталог заново).
+
+    Снапшот обновляется побатчево сразу после принятого маркетплейсом запроса:
+    оборванная на середине выгрузка не должна выглядеть как выгруженная целиком.
+    MpApiError наружу — вызывающий решает, как фиксировать сбой.
+    """
+    account_id = str(account["id"])
+    marketplace = str(account["marketplace"])
+    if marketplace != MP_WB:
+        raise MpStockNotConfigured("Выгрузка остатков поддержана только для Wildberries")
+    warehouse_id = str(account["stock_warehouse_id"] or "").strip()
+    if not warehouse_id:
+        raise MpStockNotConfigured("Не выбран склад маркетплейса для выгрузки остатков")
+
+    rows = compute_stock_rows(connection, account)
+    targets = stock_targets(rows)
+    known = {} if full else _pushed_state(connection, account_id)
+    changed = sorted(
+        ((sku, qty) for sku, qty in targets.items() if known.get(sku) != qty),
+        key=lambda pair: pair[0],
+    )
+    stats = {
+        "cards": len(rows),
+        "skipped": sum(1 for r in rows if r["skip_reason"]),
+        "skus": len(targets),
+        "changed": len(changed),
+        "pushed": 0,
+    }
+    creds = _account_creds(account)
+    for i in range(0, len(changed), _STOCK_PUSH_BATCH):
+        chunk = changed[i:i + _STOCK_PUSH_BATCH]
+        clients.wb_push_stocks(creds, warehouse_id, chunk)
+        _remember_pushed(connection, account_id, chunk)
+        stats["pushed"] += len(chunk)
+        connection.commit()
+    connection.execute(
+        "UPDATE mp_accounts SET last_stock_push_at = ?, last_stock_push_error = NULL WHERE id = ?",
+        (_now(), account_id),
+    )
+    write_sync_log(connection, account_id, MP_SYNC_KIND_STOCKS, ok=True, stats=stats)
+    return stats
+
+
+def run_stock_push(connection) -> dict:
+    """Прогон выгрузки по всем кабинетам с включённой синхронизацией остатков.
+    Сбой одного кабинета не мешает остальным — как в run_marketplace_sync."""
+    accounts = connection.execute(
+        "SELECT * FROM mp_accounts WHERE status = ? AND COALESCE(is_deleted, 0) = 0 "
+        "AND COALESCE(stock_sync_enabled, 0) = 1 AND COALESCE(stock_warehouse_id, '') <> '' "
+        "ORDER BY created_at ASC",
+        (MP_ACCOUNT_STATUS_ACTIVE,),
+    ).fetchall()
+    totals = {"accounts": 0, "failed": 0, "changed": 0, "pushed": 0}
+    for account in accounts:
+        totals["accounts"] += 1
+        try:
+            stats = push_account_stocks(connection, account)
+            totals["changed"] += stats["changed"]
+            totals["pushed"] += stats["pushed"]
+        except Exception as exc:
+            connection.rollback()
+            totals["failed"] += 1
+            message = str(exc)[:500]
+            log.warning("Выгрузка остатков кабинета %s не удалась: %s", account["name"], message)
+            connection.execute(
+                "UPDATE mp_accounts SET last_stock_push_error = ? WHERE id = ?",
+                (message, str(account["id"])),
+            )
+            write_sync_log(connection, str(account["id"]), MP_SYNC_KIND_STOCKS, ok=False, error=message)
+        connection.commit()
+    return totals
+
+
+# ── Склады маркетплейса ───────────────────────────────────────────────────────
+
+def sync_account_warehouses(connection, account) -> dict:
+    """Обновить справочник складов продавца. MpApiError наружу."""
+    account_id = str(account["id"])
+    if str(account["marketplace"]) != MP_WB:
+        raise MpStockNotConfigured("Склады маркетплейса поддержаны только для Wildberries")
+    now = _now()
+    fetched = 0
+    for wh in clients.wb_fetch_warehouses(_account_creds(account)):
+        external_id = str(wh.get("id") or "")
+        if not external_id:
+            continue
+        fetched += 1
+        payload = json.dumps(wh, ensure_ascii=False)
+        name = str(wh.get("name") or "") or None
+        office_id = str(wh.get("officeId") or "") or None
+        cargo_type = str(wh.get("cargoType") or "") or None
+        delivery_type = str(wh.get("deliveryType") or "") or None
+        updated = connection.execute(
+            "UPDATE mp_warehouses SET name = ?, office_id = ?, cargo_type = ?, "
+            "delivery_type = ?, payload = ?, updated_at = ? WHERE account_id = ? AND external_id = ?",
+            (name, office_id, cargo_type, delivery_type, payload, now, account_id, external_id),
+        )
+        if not getattr(updated, "rowcount", 0):
+            connection.execute(
+                "INSERT INTO mp_warehouses (id, account_id, external_id, name, office_id, "
+                "cargo_type, delivery_type, payload, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (str(uuid4()), account_id, external_id, name, office_id,
+                 cargo_type, delivery_type, payload, now),
+            )
+    stats = {"fetched": fetched}
+    write_sync_log(connection, account_id, MP_SYNC_KIND_WAREHOUSES, ok=True, stats=stats)
+    return stats
+
+
+def list_warehouses(connection, account_id: str) -> list[dict]:
+    rows = connection.execute(
+        "SELECT external_id, name, office_id, cargo_type, delivery_type, updated_at "
+        "FROM mp_warehouses WHERE account_id = ? ORDER BY LOWER(COALESCE(name, '')) ASC",
+        (account_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Сверка остатков ───────────────────────────────────────────────────────────
+
+def stock_report(connection, account, *, only_diff: bool = False, search: str | None = None,
+                 with_marketplace: bool = True) -> dict:
+    """Сверка «наш расчёт ↔ выгружено ↔ что видит МП» по карточкам кабинета.
+
+    `with_marketplace=False` — без обращения к МП (быстрый просмотр расчёта).
+    """
+    account_id = str(account["id"])
+    rows = compute_stock_rows(connection, account)
+    pushed = _pushed_state(connection, account_id)
+
+    actual: dict[str, int] = {}
+    marketplace_error: str | None = None
+    warehouse_id = str(account["stock_warehouse_id"] or "").strip()
+    if with_marketplace and warehouse_id and str(account["marketplace"]) == MP_WB:
+        skus = sorted({sku for row in rows for sku in row["barcodes"]})
+        try:
+            actual = clients.wb_fetch_stocks(_account_creds(account), warehouse_id, skus)
+        except clients.MpApiError as exc:
+            marketplace_error = str(exc)[:500]
+
+    needle = str(search or "").strip().lower()
+    items: list[dict] = []
+    for row in rows:
+        skus = row["barcodes"]
+        pushed_qty = next((pushed[s] for s in skus if s in pushed), None)
+        mp_qty = next((actual[s] for s in skus if s in actual), None) if actual else None
+        item = {
+            **row,
+            "pushed_qty": pushed_qty,
+            "mp_qty": mp_qty,
+            "diff": (None if (row["qty"] is None or mp_qty is None) else int(mp_qty) - int(row["qty"])),
+        }
+        if needle:
+            haystack = " ".join(str(x or "") for x in (
+                row["offer_id"], row["title"], row["product_sku"], row["product_name"],
+                row["external_id"], *skus,
+            )).lower()
+            if needle not in haystack:
+                continue
+        if only_diff and not item["skip_reason"] and item["diff"] in (0, None):
+            continue
+        items.append(item)
+
+    return {
+        "items": items,
+        "total": len(items),
+        "marketplace_error": marketplace_error,
+        "checked_at": _now(),
+    }

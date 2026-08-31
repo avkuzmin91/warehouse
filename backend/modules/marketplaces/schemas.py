@@ -20,6 +20,11 @@ class MpAccountItem(BaseModel):
     status: str
     last_sync_at: str | None = None
     last_sync_error: str | None = None
+    stock_sync_enabled: bool = False
+    stock_warehouse_id: str | None = None
+    stock_warehouse_name: str | None = None
+    last_stock_push_at: str | None = None
+    last_stock_push_error: str | None = None
     created_at: str
 
 
@@ -40,6 +45,8 @@ class MpAccountUpdate(BaseModel):
     status: str | None = None
     ozon_client_id: str | None = None
     api_key: str | None = None
+    stock_warehouse_id: str | None = None
+    stock_sync_enabled: bool | None = None
 
 
 class SyncStatsResponse(BaseModel):
@@ -144,3 +151,46 @@ class MpProductsResponse(BaseModel):
 class MpLinkRequest(BaseModel):
     product_id: str = Field(min_length=1)
     variant_id: str | None = None
+
+
+# ── Остатки: склады МП и сверка ───────────────────────────────────────────────
+
+class MpWarehouseItem(BaseModel):
+    external_id: str
+    name: str | None = None
+    office_id: str | None = None
+    cargo_type: str | None = None
+    delivery_type: str | None = None
+    updated_at: str
+
+
+class MpWarehousesResponse(BaseModel):
+    items: list[MpWarehouseItem]
+
+
+class MpStockRow(BaseModel):
+    mp_product_id: str
+    external_id: str
+    external_size: str | None = None
+    offer_id: str | None = None
+    title: str | None = None
+    barcodes: list[str]
+    product_id: str | None = None
+    variant_id: str | None = None
+    product_sku: str | None = None
+    product_name: str | None = None
+    color_name: str | None = None
+    size_name: str | None = None
+    qty: int | None = None
+    pushed_qty: int | None = None
+    mp_qty: int | None = None
+    diff: int | None = None
+    skip_reason: str | None = None
+    note: str | None = None
+
+
+class MpStockReportResponse(BaseModel):
+    items: list[MpStockRow]
+    total: int
+    marketplace_error: str | None = None
+    checked_at: str

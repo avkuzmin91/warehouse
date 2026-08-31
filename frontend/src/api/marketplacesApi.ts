@@ -17,6 +17,11 @@ export type MpAccountItem = {
   status: MpAccountStatus
   last_sync_at: string | null
   last_sync_error: string | null
+  stock_sync_enabled: boolean
+  stock_warehouse_id: string | null
+  stock_warehouse_name: string | null
+  last_stock_push_at: string | null
+  last_stock_push_error: string | null
   created_at: string
 }
 
@@ -35,6 +40,57 @@ export type MpAccountUpdatePayload = {
   status?: MpAccountStatus
   ozon_client_id?: string
   api_key?: string
+  stock_warehouse_id?: string
+  stock_sync_enabled?: boolean
+}
+
+export type MpWarehouseItem = {
+  external_id: string
+  name: string | null
+  office_id: string | null
+  cargo_type: string | null
+  delivery_type: string | null
+  updated_at: string
+}
+
+export type MpWarehousesResponse = { items: MpWarehouseItem[] }
+
+export type MpStockSkipReason = 'unlinked' | 'no_barcode' | 'duplicate_sku'
+export type MpStockNote = 'shared_variant'
+
+export type MpStockRow = {
+  mp_product_id: string
+  external_id: string
+  external_size: string | null
+  offer_id: string | null
+  title: string | null
+  barcodes: string[]
+  product_id: string | null
+  variant_id: string | null
+  product_sku: string | null
+  product_name: string | null
+  color_name: string | null
+  size_name: string | null
+  qty: number | null
+  pushed_qty: number | null
+  mp_qty: number | null
+  diff: number | null
+  skip_reason: MpStockSkipReason | null
+  note: MpStockNote | null
+}
+
+export type MpStockReportResponse = {
+  items: MpStockRow[]
+  total: number
+  marketplace_error: string | null
+  checked_at: string
+}
+
+export type MpStockReportParams = {
+  account_id: string
+  only_diff?: boolean
+  search?: string
+  with_marketplace?: boolean
 }
 
 export type SyncStatsResponse = { message: string; stats: Record<string, number> }
@@ -171,6 +227,36 @@ export function autoLinkMpAccount(accountId: string) {
   return request<SyncStatsResponse>(`/marketplaces/accounts/${accountId}/auto-link`, { method: 'POST' })
 }
 
+export function syncMpAccountWarehouses(accountId: string) {
+  return request<SyncStatsResponse>(`/marketplaces/accounts/${accountId}/sync-warehouses`, { method: 'POST' })
+}
+
+export function getMpWarehouses(accountId: string, signal?: AbortSignal) {
+  return request<MpWarehousesResponse>(`/marketplaces/accounts/${accountId}/warehouses`, { signal })
+}
+
+export function pushMpAccountStocks(accountId: string, params: { full?: boolean } = {}) {
+  const sp = new URLSearchParams()
+  if (params.full) sp.set('full', 'true')
+  const q = sp.toString()
+  return request<SyncStatsResponse>(
+    `/marketplaces/accounts/${accountId}/push-stocks${q ? `?${q}` : ''}`,
+    { method: 'POST' },
+  )
+}
+
+export function getMpStockReport(params: MpStockReportParams, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.only_diff) sp.set('only_diff', 'true')
+  if (params.search) sp.set('search', params.search)
+  if (params.with_marketplace === false) sp.set('with_marketplace', 'false')
+  const q = sp.toString()
+  return request<MpStockReportResponse>(
+    `/marketplaces/accounts/${params.account_id}/stocks${q ? `?${q}` : ''}`,
+    { signal },
+  )
+}
+
 export function getMpOrders(params: MpOrderListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
   if (params.page) sp.set('page', String(params.page))
@@ -237,6 +323,16 @@ export const MP_ORDER_STATUS_LABELS: Record<MpOrderStatus, string> = {
 export const MP_ACCOUNT_STATUS_LABELS: Record<MpAccountStatus, string> = {
   active: 'Активно',
   paused: 'Пауза',
+}
+
+export const MP_STOCK_SKIP_LABELS: Record<MpStockSkipReason, string> = {
+  unlinked: 'Нет связки с товаром',
+  no_barcode: 'Нет штрих-кода',
+  duplicate_sku: 'ШК в нескольких карточках',
+}
+
+export const MP_STOCK_NOTE_LABELS: Record<MpStockNote, string> = {
+  shared_variant: 'Общий остаток с другой карточкой',
 }
 
 export function mpOrderStatusTone(status: MpOrderStatus): BadgeTone {

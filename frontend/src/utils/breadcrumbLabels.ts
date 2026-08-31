@@ -63,6 +63,7 @@ const ROUTES: Array<[pattern: string, crumbs: CrumbDef[]]> = [
   ['/marketplaces/orders', [MARKETPLACES, { label: 'FBS-заказы' }]],
   ['/marketplaces/orders/:orderId', [MARKETPLACES, { label: 'FBS-заказы', to: '/marketplaces/orders' }, { label: 'Карточка заказа' }]],
   ['/marketplaces/links', [MARKETPLACES, { label: 'Связка товаров' }]],
+  ['/marketplaces/stocks', [MARKETPLACES, { label: 'Остатки' }]],
   ['/marketplaces/accounts', [MARKETPLACES, { label: 'Подключения' }]],
 
   ['/dictionaries', [{ label: 'Справочники' }]],

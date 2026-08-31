@@ -14,6 +14,8 @@ from config import (
     MP_OZON,
     MP_SYNC_KIND_CATALOG,
     MP_SYNC_KIND_ORDERS,
+    MP_SYNC_KIND_STOCKS,
+    MP_WB,
 )
 from dbconn import get_connection
 from modules.auth.service import get_current_user
@@ -34,18 +36,27 @@ from .schemas import (
     MpOrdersSummaryResponse,
     MpProductItem,
     MpProductsResponse,
+    MpStockReportResponse,
+    MpStockRow,
+    MpWarehouseItem,
+    MpWarehousesResponse,
     SyncStatsResponse,
 )
 from .service import (
+    MpStockNotConfigured,
     auto_link_by_barcode,
     check_account,
     link_mp_product,
     list_mp_products,
     list_orders,
+    list_warehouses,
     order_detail,
     orders_summary,
+    push_account_stocks,
+    stock_report,
     sync_account_catalog,
     sync_account_orders,
+    sync_account_warehouses,
     unlink_mp_product,
     write_sync_log,
 )
@@ -79,7 +90,7 @@ def _load_account(conn, account_id: str):
     return row
 
 
-def _account_item(row, client_name: str | None) -> MpAccountItem:
+def _account_item(row, client_name: str | None, warehouse_name: str | None = None) -> MpAccountItem:
     return MpAccountItem(
         id=str(row["id"]),
         client_id=str(row["client_id"]),
@@ -91,6 +102,11 @@ def _account_item(row, client_name: str | None) -> MpAccountItem:
         status=str(row["status"]),
         last_sync_at=row["last_sync_at"],
         last_sync_error=row["last_sync_error"],
+        stock_sync_enabled=bool(row["stock_sync_enabled"]),
+        stock_warehouse_id=row["stock_warehouse_id"],
+        stock_warehouse_name=warehouse_name,
+        last_stock_push_at=row["last_stock_push_at"],
+        last_stock_push_error=row["last_stock_push_error"],
         created_at=str(row["created_at"]),
     )
 
@@ -103,11 +119,14 @@ def list_accounts(user=Depends(_get_mp_manager)):
     _ = user
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT a.*, c.name AS client_name FROM mp_accounts a "
+            "SELECT a.*, c.name AS client_name, w.name AS warehouse_name FROM mp_accounts a "
             "LEFT JOIN clients c ON c.id = a.client_id "
+            "LEFT JOIN mp_warehouses w ON w.account_id = a.id AND w.external_id = a.stock_warehouse_id "
             "WHERE COALESCE(a.is_deleted, 0) = 0 ORDER BY a.created_at ASC",
         ).fetchall()
-    return MpAccountsResponse(items=[_account_item(r, r["client_name"]) for r in rows])
+    return MpAccountsResponse(
+        items=[_account_item(r, r["client_name"], r["warehouse_name"]) for r in rows]
+    )
 
 
 @router.post("/marketplaces/accounts", response_model=MessageResponse)
@@ -166,6 +185,31 @@ def create_account(payload: MpAccountCreate, user=Depends(_get_mp_manager)):
     return MessageResponse(message=account["id"])
 
 
+def _validate_stock_settings(conn, row, payload: MpAccountUpdate) -> None:
+    """Выгрузка остатков пока только для WB и только на существующий склад продавца."""
+    if str(row["marketplace"]) != MP_WB:
+        raise HTTPException(
+            status_code=400, detail="Выгрузка остатков поддержана только для Wildberries",
+        )
+    warehouse_id = (
+        payload.stock_warehouse_id.strip()
+        if payload.stock_warehouse_id is not None
+        else str(row["stock_warehouse_id"] or "")
+    )
+    if payload.stock_sync_enabled and not warehouse_id:
+        raise HTTPException(status_code=400, detail="Выберите склад маркетплейса")
+    if warehouse_id:
+        exists = conn.execute(
+            "SELECT id FROM mp_warehouses WHERE account_id = ? AND external_id = ?",
+            (str(row["id"]), warehouse_id),
+        ).fetchone()
+        if not exists:
+            raise HTTPException(
+                status_code=400,
+                detail="Склад не найден — обновите список складов маркетплейса",
+            )
+
+
 @router.patch("/marketplaces/accounts/{account_id}", response_model=MessageResponse)
 def update_account(account_id: str, payload: MpAccountUpdate, user=Depends(_get_mp_manager)):
     _ = user
@@ -188,10 +232,18 @@ def update_account(account_id: str, payload: MpAccountUpdate, user=Depends(_get_
     if payload.ozon_client_id is not None and payload.ozon_client_id.strip():
         sets.append("ozon_client_id = ?")
         params.append(payload.ozon_client_id.strip())
+    if payload.stock_warehouse_id is not None:
+        sets.append("stock_warehouse_id = ?")
+        params.append(payload.stock_warehouse_id.strip() or None)
+    if payload.stock_sync_enabled is not None:
+        sets.append("stock_sync_enabled = ?")
+        params.append(1 if payload.stock_sync_enabled else 0)
     if not sets:
         raise HTTPException(status_code=400, detail="Нет изменений")
     with get_connection() as conn:
-        _load_account(conn, account_id)
+        row = _load_account(conn, account_id)
+        if payload.stock_warehouse_id is not None or payload.stock_sync_enabled:
+            _validate_stock_settings(conn, row, payload)
         conn.execute(
             f"UPDATE mp_accounts SET {', '.join(sets)} WHERE id = ?",
             [*params, account_id],
@@ -264,6 +316,84 @@ def auto_link_endpoint(account_id: str, user=Depends(_get_mp_manager)):
         linked = auto_link_by_barcode(conn, row)
         conn.commit()
     return SyncStatsResponse(message="ok", stats={"auto_linked": linked})
+
+
+# ── Остатки: склады МП, выгрузка, сверка ──────────────────────────────────────
+
+@router.post("/marketplaces/accounts/{account_id}/sync-warehouses", response_model=SyncStatsResponse)
+def sync_warehouses_endpoint(account_id: str, user=Depends(_get_mp_manager)):
+    """Обновить справочник складов продавца на стороне МП."""
+    _ = user
+    with get_connection() as conn:
+        row = _load_account(conn, account_id)
+        try:
+            stats = sync_account_warehouses(conn, row)
+        except MpStockNotConfigured as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MpApiError as exc:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail=f"Не удалось получить склады: {exc}") from exc
+        conn.commit()
+    return SyncStatsResponse(message="ok", stats=stats)
+
+
+@router.get("/marketplaces/accounts/{account_id}/warehouses", response_model=MpWarehousesResponse)
+def list_warehouses_endpoint(account_id: str, user=Depends(_get_mp_manager)):
+    _ = user
+    with get_connection() as conn:
+        _load_account(conn, account_id)
+        items = list_warehouses(conn, account_id)
+    return MpWarehousesResponse(items=[MpWarehouseItem(**item) for item in items])
+
+
+@router.post("/marketplaces/accounts/{account_id}/push-stocks", response_model=SyncStatsResponse)
+def push_stocks_endpoint(
+    account_id: str,
+    user=Depends(_get_mp_manager),
+    full: bool = Query(False, description="Выгрузить весь каталог, а не только изменения"),
+):
+    """Выгрузить остатки в МП вручную — не дожидаясь фонового цикла."""
+    _ = user
+    with get_connection() as conn:
+        row = _load_account(conn, account_id)
+        try:
+            stats = push_account_stocks(conn, row, full=full)
+        except MpStockNotConfigured as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except MpApiError as exc:
+            conn.rollback()
+            conn.execute(
+                "UPDATE mp_accounts SET last_stock_push_error = ? WHERE id = ?",
+                (str(exc)[:500], account_id),
+            )
+            write_sync_log(conn, account_id, MP_SYNC_KIND_STOCKS, ok=False, error=str(exc)[:500])
+            conn.commit()
+            raise HTTPException(status_code=400, detail=f"Выгрузка не удалась: {exc}") from exc
+        conn.commit()
+    return SyncStatsResponse(message="ok", stats=stats)
+
+
+@router.get("/marketplaces/accounts/{account_id}/stocks", response_model=MpStockReportResponse)
+def stock_report_endpoint(
+    account_id: str,
+    user=Depends(_get_mp_manager),
+    only_diff: bool = Query(False),
+    search: str | None = Query(None),
+    with_marketplace: bool = Query(True, description="Запросить фактические остатки у МП"),
+):
+    """Сверка «наш расчёт ↔ выгружено ↔ факт МП» по карточкам кабинета."""
+    _ = user
+    with get_connection() as conn:
+        row = _load_account(conn, account_id)
+        data = stock_report(
+            conn, row, only_diff=only_diff, search=search, with_marketplace=with_marketplace,
+        )
+    return MpStockReportResponse(
+        items=[MpStockRow(**item) for item in data["items"]],
+        total=data["total"],
+        marketplace_error=data["marketplace_error"],
+        checked_at=data["checked_at"],
+    )
 
 
 # ── Заказы (менеджерский состав) ──────────────────────────────────────────────

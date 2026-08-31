@@ -808,6 +808,20 @@ MP_LINK_SOURCE_MANUAL = "manual"
 MP_SYNC_KIND_ORDERS = "orders"
 MP_SYNC_KIND_CATALOG = "catalog"
 MP_SYNC_KIND_CHECK = "check"
+MP_SYNC_KIND_WAREHOUSES = "warehouses"
+MP_SYNC_KIND_STOCKS = "stocks"
+
+# Выгрузка остатков в МП (пока только WB): доступное к продаже = нетто «Хранение/Годный»
+# минус спрос клиентских отгрузок, ещё не покрытый физически вынесенным товаром, минус
+# незавершённые FBS-заказы. Строка не выгружается вовсе, если карточка МП не связана
+# с вариантом WMS: остаток такой карточки нам неизвестен, и обнулять его нельзя.
+MP_STOCK_SKIP_UNLINKED = "unlinked"
+MP_STOCK_SKIP_NO_BARCODE = "no_barcode"
+MP_STOCK_SKIP_DUPLICATE_SKU = "duplicate_sku"
+# Один вариант WMS раскрыт несколькими карточками МП: физический остаток общий,
+# поэтому в каждую карточку уходит одно и то же число — продажа по одной карточке
+# уменьшит остаток второй только следующей выгрузкой. Помечаем, чтобы было видно.
+MP_STOCK_NOTE_SHARED_VARIANT = "shared_variant"
 
 MP_DEADLINE_SOURCE_API = "api"
 MP_DEADLINE_SOURCE_ESTIMATED = "estimated"
