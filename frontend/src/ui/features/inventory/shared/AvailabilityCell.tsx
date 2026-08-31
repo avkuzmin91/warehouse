@@ -75,11 +75,15 @@ export function AvailabilityCell({ avail, plannedQty, loading, context = 'dispat
   }
 
   const isPack = context === 'pack'
-  // В упаковке главный ориентир — «на хранении» (сырьё, которое уже приехало);
-  // в отгрузке — «свободно» (готовое минус резерв).
-  const primary = isPack ? avail.storage : avail.free
-  const label = isPack ? 'на хранении' : avail.isDefect ? 'брак' : 'свободно'
-  const shortfall = plannedQty - primary
+  // В упаковке `packing` = сколько эта же задача уже передала на стол упаковки: товар
+  // ушёл из storage, но план им покрыт — иначе собственная передача выглядит нехваткой.
+  const moved = isPack ? avail.packing : 0
+  // В упаковке главный ориентир — «на хранении» (сырьё, которое уже приехало) плюс
+  // переданное; в отгрузке — «свободно» (готовое минус резерв).
+  const covered = isPack ? avail.storage + moved : avail.free
+  const primary = isPack && moved > 0 ? moved : isPack ? avail.storage : avail.free
+  const label = isPack ? (moved > 0 ? 'передано' : 'на хранении') : avail.isDefect ? 'брак' : 'свободно'
+  const shortfall = plannedQty - covered
   // Годная отгрузка: нехватку свободного, покрытую «на упаковке», показываем как ожидание
   // упаковки (нейтральный info), а не как проблему — товар пакуется и уйдёт в подготовку сам.
   const waitingPacking = !isPack && !avail.isDefect && shortfall > 0 && shortfall <= avail.packing
@@ -128,14 +132,15 @@ export function AvailabilityCell({ avail, plannedQty, loading, context = 'dispat
           </div>
           {isPack ? (
             <>
-              <Row label="На хранении" value={String(avail.storage)} tone="success" />
+              {moved > 0 && <Row label="Передано на упаковку" value={String(moved)} tone="success" />}
+              <Row label="На хранении" value={String(avail.storage)} tone={moved > 0 ? undefined : 'success'} />
               {avail.inTransit > 0 && <Row label="В пути" value={String(avail.inTransit)} tone="muted" />}
               {over && (
                 <div style={{ marginTop: 7, fontSize: 11, color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'flex-start' }}>
                   <Icon name="clock" size={12} style={{ flexShrink: 0, marginTop: 1 }} />
-                  {avail.inTransit >= plannedQty - avail.storage
-                    ? `Не хватает ${plannedQty - avail.storage} — придут с рейсом`
-                    : `Не хватает ${plannedQty - avail.storage} — дождитесь прихода на склад`}
+                  {avail.inTransit >= shortfall
+                    ? `Не хватает ${shortfall} — придут с рейсом`
+                    : `Не хватает ${shortfall} — дождитесь прихода на склад`}
                 </div>
               )}
             </>
