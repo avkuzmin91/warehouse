@@ -46,11 +46,14 @@ export const OP_TONES: Record<string, string> = {
 
 /**
  * Доступный остаток для плана строки отгрузки (по cargoType): свободный товар
- * «На хранении» нужного качества. Упаковка и «Готов к отгрузке» заняты другими
- * отгрузками и в план не входят. Если строка не нашлась в balances — qty.
+ * «На хранении» нужного качества плюс то, что этот же документ уже передал на стол
+ * упаковки (`available_for_pack`) — иначе собственная передача читается как нехватка.
+ * Упаковка других отгрузок и «Готов к отгрузке» в план не входят. Если строка не
+ * нашлась в balances — qty.
  */
 export function lineAvailable(line: ShipmentLine, balances: BalanceItem[], cargoType: ShipmentCargoType): number {
   const matched = balances.find((b) => balanceKey(b) === balanceKey(line))
   if (!matched) return line.qty
-  return cargoType === 'defect' ? matched.storage_defect : matched.storage_good
+  const onHand = cargoType === 'defect' ? matched.storage_defect : matched.storage_good
+  return onHand + (line.available_for_pack ?? 0)
 }

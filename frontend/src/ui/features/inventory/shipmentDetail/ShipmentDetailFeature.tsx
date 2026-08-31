@@ -319,12 +319,18 @@ export function ShipmentDetailFeature() {
   const availLoading = canDelete && plannable === null
 
   // Доступность под планом строки: «на хранении» (сырьё, уже приехало) + «в пути».
+  // `packing` — сколько ЭТОТ документ уже передал на стол упаковки: такой товар ушёл из
+  // storage, и без него собственная передача читалась бы как нехватка остатка.
   // Остальные поля LineAvailability для контекста упаковки не используются.
   function getLineAvail(line: ShipmentLine): LineAvailability {
     const p = plannableByKey.get(balanceKey(line))
     const storage = p ? (isDefectCargo ? p.storage_defect : p.storage_good) : 0
     const inTransit = p && !isDefectCargo ? p.in_transit : 0
-    return { free: 0, ready: 0, reserved: 0, storage, packing: 0, inTransit, isDefect: isDefectCargo }
+    return {
+      free: 0, ready: 0, reserved: 0, storage,
+      packing: line.available_for_pack ?? 0,
+      inTransit, isDefect: isDefectCargo,
+    }
   }
 
   function getDraft(line: ShipmentLine): LineDraft {
