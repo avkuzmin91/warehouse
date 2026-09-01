@@ -48,11 +48,15 @@ npx cap open android     # открывает Android Studio → Run / Build APK
 Для установки на устройство собрать APK/AAB в Android Studio; для публикации в
 Google Play — подписанный AAB (release keystore).
 
-Нативная сборка обязана знать абсолютный URL backend (прокси `/api` там не работает):
+Нативная сборка обязана знать абсолютный URL backend (прокси `/api` там не работает).
+Прод-адрес зафиксирован в отслеживаемом `mobile/.env.production`.
+
+Сборка под **тестовый контур** — переменной окружения, без правки `.env.production`
+(иначе на тест уедут и будущие прод-сборки):
 
 ```bash
-# mobile/.env.production
-VITE_API_BASE_URL=https://api.ваш-домен
+VITE_API_BASE_URL=https://test.pack-men.ru/api npm run build
+npx cap sync android
 ```
 
 ## Аутентификация
