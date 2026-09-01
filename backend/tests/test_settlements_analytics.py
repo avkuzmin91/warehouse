@@ -13,6 +13,7 @@ if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from dbconn import get_connection
+from modules.timesheet.service import business_today
 from tests.conftest import (  # noqa: F401
     admin_client,
     cleanup_client,
@@ -216,7 +217,10 @@ def test_cancel_does_not_rewrite_closed_period(admin_client, client_id):
     assert june_after["series"] == june_before["series"]
 
     # В окне, куда попадает день аннулирования, обязательство и касса схлопываются.
-    wide = _analytics(admin_client, client_id, date_from="2026-06-01", date_to="2026-08-31")
+    # Границу берём от business_today(): ею же датируется аннулирование, а фиксированная
+    # дата истекает вместе с календарём (окно до 2026-08-31 перестало ловить «сегодня»).
+    wide = _analytics(admin_client, client_id, date_from="2026-06-01",
+                      date_to=business_today().isoformat())
     assert wide["debt_kop"] == 0
     assert wide["cancelled_kop"] == 1_000_000
     assert wide["cancelled_count"] == 1
