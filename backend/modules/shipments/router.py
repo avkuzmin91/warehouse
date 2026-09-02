@@ -1803,13 +1803,16 @@ def add_shipment_box_item(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_putaway),
 ):
-    """Скан товара в короб."""
+    """Скан товара на ТСД: единица упаковывается и ложится в короб."""
     uid = str(user["id"])
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_item")
         if not proceed:
             return stored
-        box = add_box_item(conn, doc_id, box_id, barcode=body.barcode, qty=body.qty, user_id=uid)
+        box = add_box_item(
+            conn, doc_id, box_id,
+            barcode=body.barcode, qty=body.qty, quality=body.quality, user_id=uid,
+        )
         finish_idempotent(conn, x_request_id, box)
         conn.commit()
     return box
@@ -1823,7 +1826,7 @@ def undo_shipment_box_item(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(_get_putaway),
 ):
-    """Изъятие из короба: товар возвращается в упакованное на столе."""
+    """Изъятие из короба: отмена записей упаковки, товар возвращается на стол."""
     uid = str(user["id"])
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_item_undo")

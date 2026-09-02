@@ -8,12 +8,10 @@ import {
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
   type ShipmentDetail,
-  type ShipmentLine,
 } from '../api/shipmentsApi'
 import { getLocationByCode } from '../api/locationsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
-import { PackLineSheet } from '../components/PackLineSheet'
 import { PullToRefresh } from '../components/PullToRefresh'
 import { ConfirmAction } from '../components/ConfirmAction'
 import { scanSource } from '../scan/ScanSource'
@@ -26,12 +24,12 @@ const BOX_TONE: Record<ShipmentBox['status'], string> = {
   placed: 'success',
 }
 
-/** Задача «Упаковка с ТСД»: два шага на одном экране.
+/** Задача «Упаковка с ТСД»: упаковка идёт в ходе раскладки по коробам.
  *
- * 1. Упаковка — начальник смены вносит годный/брак (как в обычной задаче упаковки:
- *    отсюда объём и заработок).
- * 2. Короба — упакованное сканируется в короб, короб закрывается и уезжает в ячейку.
- * Задача закрывается, когда всё упакованное разложено по коробам, а короба — по ячейкам.
+ * Кладовщик берёт короб сканом этикетки и пикает в него товар поштучно — каждый
+ * скан и есть запись упаковки (объём, дата, заработок). Заполненный короб
+ * закрывается и ставится в ячейку сканом её QR. Задача закрывается, когда все
+ * короба разложены по ячейкам.
  */
 export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const { back, openPutawayBox } = useNav()
@@ -39,7 +37,6 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [packLine, setPackLine] = useState<ShipmentLine | null>(null)
   const [confirmFinish, setConfirmFinish] = useState(false)
   const [defectZoneId, setDefectZoneId] = useState<string | null>(null)
   const [defectZoneName, setDefectZoneName] = useState<string | null>(null)
@@ -71,14 +68,12 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const lines = doc?.lines ?? []
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
   const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
-  // Упаковано и ещё не разложено по коробам — это и есть очередь на сборку коробов.
-  const toBoxTotal = lines.reduce((s, l) => s + l.packed_pending_good, 0)
+  const packedTotal = lines.reduce((s, l) => s + l.packed_good, 0)
   const boxedTotal = lines.reduce((s, l) => s + l.boxed_qty, 0)
   const placedTotal = lines.reduce((s, l) => s + l.placed_qty, 0)
   const defectTotal = lines.reduce((s, l) => s + l.packed_pending_defect, 0)
   const pendingBoxes = boxes.filter((b) => b.status !== 'placed')
   const onPacking = doc?.status === 'on_packing'
-  const canFinish = onPacking && pendingBoxes.length === 0 && toBoxTotal === 0
 
   async function onTakeBox() {
     if (busy) return
@@ -150,16 +145,16 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                 <span className="v">{placedTotal} из {planTotal}</span>
               </div>
               <div className="kv">
-                <span className="k">На столе (не упаковано)</span>
-                <span className="v">{poolTotal}</span>
+                <span className="k">Упаковано (скан в короб)</span>
+                <span className="v">{packedTotal}</span>
               </div>
               <div className="kv">
-                <span className="k">Упаковано, ждёт короб</span>
-                <span className="v">{toBoxTotal}</span>
-              </div>
-              <div className="kv">
-                <span className="k">В коробах</span>
+                <span className="k">В коробах на столе</span>
                 <span className="v">{boxedTotal}</span>
+              </div>
+              <div className="kv">
+                <span className="k">Осталось на столе</span>
+                <span className="v">{poolTotal}</span>
               </div>
               {defectTotal > 0 && (
                 <div className="kv">
@@ -170,33 +165,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
             </div>
 
             <div className="sec">
-              1. Упаковка — годный / брак
-              <span className="sec-count">{lines.length}</span>
-            </div>
-            {lines.map((l) => (
-              <div key={l.id} className="line">
-                <div className="line-name">{variantTitle(l.product_name, [l.color_name, l.size_name])}</div>
-                <div className="line-sub mono">{l.product_sku}</div>
-                <div className="line-sub">
-                  План {l.qty} · упаковано <b style={{ color: 'var(--c-success)' }}>{l.packed_good}</b>
-                  {l.packed_defect > 0 && <> · брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_defect}</b></>}
-                </div>
-                <div className="line-sub">
-                  В коробах {l.boxed_qty} · размещено {l.placed_qty}
-                  {l.packed_pending_good > 0 && (
-                    <span style={{ color: 'var(--c-warning)' }}> · ждёт короб {l.packed_pending_good}</span>
-                  )}
-                </div>
-                {onPacking && (
-                  <button className="btn sm" style={{ width: '100%', marginTop: 4 }} onClick={() => setPackLine(l)}>
-                    <Icon name="edit" size={15} /> Внести упаковку
-                  </button>
-                )}
-              </div>
-            ))}
-
-            <div className="sec">
-              2. Короба — скан товара и ячейки
+              Короба
               <span className="sec-count">{boxes.length}</span>
             </div>
             {onPacking && (
@@ -207,8 +176,9 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
             {boxes.length === 0 ? (
               <div className="line">
                 <div className="line-sub">
-                  Наклейте на короб напечатанную этикетку и отсканируйте её — откроется короб,
-                  в него сканируется упакованный товар, затем короб закрывается и ставится в ячейку.
+                  Наклейте на короб напечатанную этикетку и отсканируйте её. Дальше пикайте товар
+                  в короб — каждый скан вносит упаковку. Заполнили — закройте короб и отсканируйте
+                  ячейку, куда его поставили.
                 </div>
               </div>
             ) : (
@@ -230,6 +200,24 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
               ))
             )}
 
+            <div className="sec">
+              Состав задания
+              <span className="sec-count">{lines.length}</span>
+            </div>
+            {lines.map((l) => (
+              <div key={l.id} className="line">
+                <div className="line-name">{variantTitle(l.product_name, [l.color_name, l.size_name])}</div>
+                <div className="line-sub mono">{l.product_sku}</div>
+                <div className="line-sub">
+                  План {l.qty} · упаковано <b style={{ color: 'var(--c-success)' }}>{l.packed_good}</b>
+                  {l.packed_defect > 0 && <> · брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_defect}</b></>}
+                </div>
+                <div className="line-sub">
+                  В коробах {l.boxed_qty} · размещено {l.placed_qty} · на столе {l.available_for_pack}
+                </div>
+              </div>
+            ))}
+
             <div className="actionbar">
               {error && (
                 <div className="alert">
@@ -243,20 +231,19 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   {defectZoneName ? `Ячейка брака: ${defectZoneName}` : `Ячейка для брака (${defectTotal} шт.)`}
                 </button>
               )}
-              {onPacking && toBoxTotal > 0 && (
-                <div className="line-sub" style={{ color: 'var(--c-warning)', textAlign: 'center' }}>
-                  Упаковано и не в коробах: {toBoxTotal} шт
-                </div>
-              )}
               {onPacking && pendingBoxes.length > 0 && (
                 <div className="line-sub" style={{ color: 'var(--c-warning)', textAlign: 'center' }}>
                   Не размещено коробов: {pendingBoxes.length}
                 </div>
               )}
-              {canFinish && (
+              {onPacking && pendingBoxes.length === 0 && (
                 <ConfirmAction
                   label={<><Icon name="check" size={18} /> Задача выполнена</>}
-                  prompt={`Разложено ${placedTotal} шт. Закрыть задачу?`}
+                  prompt={
+                    poolTotal > 0
+                      ? `Разложено ${placedTotal} шт. На столе ещё ${poolTotal} шт — они вернутся на хранение. Закрыть задачу?`
+                      : `Разложено ${placedTotal} шт. Закрыть задачу?`
+                  }
                   confirmLabel="Закрыть"
                   saving={busy || (defectTotal > 0 && !defectZoneId)}
                   open={confirmFinish}
@@ -269,15 +256,6 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
           </>
         )}
       </PullToRefresh>
-
-      {packLine && (
-        <PackLineSheet
-          docId={shipmentId}
-          line={packLine}
-          onClose={() => setPackLine(null)}
-          onDone={refresh}
-        />
-      )}
     </div>
   )
 }

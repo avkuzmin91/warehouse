@@ -24,7 +24,6 @@ from tests.conftest import cleanup_client, make_client_id, seed_storage_good
 
 _ADMIN = {"id": "t-admin", "email": "a@t.com", "role": "admin", "created_at": "2020-01-01T00:00:00", "client_id": None}
 _WAREHOUSE = {"id": "t-wh", "email": "w@t.com", "role": "warehouse_manager", "created_at": "2020-01-01T00:00:00", "client_id": None}
-_SHIFT = {"id": "t-shift", "email": "s@t.com", "role": "shift_supervisor", "created_at": "2020-01-01T00:00:00", "client_id": None}
 
 
 @pytest.fixture
@@ -137,17 +136,6 @@ def _create_task(api, client_id: str, product: dict, qty: int = 5) -> tuple[str,
     return doc_id, line["id"]
 
 
-def _pack(api, doc_id: str, line_id: str, good: int, defect: int = 0) -> None:
-    """Шаг начальника смены: внести упаковку (годный/брак) — как в обычной задаче."""
-    _as(_SHIFT)
-    r = api.post(
-        f"/shipments/{doc_id}/lines/{line_id}/pack",
-        json={"good_delta": good, "defect_delta": defect, "packed_date": "2026-09-02"},
-    )
-    assert r.status_code == 200, r.text
-    _as(_WAREHOUSE)
-
-
 def _new_box_code(api) -> str:
     _as(_ADMIN)
     r = api.post("/containers", json={"count": 1})
@@ -167,11 +155,8 @@ def _bucket(client_id: str, product_id: str, op: str, quality: str = "good") -> 
 
 
 def test_full_putaway_flow(api, client_id, product, zones):
-    doc_id, line_id = _create_task(api, client_id, product, qty=5)
+    doc_id, _line_id = _create_task(api, client_id, product, qty=5)
     code = _new_box_code(api)
-    # Начальник смены вносит упаковку — только после этого товар можно класть в короб.
-    _pack(api, doc_id, line_id, good=3)
-    assert _bucket(client_id, product["product_id"], "packed") == 3
 
     _as(_WAREHOUSE)
     box = api.post(f"/shipments/{doc_id}/boxes", json={"code": code})
@@ -187,11 +172,11 @@ def test_full_putaway_flow(api, client_id, product, zones):
     assert put.json()["items_qty"] == 3
     assert put.json()["contents"][0]["qty"] == 3
 
-    # Товар в коробе на столе: упакован, но к отгрузке ещё не доступен.
+    # Товар в коробе на столе: упакован сканом, но к отгрузке ещё не доступен.
     assert _bucket(client_id, product["product_id"], "boxed") == 3
     assert _bucket(client_id, product["product_id"], "packed") == 0
     assert _bucket(client_id, product["product_id"], "ready") == 0
-    # Факт упаковки (заработок начальника смены) при переезде в короб не теряется.
+    # Скан = запись упаковки: объём и заработок считаются по ней.
     assert api.get(f"/shipments/{doc_id}").json()["lines"][0]["packed_good"] == 3
 
     closed = api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
@@ -228,9 +213,9 @@ def test_full_putaway_flow(api, client_id, product, zones):
 
 
 def test_finish_blocked_until_boxes_placed(api, client_id, product, zones):
-    doc_id, line_id = _create_task(api, client_id, product, qty=4)
+    doc_id, _line_id = _create_task(api, client_id, product, qty=4)
     code = _new_box_code(api)
-    _pack(api, doc_id, line_id, good=2)
+    _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
 
@@ -246,66 +231,76 @@ def test_finish_blocked_until_boxes_placed(api, client_id, product, zones):
     assert api.post(f"/shipments/{doc_id}/finish-putaway", json={}).status_code == 200
 
 
-def test_box_takes_only_packed_goods(api, client_id, product, zones):
-    """В короб кладут только упакованное: без шага упаковки скан отклоняется."""
-    doc_id, line_id = _create_task(api, client_id, product, qty=3)
+def test_scan_limited_by_what_is_on_the_table(api, client_id, product, zones):
+    """Жёсткий блок: в короб нельзя пропикать больше, чем передано на стол."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     code = _new_box_code(api)
     _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
 
-    not_packed = api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 1})
-    assert not_packed.status_code == 400, not_packed.text
-    assert "упаков" in not_packed.json()["detail"].lower()
-
-    _pack(api, doc_id, line_id, good=2)
     over = api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 3})
     assert over.status_code == 400, over.text
-    ok = api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
-    assert ok.status_code == 200, ok.text
 
 
-def test_finish_blocked_while_packed_not_boxed(api, client_id, product, zones):
-    """Закрыть задачу нельзя, пока упакованное не разложено по коробам."""
-    doc_id, line_id = _create_task(api, client_id, product, qty=3)
+def test_defect_scan_stays_out_of_box(api, client_id, product, zones):
+    """Брак пикается тем же сканом, но в короб не кладётся и уезжает на хранение."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=3)
     code = _new_box_code(api)
-    _pack(api, doc_id, line_id, good=3)
+    _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+
+    good = api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    assert good.status_code == 200, good.text
+    defect = api.post(
+        f"/shipments/{doc_id}/boxes/{box_id}/items",
+        json={"barcode": product["barcode"], "qty": 1, "quality": "defect"},
+    )
+    assert defect.status_code == 200, defect.text
+    assert defect.json()["items_qty"] == 2  # брак в коробе не лежит
+
+    line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
+    assert line["packed_good"] == 2 and line["packed_defect"] == 1
+
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/place", json={"zone_id": zones["cell_id"]})
 
-    blocked = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
-    assert blocked.status_code == 400
-    assert "не разложено по коробам" in blocked.json()["detail"]
+    no_zone = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
+    assert no_zone.status_code == 400 and "брак" in no_zone.json()["detail"].lower()
+
+    fin = api.post(f"/shipments/{doc_id}/finish-putaway", json={"defect_zone_id": zones["cell_id"]})
+    assert fin.status_code == 200, fin.text
+    assert _bucket(client_id, product["product_id"], "storage", "defect") == 1
 
 
 def test_unknown_barcode_and_foreign_product_rejected(api, client_id, product, zones):
-    doc_id, line_id = _create_task(api, client_id, product, qty=2)
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     code = _new_box_code(api)
-    _pack(api, doc_id, line_id, good=2)
+    _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
 
     unknown = api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": "0000000000000", "qty": 1})
     assert unknown.status_code == 404, unknown.text
 
 
-def test_undo_box_item_returns_to_packed(api, client_id, product, zones):
-    """Изъятие из короба возвращает товар в упакованное, факт упаковки не трогает."""
+def test_undo_box_item_reverses_packing(api, client_id, product, zones):
+    """Изъятие из короба сторнирует запись упаковки: товар возвращается на стол."""
     doc_id, line_id = _create_task(api, client_id, product, qty=3)
     code = _new_box_code(api)
-    _pack(api, doc_id, line_id, good=3)
+    _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 1})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 1})
 
     undo = api.post(
         f"/shipments/{doc_id}/boxes/{box_id}/items/undo",
-        json={"line_id": line_id, "qty": 2},
+        json={"line_id": line_id, "qty": 1},
     )
     assert undo.status_code == 200, undo.text
-    assert undo.json()["items_qty"] == 0
-    assert _bucket(client_id, product["product_id"], "boxed") == 0
-    assert _bucket(client_id, product["product_id"], "packed") == 3
-    assert api.get(f"/shipments/{doc_id}").json()["lines"][0]["packed_good"] == 3
+    assert undo.json()["items_qty"] == 1
+    assert _bucket(client_id, product["product_id"], "boxed") == 1
+    assert _bucket(client_id, product["product_id"], "packing") == 2
+    # Объём упаковки уменьшился вместе с изъятием — заработок за неотсканированное не висит.
+    assert api.get(f"/shipments/{doc_id}").json()["lines"][0]["packed_good"] == 1
 
 
 def test_box_of_another_task_rejected(api, client_id, product, zones):
@@ -323,9 +318,9 @@ def test_box_of_another_task_rejected(api, client_id, product, zones):
 
 def test_manual_move_of_boxed_stock_rejected(api, client_id, product, zones):
     """Товар в размещённом коробе двигается только коробом целиком."""
-    doc_id, line_id = _create_task(api, client_id, product, qty=2)
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     code = _new_box_code(api)
-    _pack(api, doc_id, line_id, good=2)
+    _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
@@ -346,9 +341,9 @@ def test_manual_move_of_boxed_stock_rejected(api, client_id, product, zones):
 
 
 def test_placed_box_moves_between_cells(api, client_id, product, zones):
-    doc_id, line_id = _create_task(api, client_id, product, qty=2)
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     code = _new_box_code(api)
-    _pack(api, doc_id, line_id, good=2)
+    _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")

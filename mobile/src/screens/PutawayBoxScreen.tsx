@@ -21,9 +21,10 @@ import { variantTitle } from '../utils/format'
 
 /** Короб задачи «Упаковка с ТСД»: скан товара внутрь, закрытие и постановка в ячейку.
  *
- * В короб кладут уже УПАКОВАННЫЙ товар — годный/брак вносит начальник смены на
- * экране задачи, здесь только раскладка. Товар опознаётся только по ШК: скан
- * неизвестного кода отклоняется, чтобы в короб не попал не тот товар.
+ * Каждый скан — это и есть запись упаковки (объём, дата, заработок), поэтому
+ * упаковка идёт поштучно в ходе раскладки. Найденный брак пикается в режиме
+ * «Брак»: он фиксируется как брак упаковки и в короб не кладётся. Товар
+ * опознаётся только по ШК — скан неизвестного кода отклоняется.
  */
 export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; boxId: string }) {
   const { back } = useNav()
@@ -31,6 +32,8 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // Режим брака: та же кнопка скана, но единица идёт в брак упаковки мимо короба.
+  const [defect, setDefect] = useState(false)
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -56,7 +59,11 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
     try {
       const code = await scanSource.scan()
       if (!code) return
-      const next = await addShipmentBoxItem(shipmentId, boxId, { barcode: code, qty: 1 }, newRequestId())
+      const next = await addShipmentBoxItem(
+        shipmentId, boxId,
+        { barcode: code, qty: 1, quality: defect ? 'defect' : 'good' },
+        newRequestId(),
+      )
       scanSuccessFeedback()
       setBox(next)
     } catch (err) {
@@ -160,9 +167,19 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
             </div>
 
             {status === 'open' && (
-              <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanItem() }}>
-                <Icon name="qr" size={18} /> Скан товара в короб
-              </button>
+              <>
+                <button
+                  className={defect ? 'btn danger' : 'btn'}
+                  style={{ width: '100%' }}
+                  disabled={busy}
+                  onClick={() => { void onScanItem() }}
+                >
+                  <Icon name="qr" size={18} /> {defect ? 'Скан брака' : 'Скан товара в короб'}
+                </button>
+                <button className="btn ghost" style={{ width: '100%' }} onClick={() => setDefect((v) => !v)}>
+                  {defect ? 'Вернуться к годному' : 'Нашёл брак — пикать в брак'}
+                </button>
+              </>
             )}
 
             <div className="sec">
@@ -172,8 +189,8 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
             {box.contents.length === 0 ? (
               <div className="line">
                 <div className="line-sub">
-                  Короб пуст — отсканируйте штрих-код упакованного товара. В короб кладётся
-                  только то, что начальник смены уже внёс как упаковку.
+                  Короб пуст — пикайте штрих-коды товара. Каждый скан вносит упаковку и кладёт
+                  единицу в этот короб; пикать можно только то, что передано на стол упаковки.
                 </div>
               </div>
             ) : (
@@ -188,7 +205,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                       disabled={busy}
                       onClick={() => { void onRemove(c.line_id, 1) }}
                     >
-                      <Icon name="refresh" size={14} /> Изъять 1 шт.
+                      <Icon name="refresh" size={14} /> Изъять 1 шт. (отменит упаковку)
                     </button>
                   )}
                 </div>

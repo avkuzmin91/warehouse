@@ -48,8 +48,8 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
   const boxes = doc.boxes ?? []
   const pending = boxes.filter((b) => b.status !== 'placed')
   const defectPending = doc.lines.reduce((s, l) => s + l.packed_pending_defect, 0)
-  // Упаковано и не разложено по коробам — очередь на сборку; пока не ноль, задачу не закрыть.
-  const toBox = doc.lines.reduce((s, l) => s + l.packed_pending_good, 0)
+  // Не упакованный остаток на столе: при закрытии задачи он вернётся на хранение.
+  const poolLeft = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
   const placedTotal = doc.lines.reduce((s, l) => s + l.placed_qty, 0)
   const boxedTotal = doc.lines.reduce((s, l) => s + l.boxed_qty, 0)
   const zoneOpts = cellOptions.map((z) => ({ value: z.id, label: z.name }))
@@ -89,7 +89,6 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
       hint={readOnly ? 'товар разложен по ячейкам' : 'сборка и размещение идут на ТСД: скан короба → скан товара → скан ячейки'}
     >
       <div style={{ display: 'flex', gap: 16, padding: '4px 0 10px', fontSize: 13 }}>
-        <span className="t-sub">Упаковано, ждёт короб: <b className="num">{toBox}</b></span>
         <span className="t-sub">В коробах на столе: <b className="num">{boxedTotal}</b></span>
         <span className="t-sub">Разложено по ячейкам: <b className="num">{placedTotal}</b></span>
         {defectPending > 0 && <span style={{ color: 'var(--c-warning)' }}>Брак: <b className="num">{defectPending}</b></span>}
@@ -97,8 +96,9 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
 
       {boxes.length === 0 ? (
         <div className="t-sub" style={{ padding: '10px 0' }}>
-          Короба ещё не собраны. На ТСД: скан этикетки короба → скан упакованного товара →
-          закрыть короб → скан ячейки. Этикетки печатаются заранее в разделе «Короба».
+          Короба ещё не собраны. На ТСД: скан этикетки короба → скан товара (каждый скан
+          вносит упаковку) → закрыть короб → скан ячейки. Этикетки печатаются заранее
+          в разделе «Короба».
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -182,24 +182,20 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
           )}
           <button
             className="btn primary"
-            disabled={busy != null || pending.length > 0 || toBox > 0}
-            title={
-              toBox > 0 ? 'Сначала разложите упакованный товар по коробам'
-              : pending.length > 0 ? 'Сначала закройте и разместите все короба'
-              : undefined
-            }
+            disabled={busy != null || pending.length > 0}
+            title={pending.length > 0 ? 'Сначала закройте и разместите все короба' : undefined}
             onClick={() => { void handleFinish() }}
           >
             <Icon name="check" size={14} />Задача выполнена
           </button>
-          {toBox > 0 && (
-            <span className="t-sub" style={{ fontSize: 12 }}>
-              Упаковано и не в коробах: {toBox} шт
-            </span>
-          )}
           {pending.length > 0 && (
             <span className="t-sub" style={{ fontSize: 12 }}>
               Не размещено коробов: {pending.length}
+            </span>
+          )}
+          {pending.length === 0 && poolLeft > 0 && (
+            <span className="t-sub" style={{ fontSize: 12 }}>
+              На столе ещё {poolLeft} шт — при закрытии вернутся на хранение
             </span>
           )}
         </div>

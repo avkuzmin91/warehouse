@@ -519,11 +519,11 @@ export function takeShipmentBox(docId: string, code: string, requestId: string) 
   })
 }
 
-/** Скан товара в короб (только по ШК — ручного выбора товара нет). */
+/** Скан товара на ТСД: единица упаковывается и ложится в короб (только по ШК). */
 export function addShipmentBoxItem(
   docId: string,
   boxId: string,
-  payload: { barcode: string; qty?: number },
+  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
   requestId: string,
 ) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {

@@ -771,8 +771,10 @@ export function takeShipmentBox(docId: string, code: string) {
   })
 }
 
-/** Скан товара в короб. Товар опознаётся только по ШК. */
-export function addShipmentBoxItem(docId: string, boxId: string, payload: { barcode: string; qty?: number }) {
+/** Скан товара на ТСД: единица упаковывается и ложится в короб (только по ШК). */
+export function addShipmentBoxItem(
+  docId: string, boxId: string, payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
+) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {
     method: 'POST',
     body: JSON.stringify(payload),

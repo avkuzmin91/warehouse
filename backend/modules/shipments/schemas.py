@@ -428,14 +428,15 @@ class ShipmentBoxTakePayload(BaseModel):
 
 
 class ShipmentBoxItemPayload(BaseModel):
-    """Скан товара в короб. Товар опознаётся только по ШК (ручного выбора нет).
+    """Скан товара на ТСД: единица упаковывается и ложится в короб.
 
-    В короб кладут уже упакованный годный: брак фиксируется на шаге упаковки
-    начальником смены и в короб не попадает.
+    Товар опознаётся только по ШК (ручного выбора нет). quality='defect' —
+    найденный брак: он фиксируется как брак упаковки и в короб не кладётся.
     """
 
     barcode: str = Field(min_length=1)
     qty:     int = Field(ge=1, default=1)
+    quality: str = "good"
 
 
 class ShipmentBoxItemUndoPayload(BaseModel):

@@ -32,10 +32,10 @@ export function PutawayView({
 }: Props) {
   const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
   const poolTotal = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
+  const packedTotal = doc.lines.reduce((s, l) => s + l.packed_good, 0)
   const boxedTotal = doc.lines.reduce((s, l) => s + l.boxed_qty, 0)
   const placedTotal = doc.lines.reduce((s, l) => s + l.placed_qty, 0)
   const defectTotal = doc.lines.reduce((s, l) => s + l.packed_defect, 0)
-  const toBoxTotal = doc.lines.reduce((s, l) => s + l.packed_pending_good, 0)
   const boxesPlaced = (doc.boxes ?? []).filter((b) => b.status === 'placed').length
 
   return (
@@ -46,18 +46,15 @@ export function PutawayView({
 
         <CompositionPhase {...composition} />
 
-        {/* Упаковку вносит начальник смены — так же, как в задаче под отгрузку;
-            в короб потом кладут уже упакованное. */}
+        {/* Упаковка вносится не здесь: в этой задаче каждая единица пикается на ТСД
+            прямо в короб — скан и есть запись упаковки. Здесь только подвоз на стол. */}
         <PackingPhase
           {...packing}
           phase={isPacking
             ? { state: 'active', role: 'warehouse', title: 'Передача на стол', mode: 'transfer',
                 hint: '«Передать» — выбор мест-источников, перемещение сразу' }
-            : isPlaced
-              ? { state: 'done', role: 'shift_lead', title: 'Упаковка', mode: 'packing',
-                  hint: 'товар упакован и разложен по коробам' }
-              : { state: 'active', role: 'shift_lead', title: 'Упаковка', mode: 'packing',
-                  hint: '«Внести упаковку» — годный и брак; упакованное дальше сканируется в короба' }}
+            : { state: 'done', role: 'warehouse', title: 'Передача на стол', mode: 'transfer',
+                hint: 'товар на столе — упаковывается сканом в короба на ТСД' }}
         />
 
         {isPacking ? (
@@ -92,8 +89,8 @@ export function PutawayView({
           <Panel icon="archive" title="Итог размещения">
             <div style={{ padding: '0 2px' }}>
               <ReadRow label="План" mono>{planTotal} шт</ReadRow>
-              <ReadRow label="На столе (не упаковано)" mono>{poolTotal} шт</ReadRow>
-              <ReadRow label="Упаковано, ждёт короб" mono>{toBoxTotal} шт</ReadRow>
+              <ReadRow label="Осталось на столе" mono>{poolTotal} шт</ReadRow>
+              <ReadRow label="Упаковано сканом" mono>{packedTotal} шт</ReadRow>
               <ReadRow label="В коробах" mono>{boxedTotal} шт</ReadRow>
               <ReadRow label="Брак" mono><span style={{ color: 'var(--c-danger)' }}>{defectTotal}</span></ReadRow>
               <ReadRow label="Коробов в ячейках" mono>{boxesPlaced}</ReadRow>
