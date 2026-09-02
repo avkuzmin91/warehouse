@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   CONTAINER_STATUS_LABELS,
@@ -11,18 +11,27 @@ import type { ContainerItem, ContainerLabel, ContainerStatus } from '../../../ap
 import { useApi } from '../../../hooks/useApi'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
 import { ListPage } from '../../layouts/ListPage'
-import { FiltersBar } from '../../data/FiltersBar'
+import { FiltersBar, FilterSelect } from '../../data/FiltersBar'
 import { Pagination } from '../../data/Pagination'
 import { Table, Td } from '../../data/Table'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
 import { Badge } from '../../primitives/Badge'
+import { Checkbox } from '../../primitives/Checkbox'
 import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
 import { fmtDate } from '../../../utils/format'
 
 const PAGE_SIZE = 25
+
+const STATUS_OPTIONS = [
+  { value: '', label: 'Все статусы' },
+  ...(Object.keys(CONTAINER_STATUS_LABELS) as ContainerStatus[]).map((s) => ({
+    value: s,
+    label: CONTAINER_STATUS_LABELS[s],
+  })),
+]
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c))
@@ -78,6 +87,17 @@ export function BoxesFeature() {
   // Список перечитывается после заведения пачки — useApi перезапускается по ключу.
   const [reloadKey, setReloadKey] = useState(0)
 
+  // Debounce поиска: инпут меняется мгновенно, URL и запрос — после паузы.
+  // Sync-эффект подхватывает внешнюю смену URL («Сбросить», «Назад»).
+  const [searchInput, setSearchInput] = useState(search)
+  useEffect(() => { setSearchInput(search) }, [search])
+  useEffect(() => {
+    if (searchInput === search) return
+    const timer = setTimeout(() => setMany({ search: searchInput, page: '' }), 250)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput, search])
+
   const { data, loading, error } = useApi(
     (signal) => getContainers({
       page,
@@ -98,6 +118,14 @@ export function BoxesFeature() {
       return next
     })
   }, [])
+
+  const allSelected = items.length > 0 && items.every((c) => selected.has(c.id))
+  const toggleAll = useCallback(() => {
+    setSelected((prev) => (items.every((c) => prev.has(c.id)) ? new Set() : new Set(items.map((c) => c.id))))
+  }, [items])
+
+  // Выбор живёт в пределах показанной страницы: смена страницы или фильтра его сбрасывает.
+  useEffect(() => { setSelected(new Set()) }, [page, search, status, reloadKey])
 
   async function handleCreate() {
     const count = Number(batch)
@@ -161,25 +189,42 @@ export function BoxesFeature() {
       }
       filters={
         <FiltersBar>
-          <input
-            className="input sm"
-            placeholder="Номер, ячейка, клиент"
-            value={search}
-            onChange={(e) => setMany({ search: e.target.value, page: '' })}
+          <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+            <Icon name="search" size={13} style={{ position: 'absolute', left: 9, color: 'var(--c-text-subtle)', pointerEvents: 'none' }} />
+            <input
+              className="input sm"
+              style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
+              placeholder="Номер, ячейка, клиент…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+            {searchInput && (
+              <button
+                style={{ position: 'absolute', right: 6, background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--c-text-subtle)' }}
+                onClick={() => { setSearchInput(''); setMany({ search: '', page: '' }) }}
+              ><Icon name="x" size={12} /></button>
+            )}
+          </div>
+          <FilterSelect
+            label="Статус"
+            value={status}
+            options={STATUS_OPTIONS}
+            onChange={(v) => setMany({ status: v, page: '' })}
           />
-          <select className="input sm" value={status} onChange={(e) => setMany({ status: e.target.value, page: '' })}>
-            <option value="">Все статусы</option>
-            {(Object.keys(CONTAINER_STATUS_LABELS) as ContainerStatus[]).map((s) => (
-              <option key={s} value={s}>{CONTAINER_STATUS_LABELS[s]}</option>
-            ))}
-          </select>
+          {(search || status) && (
+            <button className="btn ghost sm" onClick={() => { setSearchInput(''); setMany({ search: '', status: '', page: '' }) }}>
+              <Icon name="x" size={12} />Сбросить
+            </button>
+          )}
         </FiltersBar>
       }
     >
       <Table>
         <thead>
           <tr>
-            <th style={{ width: 34 }} />
+            <th style={{ width: 34 }}>
+              <Checkbox checked={allSelected} onChange={toggleAll} />
+            </th>
             <th>Короб</th>
             <th>Статус</th>
             <th className="num">Шт.</th>
@@ -200,7 +245,7 @@ export function BoxesFeature() {
           {!loading && !error && items.map((c: ContainerItem) => (
             <tr key={c.id}>
               <Td>
-                <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
+                <Checkbox checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
               </Td>
               <Td><span className="mono">{c.doc_number}</span></Td>
               <Td>

@@ -393,6 +393,7 @@ class ShipmentOpItem(BaseModel):
 
 
 class ShipmentBoxContentLine(BaseModel):
+    line_id:      str | None = None
     product_id:   str
     product_name: str | None = None
     product_sku:  str | None = None
@@ -427,16 +428,21 @@ class ShipmentBoxTakePayload(BaseModel):
 
 
 class ShipmentBoxItemPayload(BaseModel):
-    """Скан товара в короб. Товар опознаётся только по ШК (ручного выбора нет)."""
+    """Скан товара в короб. Товар опознаётся только по ШК (ручного выбора нет).
+
+    В короб кладут уже упакованный годный: брак фиксируется на шаге упаковки
+    начальником смены и в короб не попадает.
+    """
 
     barcode: str = Field(min_length=1)
     qty:     int = Field(ge=1, default=1)
-    # 'good' — в короб; 'defect' — найденный брак, в короб не кладётся.
-    quality: str = "good"
 
 
 class ShipmentBoxItemUndoPayload(BaseModel):
-    pack_entry_id: str = Field(min_length=1)
+    """Изъятие из открытого короба: строка задания и количество."""
+
+    line_id: str = Field(min_length=1)
+    qty:     int = Field(ge=1, default=1)
 
 
 class ShipmentBoxPlacePayload(BaseModel):

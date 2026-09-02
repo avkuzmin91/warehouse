@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
@@ -747,17 +748,15 @@ def _validate_packed_date(value: str) -> str:
 def record_packing(
     connection, doc_id: str, line_id: str,
     good_delta: int, defect_delta: int, packed_date: str, user_id: str,
-    container_id: str | None = None,
 ) -> dict:
     """QC при упаковке: вносит годный и/или брак одной записью с датой упаковки.
 
     Обе дельты неотрицательны (коррекция — через reverse_packing_entry). good+defect
     одного «Записать» получают общий pack_entry_id для группировки/отмены.
 
-    Задача размещения по ячейкам (task_kind=putaway): годный уходит не в `packed`, а
-    в корзину короба `boxed` с привязкой к контейнеру — к отгрузке он станет доступен
-    только после размещения короба в ячейке. Брак в короб не кладётся и остаётся в
-    `packed` (на закрытии задачи уезжает на хранение).
+    Шаг общий для обоих типов задачи: и в упаковке под отгрузку, и в упаковке с ТСД
+    начальник смены вносит упаковку одинаково. Дальше пути расходятся: под отгрузку
+    упакованное раскладывают по местам, в задаче с ТСД — сканируют в короба.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
 
@@ -770,7 +769,7 @@ def record_packing(
     packed_date = _validate_packed_date(packed_date)
 
     doc_row = connection.execute(
-        "SELECT status, client_id, task_kind, repack_active, repack_kind, repack_price_kop "
+        "SELECT status, client_id, repack_active, repack_kind, repack_price_kop "
         "FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
     ).fetchone()
     if not doc_row:
@@ -778,10 +777,6 @@ def record_packing(
     if str(doc_row["status"]) != SHIPMENT_STATUS_ON_PACKING:
         raise HTTPException(status_code=400, detail="Упаковку можно вносить только в статусе «На упаковке»")
 
-    is_putaway = normalize_task_kind(doc_row["task_kind"]) == SHIPMENT_TASK_PUTAWAY
-    if is_putaway and good_delta > 0 and not container_id:
-        raise HTTPException(status_code=400, detail="Отсканируйте короб, в который кладёте товар")
-    good_to_op = INV_OP_BOXED if is_putaway else INV_OP_PACKED
 
     # Задача на переупаковке: новые pack-записи штампуются её видом — free не попадает
     # в деньги производительности, paid тарифицируется клиенту при завершении задачи.
@@ -835,7 +830,7 @@ def record_packing(
         connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
     )
     for kind, delta, to_op in (
-        (INV_Q_GOOD, good_delta, good_to_op),
+        (INV_Q_GOOD, good_delta, INV_OP_PACKED),
         (INV_Q_DEFECT, defect_delta, INV_OP_PACKED),
     ):
         if delta <= 0:
@@ -855,11 +850,7 @@ def record_packing(
                 from_zone_id=src_zone_id, from_zone_name=src_zone_name,
                 to_zone_id=packing_id, to_zone_name=packing_name,
                 qty=take, user_id=user_id, shipment_line_id=line_id,
-                to_container_id=container_id if to_op == INV_OP_BOXED else None,
-                comment=(
-                    f"В короб ({kind_ru}): +{take} шт." if to_op == INV_OP_BOXED
-                    else f"Упаковка ({kind_ru}): +{take} шт."
-                ),
+                comment=f"Упаковка ({kind_ru}): +{take} шт.",
                 packed_date=packed_date, pack_entry_id=pack_entry_id,
                 repack_kind=repack_kind, repack_price_kop=repack_price_kop,
             )
@@ -2337,6 +2328,26 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
 
 # ── Распознавание ШК на файлах строк ──────────────────────────────────────────
 
+_barcode_log = logging.getLogger("wms.shipments.barcode")
+
+# Масштабы рендера PDF (1.0 = 72 dpi). Мелкая этикетка 43×25 мм на 216 dpi даёт
+# около 2 px на модуль — плотный Code128 на грани читаемости, поэтому при пустом
+# результате страница перерисовывается крупнее.
+_PDF_RENDER_SCALES = (3, 6)
+
+
+def _read_barcodes(images, formats) -> list[str]:
+    import zxingcpp
+
+    codes: list[str] = []
+    for img in images:
+        for result in zxingcpp.read_barcodes(img, formats=formats):
+            text = (result.text or "").strip()
+            if text and text not in codes:
+                codes.append(text)
+    return codes
+
+
 def decode_line_file_barcodes(data: bytes, ext: str) -> list[str]:
     """Товарные штрих-коды (EAN/UPC/Code128) с картинки или PDF-этикетки.
 
@@ -2348,37 +2359,36 @@ def decode_line_file_barcodes(data: bytes, ext: str) -> list[str]:
         import io
 
         import zxingcpp
-        from PIL import Image
+        from PIL import Image, ImageOps
 
-        images = []
+        # OR-комбинация, а не список: список принимает только zxing-cpp ≥ 3.0.
+        formats = (
+            zxingcpp.BarcodeFormat.EAN13
+            | zxingcpp.BarcodeFormat.EAN8
+            | zxingcpp.BarcodeFormat.UPCA
+            | zxingcpp.BarcodeFormat.UPCE
+            | zxingcpp.BarcodeFormat.Code128
+        )
+
         if ext == ".pdf":
             import pypdfium2 as pdfium
 
             pdf = pdfium.PdfDocument(data)
             try:
                 # Первые страницы: этикетка — 1 страница, защита от тяжёлых PDF.
-                for i in range(min(len(pdf), 3)):
-                    images.append(pdf[i].render(scale=3).to_pil())
+                pages = [pdf[i] for i in range(min(len(pdf), 3))]
+                for scale in _PDF_RENDER_SCALES:
+                    codes = _read_barcodes([p.render(scale=scale).to_pil() for p in pages], formats)
+                    if codes:
+                        return codes
+                return []
             finally:
                 pdf.close()
-        else:
-            images.append(Image.open(io.BytesIO(data)))
 
-        formats = [
-            zxingcpp.BarcodeFormat.EAN13,
-            zxingcpp.BarcodeFormat.EAN8,
-            zxingcpp.BarcodeFormat.UPCA,
-            zxingcpp.BarcodeFormat.UPCE,
-            zxingcpp.BarcodeFormat.Code128,
-        ]
-        codes: list[str] = []
-        for img in images:
-            for result in zxingcpp.read_barcodes(img, formats=formats):
-                text = (result.text or "").strip()
-                if text and text not in codes:
-                    codes.append(text)
-        return codes
+        # exif_transpose — фото с телефона приходят с ориентацией в EXIF.
+        return _read_barcodes([ImageOps.exif_transpose(Image.open(io.BytesIO(data)))], formats)
     except Exception:
+        _barcode_log.warning("Не удалось распознать ШК на файле (%s)", ext, exc_info=True)
         return []
 
 
@@ -2626,11 +2636,13 @@ def _variant_by_barcode(connection, code: str) -> dict:
     return {"product_id": str(row["product_id"]), "color_id": row["color_id"], "size_id": row["size_id"]}
 
 
-def _line_for_variant(connection, doc_id: str, variant: dict):
+def _line_for_variant(connection, doc_id: str, variant: dict, *, prefer_boxable: bool = False):
     """Строка задания под отсканированный вариант: первая, где план ещё не закрыт.
 
     Один вариант может стоять в задании несколькими строками (разные магазины) —
     добираем ту, где остался незакрытый план, иначе скан упирался бы в первую.
+    prefer_boxable — для скана в короб: сначала строка, где есть упакованное и ещё
+    не разложенное, иначе скан уткнулся бы в строку, которую ещё не упаковали.
     """
     rows = connection.execute(
         """SELECT * FROM shipment_lines
@@ -2643,72 +2655,146 @@ def _line_for_variant(connection, doc_id: str, variant: dict):
     ).fetchall()
     if not rows:
         raise HTTPException(status_code=400, detail="Товара нет в задании")
+    if prefer_boxable:
+        for r in rows:
+            if line_packed_pending(connection, str(r["id"]))["good"] > 0:
+                return r
     for r in rows:
         if line_packed_breakdown(connection, str(r["id"]))["good"] < int(r["qty"] or 0):
             return r
     return rows[0]
 
 
+def _move_line_between_buckets(
+    connection, line, *, client_id, qty: int, from_op: str, to_op: str,
+    from_container_id: str | None, to_container_id: str | None,
+    prefer_zone_id: str | None, fallback_zone: tuple[str | None, str | None],
+    user_id: str, comment: str,
+) -> None:
+    """Перенос годного строки между корзинами по фактическим местам (FIFO). Без commit."""
+    from modules.balances.service import insert_inventory_move
+
+    sources = line_bucket_zone_sources(
+        connection, str(line["id"]), op=from_op, quality=INV_Q_GOOD, prefer_zone_id=prefer_zone_id,
+    )
+    for zone_id, zone_name, take in _consume_zone_sources(sources, qty, fallback=fallback_zone):
+        insert_inventory_move(
+            connection,
+            product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
+            color_id=line["color_id"], color_name=line["color_name"],
+            size_id=line["size_id"], size_name=line["size_name"],
+            client_id=client_id, client_name=None,
+            from_op=from_op, to_op=to_op,
+            from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+            from_zone_id=zone_id, from_zone_name=zone_name,
+            to_zone_id=zone_id, to_zone_name=zone_name,
+            qty=take, user_id=user_id, shipment_line_id=str(line["id"]),
+            from_container_id=from_container_id, to_container_id=to_container_id,
+            comment=comment,
+        )
+
+
 def add_box_item(
     connection, doc_id: str, container_id: str, *,
-    barcode: str, qty: int, quality: str, user_id: str,
+    barcode: str, qty: int, user_id: str,
 ) -> dict:
-    """Скан товара в короб: +qty в корзину короба (или отметка найденного брака).
+    """Скан товара в короб: упакованный годный переезжает `packed` → `boxed`.
 
-    Гейты наследуются от record_packing: годного не больше плана строки и не больше
-    того, что физически передано на стол упаковки.
+    В короб кладут уже УПАКОВАННЫЙ товар: объём и деньги упаковки фиксирует
+    начальник смены отдельным шагом (record_packing), а этот скан — только
+    физическое раскладывание по коробам, поэтому pack-запись здесь не пишется.
+    Гейт: не больше, чем упаковано и ещё не разложено по коробам. Брак в короб
+    не кладётся — он фиксируется на шаге упаковки и уезжает на хранение при
+    закрытии задачи.
     """
+    from modules.balances.service import get_packing_zone
     from modules.containers.service import log_container_op
 
-    _require_putaway_doc(connection, doc_id)
+    doc = _require_putaway_doc(connection, doc_id)
     _require_task_box(connection, doc_id, container_id, status=CONTAINER_STATUS_OPEN)
     n = int(qty or 0)
     if n <= 0:
         raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
 
     variant = _variant_by_barcode(connection, barcode)
-    line = _line_for_variant(connection, doc_id, variant)
-    is_defect = quality == INV_Q_DEFECT
-    record_packing(
-        connection, doc_id, str(line["id"]),
-        good_delta=0 if is_defect else n,
-        defect_delta=n if is_defect else 0,
-        packed_date=business_today().isoformat(),
-        user_id=user_id,
-        container_id=None if is_defect else container_id,
-    )
-    if not is_defect:
-        log_container_op(
-            connection, container_id=container_id, op_type=CONTAINER_OP_ITEM_ADD, user_id=user_id,
-            doc_id=doc_id, product_id=str(line["product_id"]), product_name=line["product_name"],
-            product_sku=line["product_sku"], color_name=line["color_name"], size_name=line["size_name"],
-            qty=n, comment=f"+{n} шт.",
+    line = _line_for_variant(connection, doc_id, variant, prefer_boxable=True)
+    label = " · ".join(
+        x for x in [line["product_sku"], line["color_name"], line["size_name"]] if x
+    ) or line["product_name"]
+
+    pending = line_packed_pending(connection, str(line["id"]))["good"]
+    if pending < n:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"«{label}»: упаковано и не разложено {pending} шт. — "
+                "сначала начальник смены вносит упаковку"
+            ),
         )
+
+    packing_id, packing_name = get_packing_zone(connection)
+    _move_line_between_buckets(
+        connection, line, client_id=doc["client_id"], qty=n,
+        from_op=INV_OP_PACKED, to_op=INV_OP_BOXED,
+        from_container_id=None, to_container_id=container_id,
+        prefer_zone_id=packing_id, fallback_zone=(packing_id, packing_name),
+        user_id=user_id, comment=f"В короб: {n} шт. — {label}",
+    )
+    log_container_op(
+        connection, container_id=container_id, op_type=CONTAINER_OP_ITEM_ADD, user_id=user_id,
+        doc_id=doc_id, product_id=str(line["product_id"]), product_name=line["product_name"],
+        product_sku=line["product_sku"], color_name=line["color_name"], size_name=line["size_name"],
+        qty=n, comment=f"+{n} шт.",
+    )
     return box_detail(connection, container_id)
 
 
-def undo_box_item(connection, doc_id: str, container_id: str, pack_entry_id: str, user_id: str) -> dict:
-    """Отмена ошибочного скана: товар возвращается из короба в пул на столе."""
+def undo_box_item(connection, doc_id: str, container_id: str, line_id: str, qty: int, user_id: str) -> dict:
+    """Изъятие из открытого короба: товар возвращается в упакованное (`boxed` → `packed`)."""
+    from modules.balances.service import get_packing_zone
     from modules.containers.service import log_container_op
 
-    _require_putaway_doc(connection, doc_id)
+    doc = _require_putaway_doc(connection, doc_id)
     _require_task_box(connection, doc_id, container_id, status=CONTAINER_STATUS_OPEN)
-    row = connection.execute(
-        "SELECT shipment_line_id, product_id, product_name, product_sku, color_name, size_name, qty "
-        "FROM zone_relocations WHERE pack_entry_id = ? AND to_container_id = ? LIMIT 1",
-        (pack_entry_id, container_id),
+    n = int(qty or 0)
+    if n <= 0:
+        raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+
+    line = connection.execute(
+        "SELECT * FROM shipment_lines WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (line_id, doc_id),
     ).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Запись не найдена в этом коробе")
-    qty = int(row["qty"] or 0)
-    reverse_packing_entry(connection, doc_id, str(row["shipment_line_id"]), pack_entry_id, user_id)
+    if not line:
+        raise HTTPException(status_code=404, detail="Строка не найдена")
+
+    in_box = sum(
+        r["net"] for r in _container_line_rows(connection, container_id)
+        if str(r["shipment_line_id"] or "") == str(line_id)
+    )
+    if in_box < n:
+        raise HTTPException(status_code=400, detail=f"В коробе только {in_box} шт. этой позиции")
+
+    packing_id, packing_name = get_packing_zone(connection)
+    _move_line_between_buckets(
+        connection, line, client_id=doc["client_id"], qty=n,
+        from_op=INV_OP_BOXED, to_op=INV_OP_PACKED,
+        from_container_id=container_id, to_container_id=None,
+        prefer_zone_id=packing_id, fallback_zone=(packing_id, packing_name),
+        user_id=user_id, comment=f"Изъятие из короба: {n} шт.",
+    )
     log_container_op(
         connection, container_id=container_id, op_type=CONTAINER_OP_ITEM_REMOVE, user_id=user_id,
-        doc_id=doc_id, product_id=str(row["product_id"]), product_name=row["product_name"],
-        product_sku=row["product_sku"], color_name=row["color_name"], size_name=row["size_name"],
-        qty=qty, comment=f"Отмена скана: −{qty} шт.",
+        doc_id=doc_id, product_id=str(line["product_id"]), product_name=line["product_name"],
+        product_sku=line["product_sku"], color_name=line["color_name"], size_name=line["size_name"],
+        qty=n, comment=f"−{n} шт.",
     )
     return box_detail(connection, container_id)
+
+
+def _container_line_rows(connection, container_id: str) -> list[dict]:
+    from modules.containers.service import container_stock_rows
+
+    return container_stock_rows(connection, container_id)
 
 
 def close_box(connection, doc_id: str, container_id: str, user_id: str) -> dict:
@@ -2835,6 +2921,12 @@ def finish_putaway(connection, doc_id: str, defect_zone_id: str | None, user_id:
     lines = connection.execute(
         "SELECT * FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
     ).fetchall()
+    unboxed = sum(line_packed_pending(connection, str(l["id"]))["good"] for l in lines)
+    if unboxed > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Упаковано и не разложено по коробам: {unboxed} шт. — доложите товар в короба",
+        )
     total_defect = sum(line_packed_pending(connection, str(l["id"]))["defect"] for l in lines)
     defect_zone: tuple[str, str] | None = None
     if total_defect > 0:

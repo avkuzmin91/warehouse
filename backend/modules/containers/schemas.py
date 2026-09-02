@@ -24,6 +24,8 @@ class ContainerItem(BaseModel):
 
 
 class ContainerContentLine(BaseModel):
+    # Строка задания, к которой отнесён товар в коробе — по ней его и изымают.
+    line_id: str | None = None
     product_id: str
     product_name: str | None = None
     product_sku: str | None = None

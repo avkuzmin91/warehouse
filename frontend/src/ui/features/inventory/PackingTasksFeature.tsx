@@ -18,6 +18,7 @@ import { DateRange } from '../../data/DateRange'
 import { Badge } from '../../primitives/Badge'
 import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
+import { Dropdown } from '../../primitives/Dropdown'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { EmptyState } from '../../primitives/EmptyState'
 import { fmtDateShort as fmtDate, dayGroupKey, dayGroupLabel } from '../../../utils/format'
@@ -181,14 +182,26 @@ export function PackingTasksFeature() {
             <Icon name="chart" size={14} />Производительность
           </button>
           {canCreate && (
-            <button className="btn" onClick={() => navigate('/inventory/shipments/new?task=putaway')}>
-              <Icon name="archive" size={14} />Размещение по ячейкам
-            </button>
-          )}
-          {canCreate && (
-            <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
-              <Icon name="plus" size={14} />Новая задача
-            </button>
+            <Dropdown
+              trigger={
+                <button className="btn primary" type="button">
+                  <Icon name="plus" size={14} />Новая задача
+                  <Icon name="chevDown" size={12} />
+                </button>
+              }
+              items={[
+                {
+                  label: 'Упаковка без ТСД',
+                  icon: <Icon name="box" size={16} style={{ color: 'var(--c-info)' }} />,
+                  onClick: () => navigate('/inventory/shipments/new'),
+                },
+                {
+                  label: 'Упаковка с ТСД',
+                  icon: <Icon name="barcode" size={16} style={{ color: 'var(--c-accent)' }} />,
+                  onClick: () => navigate('/inventory/shipments/new?task=putaway'),
+                },
+              ]}
+            />
           )}
         </>
       }

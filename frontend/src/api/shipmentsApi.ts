@@ -67,7 +67,7 @@ export type ShipmentTaskKind = 'packing' | 'putaway'
 
 export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
   packing: 'Упаковка под отгрузку',
-  putaway: 'Размещение по ячейкам',
+  putaway: 'Упаковка с ТСД',
 }
 
 /** Маршрут задачи размещения: короба собираются и уезжают в ячейки, отгрузки нет. */
@@ -728,6 +728,8 @@ export function bindShipmentLineFileBarcode(docId: string, lineId: string, fileI
 // --- Задача «Размещение по ячейкам»: короба ---
 
 export type ShipmentBoxContentLine = {
+  /** Строка задания, к которой отнесён товар в коробе — по ней его и изымают. */
+  line_id:      string | null
   product_id:   string
   product_name: string | null
   product_sku:  string | null
@@ -770,19 +772,18 @@ export function takeShipmentBox(docId: string, code: string) {
 }
 
 /** Скан товара в короб. Товар опознаётся только по ШК. */
-export function addShipmentBoxItem(
-  docId: string, boxId: string, payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
-) {
+export function addShipmentBoxItem(docId: string, boxId: string, payload: { barcode: string; qty?: number }) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
 }
 
-export function undoShipmentBoxItem(docId: string, boxId: string, packEntryId: string) {
+/** Изъятие из открытого короба: товар возвращается в упакованное на столе. */
+export function undoShipmentBoxItem(docId: string, boxId: string, lineId: string, qty: number) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items/undo`, {
     method: 'POST',
-    body: JSON.stringify({ pack_entry_id: packEntryId }),
+    body: JSON.stringify({ line_id: lineId, qty }),
   })
 }
 

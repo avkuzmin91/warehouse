@@ -332,8 +332,8 @@ export function ShipmentCreateFeature(
         status="draft"
         cargoType={cargoType}
         title={taskKind === 'putaway'
-          ? 'Новая задача размещения по ячейкам'
-          : isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача упаковки'}
+          ? 'Новая задача: упаковка с ТСД'
+          : isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача: упаковка без ТСД'}
         subtitle="номер присвоится при сохранении"
         initiator={{ name: user?.display_name || user?.email || null }}
         onBack={goBack}

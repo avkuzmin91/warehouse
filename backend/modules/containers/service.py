@@ -173,10 +173,11 @@ def container_contents(connection, container_id: str) -> list[ContainerContentLi
     """Содержимое короба, свёрнутое по позициям (для карточки и ТСД)."""
     agg: dict[tuple, ContainerContentLine] = {}
     for r in container_stock_rows(connection, container_id):
-        key = (r["product_id"], r["color_id"], r["size_id"])
+        key = (r["shipment_line_id"], r["product_id"], r["color_id"], r["size_id"])
         line = agg.get(key)
         if line is None:
             agg[key] = ContainerContentLine(
+                line_id=r["shipment_line_id"],
                 product_id=r["product_id"], product_name=r["product_name"], product_sku=r["product_sku"],
                 color_id=r["color_id"], color_name=r["color_name"],
                 size_id=r["size_id"], size_name=r["size_name"], qty=r["net"],

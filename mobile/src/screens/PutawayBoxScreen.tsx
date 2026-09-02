@@ -7,6 +7,7 @@ import {
   getShipmentBoxes,
   placeShipmentBox,
   reopenShipmentBox,
+  undoShipmentBoxItem,
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
 } from '../api/shipmentsApi'
@@ -18,10 +19,11 @@ import { scanSource } from '../scan/ScanSource'
 import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 import { variantTitle } from '../utils/format'
 
-/** Короб задачи размещения: скан товара внутрь, закрытие и постановка в ячейку.
+/** Короб задачи «Упаковка с ТСД»: скан товара внутрь, закрытие и постановка в ячейку.
  *
- * Товар опознаётся только по ШК — ручного выбора позиции нет (решение владельца):
- * скан неизвестного кода отклоняется, чтобы в короб не попал не тот товар.
+ * В короб кладут уже УПАКОВАННЫЙ товар — годный/брак вносит начальник смены на
+ * экране задачи, здесь только раскладка. Товар опознаётся только по ШК: скан
+ * неизвестного кода отклоняется, чтобы в короб не попал не тот товар.
  */
 export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; boxId: string }) {
   const { back } = useNav()
@@ -29,7 +31,6 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [defect, setDefect] = useState(false)
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -55,16 +56,25 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
     try {
       const code = await scanSource.scan()
       if (!code) return
-      const next = await addShipmentBoxItem(
-        shipmentId, boxId,
-        { barcode: code, qty: 1, quality: defect ? 'defect' : 'good' },
-        newRequestId(),
-      )
+      const next = await addShipmentBoxItem(shipmentId, boxId, { barcode: code, qty: 1 }, newRequestId())
       scanSuccessFeedback()
       setBox(next)
     } catch (err) {
       scanNotFoundFeedback()
       setError(err instanceof Error ? err.message : 'Товар не принят')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onRemove(lineId: string | null, qty: number) {
+    if (busy || !lineId) return
+    setBusy(true)
+    setError('')
+    try {
+      setBox(await undoShipmentBoxItem(shipmentId, boxId, lineId, qty, newRequestId()))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось изъять товар')
     } finally {
       setBusy(false)
     }
@@ -150,14 +160,9 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
             </div>
 
             {status === 'open' && (
-              <>
-                <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanItem() }}>
-                  <Icon name="qr" size={18} /> {defect ? 'Скан брака' : 'Скан товара в короб'}
-                </button>
-                <button className="btn ghost" style={{ width: '100%' }} onClick={() => setDefect((v) => !v)}>
-                  {defect ? 'Режим: брак (в короб не кладётся)' : 'Режим: годный товар'}
-                </button>
-              </>
+              <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanItem() }}>
+                <Icon name="qr" size={18} /> Скан товара в короб
+              </button>
             )}
 
             <div className="sec">
@@ -165,12 +170,27 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
               <span className="sec-count">{box.contents.length}</span>
             </div>
             {box.contents.length === 0 ? (
-              <div className="line"><div className="line-sub">Короб пуст — отсканируйте товар.</div></div>
+              <div className="line">
+                <div className="line-sub">
+                  Короб пуст — отсканируйте штрих-код упакованного товара. В короб кладётся
+                  только то, что начальник смены уже внёс как упаковку.
+                </div>
+              </div>
             ) : (
               box.contents.map((c) => (
-                <div key={`${c.product_id}-${c.color_name ?? ''}-${c.size_name ?? ''}`} className="line">
+                <div key={`${c.line_id ?? ''}-${c.product_id}-${c.color_name ?? ''}-${c.size_name ?? ''}`} className="line">
                   <div className="line-name">{variantTitle(c.product_name ?? '—', [c.color_name, c.size_name])}</div>
                   <div className="line-sub mono">{c.product_sku ?? '—'} · {c.qty} шт.</div>
+                  {status === 'open' && c.line_id && (
+                    <button
+                      className="btn ghost sm"
+                      style={{ width: '100%', marginTop: 4 }}
+                      disabled={busy}
+                      onClick={() => { void onRemove(c.line_id, 1) }}
+                    >
+                      <Icon name="refresh" size={14} /> Изъять 1 шт.
+                    </button>
+                  )}
                 </div>
               ))
             )}

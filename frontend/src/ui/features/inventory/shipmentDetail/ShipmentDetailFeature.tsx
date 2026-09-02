@@ -680,6 +680,7 @@ export function ShipmentDetailFeature() {
     const codes = perFile.flatMap((f) => f.barcodes).filter((b) => !seen.has(b.code) && (seen.add(b.code), true))
     for (const b of codes) {
       if (b.status === 'confirmed') toast(`ШК подтверждён: ${b.code}`, 'success')
+      else if (b.status === 'unknown') toast(`ШК распознан, не привязан: ${b.code} — разберите`, 'info')
     }
   }
 
@@ -958,7 +959,7 @@ export function ShipmentDetailFeature() {
         status={status!}
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
-        subtitle={`${isPutaway ? 'Размещение по ячейкам' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
+        subtitle={`${isPutaway ? 'Упаковка с ТСД' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
         initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         repackKind={doc.repack_kind}
         repackReason={doc.repack_reason}
