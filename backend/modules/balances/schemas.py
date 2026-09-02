@@ -24,6 +24,8 @@ class BalanceItem(BaseModel):
     packing_defect: int
     packed_good: int
     packed_defect: int
+    # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
+    boxed_good: int = 0
     ready_good: int
     ready_defect: int
     total: int
@@ -55,6 +57,8 @@ class BalanceGroupItem(BaseModel):
     packing_defect: int
     packed_good: int
     packed_defect: int
+    # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
+    boxed_good: int = 0
     ready_good: int
     ready_defect: int
     total: int
@@ -119,6 +123,8 @@ class BalanceSummaryResponse(BaseModel):
     packing_defect: int
     packed_good: int
     packed_defect: int
+    # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
+    boxed_good: int = 0
     ready_good: int
     ready_defect: int
     total: int
@@ -127,7 +133,7 @@ class BalanceSummaryResponse(BaseModel):
 class BalanceZoneItem(BaseModel):
     location_id: str | None
     location_name: str | None
-    op_status: str  # 'storage' | 'packing' | 'packed' | 'ready'
+    op_status: str  # 'storage' | 'packing' | 'packed' | 'boxed' | 'ready'
     quality: str    # 'good' | 'defect'
     product_id: str
     product_name: str

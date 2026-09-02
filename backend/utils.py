@@ -57,3 +57,30 @@ def validate_business_date(value, *, field_ru: str) -> str | None:
             detail=f"{field_ru}: дата {d.isoformat()} вне допустимого диапазона",
         )
     return d.isoformat()
+
+
+def qr_svg(payload: str) -> str:
+    """QR-код строкой SVG для печатных этикеток (места хранения, короба).
+
+    segno отдаёт фиксированные width/height без viewBox — при CSS-масштабе рисунок
+    не тянется под размер этикетки, поэтому viewBox добавляется вручную.
+    """
+    import io
+    import re
+
+    try:
+        import segno
+    except ImportError as exc:  # сборка backend без segno
+        raise HTTPException(
+            status_code=503,
+            detail="QR-генератор не установлен (segno). Пересоберите backend.",
+        ) from exc
+    qr = segno.make(payload, error="m")
+    buf = io.BytesIO()
+    qr.save(buf, kind="svg", scale=4, border=2, xmldecl=False, svgns=True)
+    svg = buf.getvalue().decode("utf-8")
+    if "viewBox" not in svg:
+        m = re.search(r'<svg[^>]*\bwidth="(\d+(?:\.\d+)?)"[^>]*\bheight="(\d+(?:\.\d+)?)"', svg)
+        if m:
+            svg = svg.replace("<svg", f'<svg viewBox="0 0 {m.group(1)} {m.group(2)}"', 1)
+    return svg

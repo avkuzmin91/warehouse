@@ -22,6 +22,9 @@ const InventoryShipmentCreatePage = lazy(() =>
 const InventoryShipmentDetailPage = lazy(() =>
   import('../pages/InventoryShipmentDetailPage').then((m) => ({ default: m.InventoryShipmentDetailPage })),
 )
+const InventoryBoxesPage = lazy(() =>
+  import('../pages/InventoryBoxesPage').then((m) => ({ default: m.InventoryBoxesPage })),
+)
 const InventoryPackingPage = lazy(() =>
   import('../pages/InventoryPackingPage').then((m) => ({ default: m.InventoryPackingPage })),
 )
@@ -52,6 +55,8 @@ export const inventoryRoutes = [
   <Route key="inventory-dispatches" path="/inventory/dispatches" element={<InventoryDispatchesListPage />} />,
   <Route key="inventory-dispatches-new" path="/inventory/dispatches/new" element={<InventoryDispatchCreatePage />} />,
   <Route key="inventory-dispatches-id" path="/inventory/dispatches/:docId" element={<InventoryDispatchDetailPage />} />,
+
+  <Route key="inventory-boxes" path="/inventory/boxes" element={<InventoryBoxesPage />} />,
 
   <Route key="inventory-packing" path="/inventory/packing" element={<InventoryPackingPage />} />,
   <Route key="inventory-packing-productivity" path="/inventory/packing/productivity" element={<InventoryPackingProductivityPage />} />,

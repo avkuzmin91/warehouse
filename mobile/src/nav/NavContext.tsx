@@ -18,6 +18,8 @@ export type Route =
   | { name: 'stock' }
   | { name: 'packing' }
   | { name: 'packDoc'; id: string; focus?: PackFocus }
+  | { name: 'putawayDoc'; id: string }
+  | { name: 'putawayBox'; id: string; boxId: string }
   | { name: 'mTrips' }
   | { name: 'mWarehouse' }
   | { name: 'mReceipts' }
@@ -66,6 +68,8 @@ type NavState = {
   openShipment: (id: string) => void
   openDispatchPrepare: (id: string) => void
   openPackDoc: (id: string, focus?: PackFocus) => void
+  openPutawayDoc: (id: string) => void
+  openPutawayBox: (id: string, boxId: string) => void
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
   openScanLocation: (location: LocationMatch) => void
@@ -128,6 +132,8 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openShipment: (id) => setStack((s) => [...s, { name: 'shipment', id }]),
     openDispatchPrepare: (id) => setStack((s) => [...s, { name: 'dispatchPrepare', id }]),
     openPackDoc: (id, focus) => setStack((s) => [...s, { name: 'packDoc', id, focus }]),
+    openPutawayDoc: (id) => setStack((s) => [...s, { name: 'putawayDoc', id }]),
+    openPutawayBox: (id, boxId) => setStack((s) => [...s, { name: 'putawayBox', id, boxId }]),
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),
     openScanLocation: (location) => setStack((s) => [...s, { name: 'scanLocation', location }]),

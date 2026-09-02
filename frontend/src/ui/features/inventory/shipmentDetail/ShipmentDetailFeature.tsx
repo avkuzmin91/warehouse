@@ -19,6 +19,8 @@ import {
   SHIPMENT_STATUS_LABELS,
 } from '../../../../api/shipmentsApi'
 import type { ShipmentDetail, ShipmentStatus, ShipmentCargoType, ShipmentLine, ReturnToPackingPayload, LineFileBarcode } from '../../../../api/shipmentsApi'
+import { getLocations } from '../../../../api/locationsApi'
+import type { LocationItem } from '../../../../api/locationsApi'
 import { resolvePublicUploadSrc } from '../../../../api/constants'
 import { getBalances, getBalancesByZone, getPlannableItems } from '../../../../api/balancesApi'
 import type { BalanceItem, BalanceZoneItem, PlannableItem } from '../../../../api/balancesApi'
@@ -56,6 +58,7 @@ import type { InfoPhaseProps } from './components/InfoPhase'
 import type { CompositionPhaseProps } from './components/CompositionPhase'
 import type { PackingPhaseData } from './components/PackingPhase'
 import { PlanningView } from './views/PlanningView'
+import { PutawayView } from './views/PutawayView'
 import { PackingView } from './views/PackingView'
 import { RelocatingView } from './views/RelocatingView'
 import { FinalView } from './views/FinalView'
@@ -88,6 +91,8 @@ export function ShipmentDetailFeature() {
   const [skuLine, setSkuLine] = useState<ShipmentLine | null>(null)
   const [filePreview, setFilePreview] = useState<LineFilePreview | null>(null)
   const [balances, setBalances] = useState<BalanceItem[]>([])
+  // Адресные ячейки — цели размещения коробов (только в задаче размещения).
+  const [cells, setCells] = useState<LocationItem[]>([])
   // Остаток «на хранении» + «в пути» под планом строки (только при правке плана).
   const [plannable, setPlannable] = useState<PlannableItem[] | null>(null)
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
@@ -185,7 +190,11 @@ export function ShipmentDetailFeature() {
   const isOnPacking = status === 'on_packing'
   const isRelocating = status === 'relocating'
   const isPacked = status === 'packed'
+  const isPlaced = status === 'placed'
   const isCompletedNoGoods = status === 'completed_no_goods'
+  // Задача размещения по ячейкам: вместо «Перемещения» к рейсу товар собирается в
+  // короба и уезжает на стеллаж; закрытие делает finish-putaway из панели коробов.
+  const isPutaway = doc?.task_kind === 'putaway'
   // Состав и план менеджер правит до передачи на упаковку (черновик, «В плане»).
   const editableComposition = isDraft || isPacking
   const canDelete = canEditPlanning && editableComposition
@@ -195,7 +204,7 @@ export function ShipmentDetailFeature() {
   // Изменения журналируются, команда упаковки получает пуш.
   const canCorrectOnPacking = canEditPlanning && isOnPacking
   const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
-  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isCompletedNoGoods
+  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isPlaced && !isCompletedNoGoods
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
   // У начальника смены (canPack без canEdit) кнопки возврата нет.
@@ -214,6 +223,7 @@ export function ShipmentDetailFeature() {
       ? { label: 'Запланировать', icon: 'arrowRight', hint: 'уйдёт кладовщику на подготовку — статус «Перемещение»', show: canEdit }
       : isDraft     ? { label: 'Поставить задачу',     icon: 'arrowRight', hint: 'уйдёт в план склада — статус «В плане»',        show: canEditPlanning }
       : isPacking   ? { label: 'Передать на упаковку', icon: 'forklift',   hint: 'уйдёт начальнику смены — статус «На упаковке»', show: canEdit }
+      : isOnPacking && isPutaway ? null
       : isOnPacking ? { label: 'Завершить упаковку',    icon: 'check',      hint: 'уйдёт кладовщику — статус «Перемещение»',       show: canPack }
       : null
 
@@ -491,6 +501,20 @@ export function ShipmentDetailFeature() {
   const advanceBlockReasons = showReadiness
     ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
     : []
+  useEffect(() => {
+    if (!isPutaway) return
+    let live = true
+    getLocations({ limit: 500 })
+      .then((r) => { if (live) setCells(r.items.filter((i) => i.kind === 'cell' && i.is_active)) })
+      // Справочник мест доступен не всем ролям склада — тогда остаётся общий список зон.
+      .catch(() => { if (live) setCells([]) })
+    return () => { live = false }
+  }, [isPutaway])
+
+  const cellOptions = cells.length > 0
+    ? cells.map((c) => ({ id: c.id, name: c.code }))
+    : unloadingZones
+
   async function refreshAfterLineChange() {
     await load()
     await loadBalances()
@@ -934,7 +958,7 @@ export function ShipmentDetailFeature() {
         status={status!}
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
-        subtitle={`${isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
+        subtitle={`${isPutaway ? 'Размещение по ячейкам' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
         initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         repackKind={doc.repack_kind}
         repackReason={doc.repack_reason}
@@ -1018,6 +1042,20 @@ export function ShipmentDetailFeature() {
           composition={compositionProps}
           packing={packingProps}
           checklist={checklistItems}
+        />
+      ) : isPutaway ? (
+        <PutawayView
+          docId={docId!}
+          doc={doc}
+          isPacking={isPacking}
+          isPlaced={isPlaced}
+          info={infoProps}
+          composition={compositionProps}
+          packing={packingProps}
+          cellOptions={cellOptions}
+          canManage={canEdit || canPack}
+          checklist={checklistItems}
+          onDone={refreshAfterLineChange}
         />
       ) : (isPacking || isOnPacking) ? (
         <PackingView

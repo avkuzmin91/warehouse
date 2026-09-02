@@ -216,6 +216,8 @@ class ShipmentFinishDefectRelocationPayload(BaseModel):
 
 class ShipmentDocCreate(BaseModel):
     cargo_type:      str = "good"
+    # 'packing' — упаковка под отгрузку, 'putaway' — размещение по ячейкам.
+    task_kind:       str = "packing"
     client_id:       str | None = None
     client_name:     str | None = None
     destination:     str | None = None
@@ -306,6 +308,9 @@ class ShipmentLineItem(BaseModel):
     # частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
     packed_pending_good:   int = 0
     packed_pending_defect: int = 0
+    # Задача размещения: сколько лежит в коробах на столе и сколько уже уехало в ячейки.
+    boxed_qty:  int = 0
+    placed_qty: int = 0
     available_for_pack: int = 0
     storage_zone_id:   str | None
     storage_zone_name: str | None
@@ -319,6 +324,7 @@ class ShipmentListItem(BaseModel):
     id:           str
     doc_number:   str
     cargo_type:   str
+    task_kind:    str = "packing"
     client_id:    str | None
     client_name:  str | None
     destination:  str | None
@@ -386,10 +392,69 @@ class ShipmentOpItem(BaseModel):
     created_by_email: str | None
 
 
+class ShipmentBoxContentLine(BaseModel):
+    product_id:   str
+    product_name: str | None = None
+    product_sku:  str | None = None
+    color_name:   str | None = None
+    size_name:    str | None = None
+    qty:          int
+
+
+class ShipmentBoxItem(BaseModel):
+    """Короб задачи размещения: этикетка, содержимое, место на стеллаже."""
+
+    id:         str
+    doc_number: str
+    status:     str  # open | closed | placed
+    zone_id:    str | None = None
+    zone_name:  str | None = None
+    items_qty:  int = 0
+    contents:   list[ShipmentBoxContentLine] = []
+    created_at: str
+    closed_at:  str | None = None
+    placed_at:  str | None = None
+
+
+class ShipmentBoxesResponse(BaseModel):
+    items: list[ShipmentBoxItem]
+
+
+class ShipmentBoxTakePayload(BaseModel):
+    """Скан этикетки короба: QR «wms:box:<id>» либо номер BOX-000123."""
+
+    code: str = Field(min_length=1)
+
+
+class ShipmentBoxItemPayload(BaseModel):
+    """Скан товара в короб. Товар опознаётся только по ШК (ручного выбора нет)."""
+
+    barcode: str = Field(min_length=1)
+    qty:     int = Field(ge=1, default=1)
+    # 'good' — в короб; 'defect' — найденный брак, в короб не кладётся.
+    quality: str = "good"
+
+
+class ShipmentBoxItemUndoPayload(BaseModel):
+    pack_entry_id: str = Field(min_length=1)
+
+
+class ShipmentBoxPlacePayload(BaseModel):
+    """Скан QR ячейки, куда встал короб."""
+
+    zone_id: str = Field(min_length=1)
+
+
+class ShipmentFinishPutawayPayload(BaseModel):
+    # Куда уходит найденный при сборке брак (обязательно, если брак есть).
+    defect_zone_id: str | None = None
+
+
 class ShipmentDetailResponse(BaseModel):
     id:           str
     doc_number:   str
     cargo_type:   str
+    task_kind:    str = "packing"
     client_id:    str | None
     client_name:  str | None
     destination:  str | None
@@ -416,6 +481,8 @@ class ShipmentDetailResponse(BaseModel):
     updated_at:   str | None
     lines:        list[ShipmentLineItem]
     ops:          list[ShipmentOpItem]
+    # Короба задачи размещения (у задачи упаковки список пуст).
+    boxes:        list[ShipmentBoxItem] = []
     sku_count:    int
     total_qty:    int
 

@@ -181,6 +181,11 @@ export function PackingTasksFeature() {
             <Icon name="chart" size={14} />Производительность
           </button>
           {canCreate && (
+            <button className="btn" onClick={() => navigate('/inventory/shipments/new?task=putaway')}>
+              <Icon name="archive" size={14} />Размещение по ячейкам
+            </button>
+          )}
+          {canCreate && (
             <button className="btn primary" onClick={() => navigate('/inventory/shipments/new')}>
               <Icon name="plus" size={14} />Новая задача
             </button>
@@ -254,7 +259,8 @@ export function PackingTasksFeature() {
             options={[
               { value: '', label: 'Все статусы' },
               { value: 'overdue', label: 'Просрочка' },
-              ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
+              // `placed` — терминал задачи размещения по ячейкам, в маршрут упаковки не входит.
+              ...([...SHIPMENT_STATUS_ORDER, 'placed', 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
             onChange={(v) => setStatusFilter(v)}
@@ -359,6 +365,7 @@ export function PackingTasksFeature() {
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           {item.doc_number}
                           {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
+                          {item.task_kind === 'putaway' && <Badge tone="accent">Размещение</Badge>}
                         </span>
                         {overdue && (
                           <div style={{ fontSize: 11, color: 'var(--c-danger)', fontWeight: 500, marginTop: 2 }}>

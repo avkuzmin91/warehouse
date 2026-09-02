@@ -57,6 +57,7 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 | `logistics` | рейсы (trips) inbound/outbound, привязка документов, расходы рейса |
 | `balances` | остатки (двухосевая модель), перемещения, списания, оборот (`/balances/turnover*` — приход/расход/остаток без внутренних переходов) |
 | `locations` | адресное хранение: ячейки, QR-этикетки |
+| `containers` | короба задачи «Размещение по ячейкам»: `containers` + журнал `container_ops`, этикетки QR (`wms:box:`), перенос короба между ячейками |
 | `scan` | контекст по отсканированному ШК/QR |
 | `tasks` | карточки-задания «Мои задачи» |
 | `dashboard` | сводка главного экрана |
@@ -123,6 +124,8 @@ with get_connection() as conn:
 
 **Остатки (двухосевая модель):**
 - Остаток измеряется по двум осям: **операционный статус** (`INV_OP_*`: проверка / хранение / упаковка / зона отгрузки и т.д.) × **качество** (`INV_Q_GOOD` / `INV_Q_DEFECT`). Константы — в `config.py`.
+- Корзина `INV_OP_BOXED` («Собран в короб») намеренно НЕ входит ни в один пул доступности: пул отгрузки — `ready`+`packed` (`DISPATCH_ALLOW_SHIP_FROM_PACKED`), пул упаковки — `storage`. Товар в коробе на столе доступен только после размещения короба в ячейке (`boxed → storage@ячейка`).
+- Третья ось — **короб**: `zone_relocations.from_container_id`/`to_container_id`. Содержимое короба = нетто журнала по этой оси (отдельной таблицы содержимого нет), поэтому перенос короба обязан ставить обе стороны. Ручные операции с остатком, лежащим в коробе, запрещены (гейт `_ensure_not_boxed` в `balances/service.py`) — короб двигается целиком через `POST /containers/{id}/move`.
 - Источник данных: `receipt_lines.accepted_qty` (приёмка) **плюс** нетто-перемещения из журнала `zone_relocations` по каждому бакету. Отгруженное списывается журнальной записью в `zone_relocations`, **не** вычитанием `shipment_lines`.
 - Эталон расчёта — [backend/modules/balances/service.py](backend/modules/balances/service.py). Старая формула «receipt_ops минус shipment_lines (shipped)» больше не используется.
 
@@ -131,6 +134,7 @@ with get_connection() as conn:
 Полные перечни — в [backend/config.py](backend/config.py), здесь — для ориентира:
 
 - **Receipts:** ручной переход только `draft → planned`; дальше поступление двигает **рейс** (приёмка в разгрузке): `planned → partially_received → done`, плюс `cancelled`.
+- **Задача склада — два типа (`shipment_docs.task_kind`):** `packing` «Упаковка под отгрузку» (терминал `packed`, дальше товар возит dispatch) и `putaway` «Размещение по ячейкам» (терминал `placed`). Маршрут размещения: `draft → packing → on_packing → placed`; на `on_packing` кладовщик/начальник смены собирает короба и ставит их в ячейки с ТСД, закрытие — `POST /shipments/{id}/finish-putaway` (гейт: незакрытых и неразмещённых коробов не осталось). Роли действий с коробами — как у ручных операций с остатками (`get_current_stock_operator`).
 - **Shipments («Задача упаковки», годный груз):** `draft → packing → on_packing → relocating → packed`, плюс `completed_no_goods` (весь товар оказался браком — завершение без рейса) и `cancelled`. **`packed` — терминал**: дальше товар возит домен dispatch. Брак-отгрузка минует упаковку: `draft → relocating → packed` (раскладку делает `finish_defect_relocation`). Приоритеты — `SHIPMENT_PRIORITY_URGENT / HIGH` (+ обычный), отдельный `PATCH /priority`.
 - **Dispatch («Отгрузка» клиенту):** `draft → (awaiting_packing) → preparing → awaiting_trip → (partially_shipped) → shipped`, плюс `cancelled`. `awaiting_packing` («Ожидание упаковки») — очередь, когда состав передан, но годного остатка ещё нет: как только спрос покрыт, фоновый цикл сам двигает в `preparing`; состав правится в `draft` **и** `awaiting_packing` (`DISPATCH_EDITABLE_STATUSES`). Типы груза — `good` / `good_unpacked` (годный со хранения, минуя упаковку) / `defect`. Переходы в `partially_shipped`/`shipped` делает выезд привязанного рейса, не ручной advance. Единственное ручное исключение — `POST /dispatches/{id}/close-short` («Закрыть с недовозом»): `partially_shipped → shipped`, когда остаток больше не поедет. План строк не переписывается, недовоз = Σ(`qty` − `shipped_qty`), отметка — `dispatch_docs.closed_short_at`; по ней счёт тарифицируется по факту. Сток не двигается: неувезённое остаётся в `ready`/`packed` и после выхода из резервирующих статусов доступно другим отгрузкам.
 - **Trips:** `draft → awaiting_arrival → unloading → costing → closed`, плюс `cancelled`. Направления `inbound` / `outbound` (лексика статусов различается, коды общие).
@@ -482,7 +486,7 @@ export const inventoryRoutes = [
 ]
 ```
 
-URL-конвенции inventory: `/inventory/receipts`, `/inventory/balances` — **без** суффикса `-v2`. Список задач упаковки живёт на `/inventory/packing` (+ `/inventory/packing/productivity`); `/inventory/shipments` — редирект туда, карточки задач — на `/inventory/shipments/new` и `/inventory/shipments/:docId`. Области роутов: `admin`, `auth`, `cabinet`, `finance`, `inventory`, `logistics`, `marketplaces`, `timesheet`.
+URL-конвенции inventory: `/inventory/receipts`, `/inventory/balances` — **без** суффикса `-v2`. Короба (печать этикеток пачкой) — `/inventory/boxes`. Список задач упаковки живёт на `/inventory/packing` (+ `/inventory/packing/productivity`); `/inventory/shipments` — редирект туда, карточки задач — на `/inventory/shipments/new` и `/inventory/shipments/:docId`. Области роутов: `admin`, `auth`, `cabinet`, `finance`, `inventory`, `logistics`, `marketplaces`, `timesheet`.
 
 ---
 

@@ -4,7 +4,7 @@ import { useBackNav } from '../../../hooks/useBackNav'
 import { createShipment, advanceShipment, getShipment, uploadShipmentLineFile, checkShipmentDuplicate, decodeShipmentFileBarcodes } from '../../../api/shipmentsApi'
 import type { LineFileBarcode } from '../../../api/shipmentsApi'
 import { useToast } from '../../feedback/Toast'
-import type { ShipmentLineIn, ShipmentCargoType } from '../../../api/shipmentsApi'
+import type { ShipmentLineIn, ShipmentCargoType, ShipmentTaskKind } from '../../../api/shipmentsApi'
 import type { DuplicateMatch, ProductFileItem } from '../../../api/domainTypes'
 import { attachShipmentLineFileFromProduct } from '../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
@@ -42,7 +42,9 @@ import { useCurrentUser } from '../../../hooks/useCurrentUser'
 type DraftLine = ShipmentLineIn & { _uid: string; _key: string; onHand: number; inTransit: number; sku_pending: boolean; files: File[]; productFiles: ProductFileItem[] }
 type DraftLineFilePreview = FilePreviewMeta & { file?: File; url?: string; mimeType?: string | null; filename?: string }
 
-export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoType }) {
+export function ShipmentCreateFeature(
+  { cargoType, taskKind = 'packing' }: { cargoType: ShipmentCargoType; taskKind?: ShipmentTaskKind },
+) {
   const navigate = useNavigate()
   const goBack = useBackNav('/inventory/shipments')
 
@@ -270,6 +272,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
     try {
       const res = await createShipment({
         cargo_type:     cargoType,
+        task_kind:      taskKind,
         client_id:      clientId || null,
         client_name:    clientName || null,
         ship_date:      shipDate || null,
@@ -328,7 +331,9 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
       <ShipHeader
         status="draft"
         cargoType={cargoType}
-        title={isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача упаковки'}
+        title={taskKind === 'putaway'
+          ? 'Новая задача размещения по ячейкам'
+          : isDefectCargo ? 'Новая задача упаковки брака' : 'Новая задача упаковки'}
         subtitle="номер присвоится при сохранении"
         initiator={{ name: user?.display_name || user?.email || null }}
         onBack={goBack}
@@ -593,7 +598,7 @@ export function ShipmentCreateFeature({ cargoType }: { cargoType: ShipmentCargoT
 
         {/* Right — маршрут + итог + готовность */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <RailPanel status="draft" cargoType={cargoType} />
+          <RailPanel status="draft" cargoType={cargoType} taskKind={taskKind} />
           <Panel icon="chart" title="Итого">
             <div style={{ padding: '0 2px' }}>
               <ReadRow label="SKU" mono>{lines.length}</ReadRow>

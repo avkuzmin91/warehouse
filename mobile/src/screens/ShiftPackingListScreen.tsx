@@ -29,7 +29,7 @@ const STATUS_TONE: Record<string, string> = {
 export function ShiftPackingListScreen() {
   // У начальника смены экран — корневая вкладка; начальник склада открывает его
   // из хаба «Склад» поверх стека, поэтому нужна кнопка «назад».
-  const { openPackDoc, isTab, back } = useNav()
+  const { openPackDoc, openPutawayDoc, isTab, back } = useNav()
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -139,7 +139,11 @@ export function ShiftPackingListScreen() {
               const eta = fmtDate(s.ship_date, '')
               const ready = s.status === 'on_packing'
               return (
-                <button key={s.id} className="tile" onClick={() => openPackDoc(s.id)}>
+                <button
+                  key={s.id}
+                  className="tile"
+                  onClick={() => (s.task_kind === 'putaway' ? openPutawayDoc(s.id) : openPackDoc(s.id))}
+                >
                   <div className={`tile-ico${s.cargo_type === 'defect' ? ' gray' : ''}`}>
                     <Icon name={s.cargo_type === 'defect' ? 'refresh' : 'box'} size={21} />
                   </div>

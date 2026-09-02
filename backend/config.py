@@ -149,6 +149,10 @@ SHIPMENT_STATUS_PACKED            = "packed"
 # рейс не нужен. Терминальный исход, отдельный от `packed` — иначе попадёт в
 # кандидаты на счёт и в метрику реальных отгрузок.
 SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
+# Терминальный исход задачи «Размещение по ячейкам»: весь товар собран в короба и
+# короба разложены по адресным ячейкам. Отдельный статус от `packed`: `packed`
+# означает «упаковано и ждёт отгрузку», а размещённый товар лежит на хранении.
+SHIPMENT_STATUS_PLACED            = "placed"
 SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
@@ -157,6 +161,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_PACKED,
+    SHIPMENT_STATUS_PLACED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 ]
@@ -164,6 +169,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
 # Терминальные статусы отгрузки (документ завершён, дальше не двигается).
 SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKED,
+    SHIPMENT_STATUS_PLACED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 })
@@ -174,6 +180,7 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
     SHIPMENT_STATUS_PACKED:            "Упакован",
+    SHIPMENT_STATUS_PLACED:            "Размещено",
     SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
@@ -259,6 +266,36 @@ SHIPMENT_EDITABLE_LINE_STATUSES_DEFECT: frozenset[str] = frozenset({
     SHIPMENT_STATUS_DRAFT,
 })
 
+# ── Тип задачи склада ─────────────────────────────────────────────────────────
+# packing — упаковка под отгрузку (терминал `packed`, дальше товар возит dispatch);
+# putaway — размещение по ячейкам (терминал `placed`): товар собирается в короба и
+# уезжает на стеллаж, отгрузки у задачи нет. Ветвление по образцу cargo_type.
+SHIPMENT_TASK_PACKING = "packing"
+SHIPMENT_TASK_PUTAWAY = "putaway"
+
+SHIPMENT_TASK_KIND_LABELS: dict[str, str] = {
+    SHIPMENT_TASK_PACKING: "Упаковка под отгрузку",
+    SHIPMENT_TASK_PUTAWAY: "Размещение по ячейкам",
+}
+
+# on_packing → placed делает отдельный эндпоинт finish_putaway (гейт: все короба
+# закрыты и размещены, на столе ничего не осталось).
+SHIPMENT_TRANSITIONS_PUTAWAY: dict[str, str] = {
+    SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
+    SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_ON_PACKING,
+}
+
+SHIPMENT_TRANSITION_ROLES_PUTAWAY: dict[str, frozenset[str]] = {
+    SHIPMENT_STATUS_PACKING:    frozenset({"manager", "admin"}),
+    SHIPMENT_STATUS_ON_PACKING: frozenset({"manager", "admin", "warehouse_manager", "warehouse_head", "shift_supervisor"}),
+}
+
+# Сборку короба и размещение делают кладовщик и начальник смены (плюс начальник
+# склада и менеджерский состав) — то же множество, что у ручных операций с остатками.
+SHIPMENT_PUTAWAY_ROLES: frozenset[str] = frozenset({
+    "warehouse_manager", "shift_supervisor", "warehouse_head", "manager", "admin",
+})
+
 # Приоритет отгрузки — уровень срочности (меньше = срочнее), NULL = обычный.
 SHIPMENT_PRIORITY_URGENT = 1
 SHIPMENT_PRIORITY_HIGH   = 2
@@ -284,6 +321,11 @@ INV_OP_PACKING     = "packing"
 # отгрузке: готовность наступает явным действием склада «Готово к рейсу»
 # (finish_relocation, relocating → packed), которое и переводит годное packed → ready.
 INV_OP_PACKED      = "packed"
+# «Собран в короб» — задача размещения по ячейкам: товар лежит в коробе на столе,
+# короб ещё не уехал на стеллаж. Корзина намеренно НЕ входит ни в один пул
+# доступности (ready+packed у отгрузки, storage у упаковки): по FBS товар готов к
+# отгрузке только после размещения короба в ячейке (boxed → storage@ячейка).
+INV_OP_BOXED       = "boxed"
 INV_OP_READY       = "ready"
 INV_OP_SHIPPED     = "shipped"
 INV_OP_WRITTEN_OFF = "written_off"
@@ -293,6 +335,7 @@ INV_OP_LABELS: dict[str, str] = {
     INV_OP_STORAGE:     "На хранении",
     INV_OP_PACKING:     "На упаковке",
     INV_OP_PACKED:      "Упакован",
+    INV_OP_BOXED:       "Собран в короб",
     INV_OP_READY:       "Готов к отгрузке",
     INV_OP_SHIPPED:     "Отгружен",
     INV_OP_WRITTEN_OFF: "Списан",
@@ -362,6 +405,55 @@ LOCATION_KIND_CELL    = "cell"      # адресная ячейка стелла
 LOCATION_KIND_SPECIAL = "special"   # служебная зона (упаковка/отгрузка/прочее)
 LOCATION_QR_PREFIX    = "wms:loc:"
 
+# ── Короба (containers): тара задачи «Размещение по ячейкам» ───────────────────
+# Этикетки печатаются заранее пачкой; кладовщик клеит готовую этикетку и сканирует
+# её — короб берётся в работу. Скан произвольного (не заведённого) кода короб НЕ
+# создаёт. QR несёт id записи, человекочитаемый номер BOX-000123 печатается рядом.
+CONTAINER_QR_PREFIX = "wms:box:"
+
+CONTAINER_STATUS_NEW    = "new"      # напечатан, свободен
+CONTAINER_STATUS_OPEN   = "open"     # взят в задачу, набирается
+CONTAINER_STATUS_CLOSED = "closed"   # закрыт, ждёт размещения на стеллаже
+CONTAINER_STATUS_PLACED = "placed"   # размещён в адресной ячейке
+
+CONTAINER_STATUSES_ALL: list[str] = [
+    CONTAINER_STATUS_NEW,
+    CONTAINER_STATUS_OPEN,
+    CONTAINER_STATUS_CLOSED,
+    CONTAINER_STATUS_PLACED,
+]
+
+CONTAINER_STATUS_LABELS: dict[str, str] = {
+    CONTAINER_STATUS_NEW:    "Свободен",
+    CONTAINER_STATUS_OPEN:   "Набирается",
+    CONTAINER_STATUS_CLOSED: "Закрыт",
+    CONTAINER_STATUS_PLACED: "Размещён",
+}
+
+# Типы записей журнала короба (append-only, человекочитаемая история карточки)
+CONTAINER_OP_CREATE      = "create"
+CONTAINER_OP_TAKE        = "take"         # взят в задачу размещения
+CONTAINER_OP_ITEM_ADD    = "item_add"
+CONTAINER_OP_ITEM_REMOVE = "item_remove"
+CONTAINER_OP_CLOSE       = "close"
+CONTAINER_OP_REOPEN      = "reopen"
+CONTAINER_OP_PLACE       = "place"
+CONTAINER_OP_MOVE        = "move"         # перенос размещённого короба в другую ячейку
+
+CONTAINER_OP_LABELS: dict[str, str] = {
+    CONTAINER_OP_CREATE:      "Заведён",
+    CONTAINER_OP_TAKE:        "Взят в работу",
+    CONTAINER_OP_ITEM_ADD:    "Товар в короб",
+    CONTAINER_OP_ITEM_REMOVE: "Изъятие из короба",
+    CONTAINER_OP_CLOSE:       "Закрыт",
+    CONTAINER_OP_REOPEN:      "Открыт заново",
+    CONTAINER_OP_PLACE:       "Размещён",
+    CONTAINER_OP_MOVE:        "Перемещён",
+}
+
+# Сколько коробов создаётся одним запросом печати этикеток.
+CONTAINER_BATCH_MAX = 200
+
 # Причины списания остатков (zone_relocations.reason у движений → written_off)
 WRITEOFF_REASON_SHORTAGE      = "shortage"
 WRITEOFF_REASON_DAMAGE        = "damage"
@@ -386,6 +478,10 @@ SHIPMENT_OP_PACK_CORRECTION = "pack_correction"
 SHIPMENT_OP_PACK_DATE_MOVE  = "pack_date_move"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
+# Задача «Размещение по ячейкам»: жизненный цикл короба внутри задачи.
+SHIPMENT_OP_BOX_TAKE  = "box_take"
+SHIPMENT_OP_BOX_CLOSE = "box_close"
+SHIPMENT_OP_BOX_PLACE = "box_place"
 SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
 # Менеджер запустил переупаковку (ошибка постановки задачи) / платная переупаковка
 # выставлена клиенту автосозданной записью «Доп. работы» при выходе в «Упаковано».

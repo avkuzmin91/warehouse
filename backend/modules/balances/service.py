@@ -9,6 +9,7 @@ from config import (
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
+    INV_OP_BOXED,
     INV_OP_INTAKE,
     INV_OP_SHIPPED,
     INV_OP_PACKED,
@@ -80,6 +81,9 @@ _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_PACKING, INV_Q_DEFECT),
     (INV_OP_PACKED, INV_Q_GOOD),
     (INV_OP_PACKED, INV_Q_DEFECT),
+    # Брака в коробе не бывает: в короб кладут только годный (брак с упаковки
+    # уходит на хранение), поэтому корзина boxed — только good.
+    (INV_OP_BOXED, INV_Q_GOOD),
     (INV_OP_READY, INV_Q_GOOD),
     (INV_OP_READY, INV_Q_DEFECT),
 ]
@@ -862,6 +866,7 @@ def insert_inventory_move(
     from_zone_id: str | None, from_zone_name: str | None,
     to_zone_id: str | None, to_zone_name: str | None,
     qty: int, user_id: str | None,
+    from_container_id: str | None = None, to_container_id: str | None = None,
     shipment_line_id: str | None = None, comment: str | None = None,
     packed_date: str | None = None, pack_entry_id: str | None = None,
     reverses_id: str | None = None, receipt_line_id: str | None = None,
@@ -879,6 +884,10 @@ def insert_inventory_move(
     packed_date/pack_entry_id/reverses_id заполняются только для QC-упаковки;
     receipt_line_id — только для прихода приёмки; reason — только для списания;
     repack_kind/repack_price_kop — только для pack-записей переупаковки.
+    from_container_id/to_container_id — ось короба (задача «Размещение по ячейкам»):
+    содержимое короба = нетто журнала по этой оси, поэтому перенос короба между
+    ячейками обязан ставить ОБА поля (нетто внутри короба не меняется), а изъятие —
+    только from_container_id.
     """
     from datetime import UTC, datetime
     from uuid import uuid4
@@ -889,14 +898,14 @@ def insert_inventory_move(
             client_id,client_name,from_op,to_op,from_quality,to_quality,
             from_zone_id,from_zone_name,to_zone_id,to_zone_name,qty,comment,created_at,created_by,shipment_line_id,
             packed_date,pack_entry_id,reverses_id,receipt_line_id,reason,trip_id,dispatch_line_id,
-            repack_kind,repack_price_kop)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            repack_kind,repack_price_kop,from_container_id,to_container_id)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (str(uuid4()), product_id, product_name, product_sku, color_id, color_name, size_id, size_name,
          client_id, client_name, from_op, to_op, from_quality, to_quality,
          from_zone_id, from_zone_name, to_zone_id, to_zone_name, qty, comment,
          datetime.now(UTC).isoformat(), user_id, shipment_line_id,
          packed_date, pack_entry_id, reverses_id, receipt_line_id, reason, trip_id, dispatch_line_id,
-         repack_kind, repack_price_kop),
+         repack_kind, repack_price_kop, from_container_id, to_container_id),
     )
 
 
@@ -1183,6 +1192,29 @@ def _bucket_attribution_nets(
     ]
 
 
+def _ensure_not_boxed(connection, payload, *, op: str, quality: str, zone_id: str | None, action: str) -> None:
+    """Гейт ручных операций: товар, лежащий в коробе, двигается только коробом.
+
+    Иначе остаток уедет из ячейки, а содержимое короба останется прежним — короб и
+    остатки разойдутся. Перенос короба целиком — POST /containers/{id}/move.
+    """
+    from fastapi import HTTPException
+    from modules.containers.service import containers_holding
+
+    boxes = containers_holding(
+        connection,
+        product_id=payload.product_id, color_id=payload.color_id, size_id=payload.size_id,
+        client_id=payload.client_id, zone_id=zone_id, op=op, quality=quality,
+    )
+    if boxes:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Товар лежит в коробе {', '.join(boxes)} — {action} можно только коробом целиком"
+            ),
+        )
+
+
 def _manual_op(payload) -> str:
     """Операционный статус ручной операции из payload (по умолчанию — «На хранении»)."""
     from fastapi import HTTPException
@@ -1219,6 +1251,8 @@ def _create_relocation_moves(connection, payload, user_id: str) -> None:
         raise HTTPException(status_code=400, detail="Укажите место, откуда перемещаете товар")
     if from_id == to_id:
         raise HTTPException(status_code=400, detail="Выберите другое место назначения")
+
+    _ensure_not_boxed(connection, payload, op=op, quality=payload.quality, zone_id=from_id, action="перемещать")
 
     available = get_available_in_zone(
         connection,
@@ -1364,6 +1398,11 @@ def create_quality_change(connection, payload, user_id: str) -> None:
     if not zone_id:
         raise HTTPException(status_code=400, detail="Укажите место, где меняется качество товара")
 
+    _ensure_not_boxed(
+        connection, payload, op=op, quality=payload.from_quality, zone_id=zone_id,
+        action="переводить в другое качество",
+    )
+
     available = get_available_in_zone(
         connection,
         product_id=payload.product_id,
@@ -1426,6 +1465,8 @@ def create_write_off(connection, payload, user_id: str) -> None:
     if op != INV_OP_STORAGE:
         prefix = f"Списание ({INV_OP_LABELS[op]})"
         comment = f"{prefix}. {comment}" if comment else prefix
+
+    _ensure_not_boxed(connection, payload, op=op, quality=payload.quality, zone_id=zone_id, action="списывать")
 
     available = get_available_in_zone(
         connection,

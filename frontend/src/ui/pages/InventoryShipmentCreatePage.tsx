@@ -4,5 +4,6 @@ import { ShipmentCreateFeature } from '../features/inventory/ShipmentCreateFeatu
 export function InventoryShipmentCreatePage() {
   const [searchParams] = useSearchParams()
   const cargoType = searchParams.get('cargo') === 'defect' ? 'defect' : 'good'
-  return <ShipmentCreateFeature cargoType={cargoType} />
+  const taskKind = searchParams.get('task') === 'putaway' ? 'putaway' : 'packing'
+  return <ShipmentCreateFeature cargoType={cargoType} taskKind={taskKind} />
 }

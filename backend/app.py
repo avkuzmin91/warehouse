@@ -44,6 +44,7 @@ from modules.expenses.router import router as expenses_router
 from modules.extra_income.router import router as extra_income_router
 from modules.timesheet.router import router as timesheet_router
 from modules.box_pricing.router import router as box_pricing_router
+from modules.containers.router import router as containers_router
 from modules.locations.router import router as locations_router
 from modules.logistics.router import router as logistics_router
 from modules.marketplaces.router import router as marketplaces_router
@@ -1110,6 +1111,7 @@ app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(dictionaries_router)
 app.include_router(locations_router)
+app.include_router(containers_router)
 app.include_router(inventory_router)
 app.include_router(products_router)
 app.include_router(pricing_router)

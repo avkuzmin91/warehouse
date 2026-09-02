@@ -19,6 +19,7 @@ const OPS_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
   { to: '/inventory/receipts', icon: 'dolly', label: 'Поступления' },
   { to: '/inventory/packing', icon: 'box', label: 'Упаковка' },
+  { to: '/inventory/boxes', icon: 'archive', label: 'Короба' },
   { to: '/inventory/dispatches', icon: 'forklift', label: 'Отгрузки' },
   { to: '/logistics/trips', icon: 'truckIn', label: 'Логистика' },
   { to: '/inventory/balances', icon: 'boxes', label: 'Остатки' },
@@ -49,6 +50,7 @@ const TIMESHEET_NAV: NavItem[] = [
 const SHIFT_SUPERVISOR_NAV: NavItem[] = [
   { to: '/home', icon: 'home', label: 'Главная' },
   { to: '/inventory/packing', icon: 'box', label: 'Упаковка' },
+  { to: '/inventory/boxes', icon: 'archive', label: 'Короба' },
 ]
 
 // Аналитика расходов включает ЗП и аренду (admin-only данные) и гейтится по

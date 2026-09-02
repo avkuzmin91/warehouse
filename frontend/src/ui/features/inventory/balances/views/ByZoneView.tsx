@@ -44,6 +44,7 @@ const OP_TONE: Record<InvOpStatus, BadgeTone> = {
   storage: 'accent',
   packing: 'info',
   packed:  'info',
+  boxed:   'warning',
   ready:   'success',
 }
 

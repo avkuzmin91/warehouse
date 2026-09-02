@@ -3,7 +3,7 @@ import { request } from './http'
 // --- Types ---
 
 /** Операционный статус запаса: что товар делает. */
-export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'ready'
+export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'boxed' | 'ready'
 /** Качество запаса. «Не проверен» существует только внутри приёмки. */
 export type InvQuality = 'good' | 'defect'
 
@@ -11,6 +11,7 @@ export const INV_OP_LABELS: Record<InvOpStatus, string> = {
   storage: 'На хранении',
   packing: 'На упаковке',
   packed:  'Упакован',
+  boxed:   'Собран в короб',
   ready:   'Готов к отгрузке',
 }
 
@@ -63,6 +64,8 @@ export type BalanceItem = {
   packing_defect: number
   packed_good: number
   packed_defect: number
+  /** Собран в короб (задача размещения): на столе, к отгрузке НЕ доступен. */
+  boxed_good: number
   ready_good: number
   ready_defect: number
   total: number
@@ -121,6 +124,8 @@ export type BalanceSummary = {
   packing_defect: number
   packed_good: number
   packed_defect: number
+  /** Собран в короб (задача размещения): на столе, к отгрузке НЕ доступен. */
+  boxed_good: number
   ready_good: number
   ready_defect: number
   total: number
@@ -164,6 +169,8 @@ export type BalanceGroupItem = {
   packing_defect: number
   packed_good: number
   packed_defect: number
+  /** Собран в короб (задача размещения): на столе, к отгрузке НЕ доступен. */
+  boxed_good: number
   ready_good: number
   ready_defect: number
   total: number

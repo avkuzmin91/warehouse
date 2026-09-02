@@ -7,10 +7,19 @@ export type ShipmentStatus =
   | 'on_packing'
   | 'relocating'
   | 'packed'
+  | 'placed'
   | 'completed_no_goods'
   | 'cancelled'
 
 export type ShipmentPlacement = { kind: 'good' | 'defect'; zone_id: string | null; zone_name: string | null; qty: number }
+
+/** Тип задачи склада: упаковка под отгрузку или размещение по ячейкам. */
+export type ShipmentTaskKind = 'packing' | 'putaway'
+
+export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
+  packing: 'Упаковка под отгрузку',
+  putaway: 'Размещение по ячейкам',
+}
 
 export type ShipmentLineFile = {
   id: string
@@ -40,6 +49,9 @@ export type ShipmentLine = {
   // частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
   packed_pending_good: number
   packed_pending_defect: number
+  // Задача размещения: лежит в коробах на столе / уже уехало в ячейки.
+  boxed_qty: number
+  placed_qty: number
   available_for_pack: number
   store_id: string | null
   store_name: string | null
@@ -61,6 +73,7 @@ export type ShipmentDetail = {
   id: string
   doc_number: string
   cargo_type: 'good' | 'defect'
+  task_kind: ShipmentTaskKind
   client_id: string | null
   client_name: string | null
   destination: string | null
@@ -75,12 +88,15 @@ export type ShipmentDetail = {
   repack_reason: string | null
   repack_active: boolean
   lines: ShipmentLine[]
+  /** Короба задачи размещения (у задачи упаковки список пуст). */
+  boxes: ShipmentBox[]
 }
 
 export type ShipmentListItem = {
   id: string
   doc_number: string
   cargo_type: 'good' | 'defect'
+  task_kind: ShipmentTaskKind
   client_name: string | null
   ship_date: string | null
   status: ShipmentStatus
@@ -451,6 +467,103 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
   packed: 'Упакован',
+  placed: 'Размещено',
   completed_no_goods: 'Завершён',
   cancelled: 'Аннулирован',
+}
+
+// --- Задача «Размещение по ячейкам»: короба ---
+
+export type ShipmentBoxStatus = 'open' | 'closed' | 'placed'
+
+export const SHIPMENT_BOX_STATUS_LABELS: Record<ShipmentBoxStatus, string> = {
+  open: 'Набирается',
+  closed: 'Закрыт',
+  placed: 'Размещён',
+}
+
+export type ShipmentBoxContentLine = {
+  product_id: string
+  product_name: string | null
+  product_sku: string | null
+  color_name: string | null
+  size_name: string | null
+  qty: number
+}
+
+export type ShipmentBox = {
+  id: string
+  doc_number: string
+  status: ShipmentBoxStatus
+  zone_id: string | null
+  zone_name: string | null
+  items_qty: number
+  contents: ShipmentBoxContentLine[]
+  created_at: string
+  closed_at: string | null
+  placed_at: string | null
+}
+
+export function getShipmentBoxes(docId: string, signal?: AbortSignal) {
+  return request<{ items: ShipmentBox[] }>(`/shipments/${docId}/boxes`, { signal })
+}
+
+/** Скан этикетки короба: взять свободный короб в задачу (или открыть свой). */
+export function takeShipmentBox(docId: string, code: string, requestId: string) {
+  return request<ShipmentBox>(`/shipments/${docId}/boxes`, {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+/** Скан товара в короб (только по ШК — ручного выбора товара нет). */
+export function addShipmentBoxItem(
+  docId: string,
+  boxId: string,
+  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
+  requestId: string,
+) {
+  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+export function undoShipmentBoxItem(docId: string, boxId: string, packEntryId: string, requestId: string) {
+  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items/undo`, {
+    method: 'POST',
+    body: JSON.stringify({ pack_entry_id: packEntryId }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+export function closeShipmentBox(docId: string, boxId: string, requestId: string) {
+  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/close`, {
+    method: 'POST',
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+export function reopenShipmentBox(docId: string, boxId: string) {
+  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/reopen`, { method: 'POST' })
+}
+
+/** Скан ячейки: короб уехал на стеллаж, товар становится доступен. */
+export function placeShipmentBox(docId: string, boxId: string, zoneId: string, requestId: string) {
+  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/place`, {
+    method: 'POST',
+    body: JSON.stringify({ zone_id: zoneId }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+/** Закрытие задачи размещения: все короба должны быть разложены по ячейкам. */
+export function finishPutaway(docId: string, defectZoneId: string | null, requestId: string) {
+  return request<{ message: string }>(`/shipments/${docId}/finish-putaway`, {
+    method: 'POST',
+    body: JSON.stringify({ defect_zone_id: defectZoneId }),
+    headers: requestIdHeaders(requestId),
+  })
 }

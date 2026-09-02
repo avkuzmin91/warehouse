@@ -3,7 +3,8 @@ import {
   SHIPMENT_STATUS_LABELS,
   SHIPMENT_STEP_DONE_LABELS,
 } from '../../../../../api/shipmentsApi'
-import type { ShipmentCargoType, ShipmentOp, ShipmentStatus } from '../../../../../api/shipmentsApi'
+import { SHIPMENT_PUTAWAY_STATUS_ORDER } from '../../../../../api/shipmentsApi'
+import type { ShipmentCargoType, ShipmentOp, ShipmentStatus, ShipmentTaskKind } from '../../../../../api/shipmentsApi'
 import type { ProcessStep } from '../../../shared/process/ProcessRail'
 import type { ProcessRole } from '../../../shared/process/RoleChip'
 import { MOSCOW_TZ, parseMoscow } from '../../../../../utils/format'
@@ -16,6 +17,7 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },
   packed:        { role: null,         icon: 'check',    sub: 'товар упакован и разложен' },
+  placed:        { role: null,         icon: 'check',    sub: 'товар разложен по ячейкам' },
   completed_no_goods: { role: null,    icon: 'check',    sub: 'завершено без отгрузки: весь товар брак' },
   cancelled:     { role: null,         icon: 'x',        sub: '' },
 }
@@ -51,6 +53,14 @@ function fmt(s: string): string {
   return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
+// Задача размещения: короба собираются на столе и уезжают в ячейки — отгрузки нет.
+const SH_META_PUTAWAY: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle?: string }>> = {
+  draft:      { role: 'manager',   icon: 'edit',     sub: 'состав и план размещения' },
+  packing:    { role: 'warehouse', icon: 'forklift', sub: 'передача товара на стол' },
+  on_packing: { role: 'warehouse', icon: 'box',      sub: 'сборка коробов и раскладка по ячейкам', doneTitle: 'Разложено' },
+  placed:     { role: null,        icon: 'check',    sub: 'товар разложен по ячейкам' },
+}
+
 // Брак-отгрузка минует упаковку: укороченный маршрут со своими подсказками.
 const DEFECT_STATUS_ORDER: ShipmentStatus[] = ['draft', 'relocating', 'packed']
 const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle?: string }>> = {
@@ -60,8 +70,16 @@ const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null;
 }
 
 /** Шаги маршрута отгрузки для ProcessRail. */
-export function buildShipSteps(status: ShipmentStatus, ops: ShipmentOp[] = [], cargoType: ShipmentCargoType = 'good'): ProcessStep[] {
-  const order = cargoType === 'defect' ? DEFECT_STATUS_ORDER : SHIPMENT_STATUS_ORDER
+export function buildShipSteps(
+  status: ShipmentStatus,
+  ops: ShipmentOp[] = [],
+  cargoType: ShipmentCargoType = 'good',
+  taskKind: ShipmentTaskKind = 'packing',
+): ProcessStep[] {
+  const isPutaway = taskKind === 'putaway'
+  const order = isPutaway
+    ? SHIPMENT_PUTAWAY_STATUS_ORDER
+    : cargoType === 'defect' ? DEFECT_STATUS_ORDER : SHIPMENT_STATUS_ORDER
   // «Завершено без отгрузки» (весь товар брак) — терминал: маршрут пройден целиком.
   const isShipped = status === 'completed_no_goods'
   const isCancelled = status === 'cancelled'
@@ -80,8 +98,9 @@ export function buildShipSteps(status: ShipmentStatus, ops: ShipmentOp[] = [], c
       : isCancelled
         ? (i <= reachedIdx ? 'done' : 'future')
         : i < curIdx ? 'done' : i === curIdx ? 'active' : 'future'
-    const m = (cargoType === 'defect' ? SH_META_DEFECT[s] : undefined) ?? SH_META[s]
-    const doneTitle = (cargoType === 'defect' ? SH_META_DEFECT[s]?.doneTitle : undefined) ?? SHIPMENT_STEP_DONE_LABELS[s]
+    const override = isPutaway ? SH_META_PUTAWAY[s] : cargoType === 'defect' ? SH_META_DEFECT[s] : undefined
+    const m = override ?? SH_META[s]
+    const doneTitle = override?.doneTitle ?? SHIPMENT_STEP_DONE_LABELS[s]
     return {
       key: s,
       title: state === 'done' ? doneTitle : SHIPMENT_STATUS_LABELS[s],

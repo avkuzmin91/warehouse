@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
+    INV_OP_BOXED,
     INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
@@ -32,6 +33,8 @@ from config import (
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
+    SHIPMENT_TASK_PACKING,
+    SHIPMENT_TASK_PUTAWAY,
     SHIPMENT_TERMINAL_STATUSES,
     SHIPMENT_STATUSES_ALL,
     UPLOADS_DIR,
@@ -44,10 +47,18 @@ from modules.auth.service import (
     get_current_manager,
     get_current_packer,
     get_current_shipment_viewer,
+    get_current_stock_operator,
     get_current_warehouse,
 )
 from modules.shipments.schemas import (
     DuplicateCheckResponse,
+    ShipmentBoxesResponse,
+    ShipmentBoxItem,
+    ShipmentBoxItemPayload,
+    ShipmentBoxItemUndoPayload,
+    ShipmentBoxPlacePayload,
+    ShipmentBoxTakePayload,
+    ShipmentFinishPutawayPayload,
     LineFileFromProduct,
     ShipmentLineFileBindBarcode,
     ShipmentDetailResponse,
@@ -84,32 +95,43 @@ from modules.shipments.service import (
     _check_duplicate_lines,
     _check_lines_covered_by_stock,
     _doc_packed_qty,
+    add_box_item,
     advance_shipment,
+    close_box,
+    finish_putaway,
     classify_barcodes_for_variant,
     decode_line_file_barcodes,
     find_duplicate_shipments,
     resolve_line_variant_id,
     finish_defect_relocation,
     finish_relocation,
+    line_boxed_qty,
     line_on_packing_qty,
     line_packed_breakdown,
+    line_placed_qty,
     list_packing_entries,
+    list_task_boxes,
     list_productivity_entries,
     move_line_to_packing,
     move_lines_to_packing,
     move_packing_date,
     next_doc_number,
     normalize_cargo_type,
+    normalize_task_kind,
     packing_day_detail,
+    place_box,
     packing_productivity,
     record_packing,
     relocate_packed,
     return_defect_to_storage,
     return_line_from_packing,
     return_packing_pool_to_storage,
+    reopen_box,
     return_to_packing,
     reverse_packing_entry,
     start_repack,
+    take_box,
+    undo_box_item,
 )
 from modules.products.service import assign_product_sku_if_missing
 from modules.push.service import notify_packing_correction
@@ -122,6 +144,9 @@ _get_manager = get_current_manager
 _get_viewer = get_current_shipment_viewer
 _get_packer = get_current_packer
 _get_warehouse = get_current_warehouse
+# Сборку коробов и размещение делают кладовщик и начальник смены — то же множество
+# ролей, что у ручных операций с остатками.
+_get_putaway = get_current_stock_operator
 
 _ALLOWED_LINE_FILE_EXTS = {".pdf", ".png", ".jpg", ".jpeg"}
 _FILE_EDIT_ROLES = {"admin", "manager"}
@@ -208,6 +233,7 @@ def create_shipment(
     now = _now()
     doc_id = str(uuid4())
     cargo_type = normalize_cargo_type(body.cargo_type)
+    task_kind = normalize_task_kind(body.task_kind)
 
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_create")
@@ -216,9 +242,9 @@ def create_shipment(
         doc_num = next_doc_number(conn)
         conn.execute(
             """INSERT INTO shipment_docs
-               (id,doc_number,cargo_type,client_id,client_name,destination,carrier,logistics_cost,ship_date,comment,status,created_at,created_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (doc_id, doc_num, cargo_type, body.client_id, body.client_name,
+               (id,doc_number,cargo_type,task_kind,client_id,client_name,destination,carrier,logistics_cost,ship_date,comment,status,created_at,created_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (doc_id, doc_num, cargo_type, task_kind, body.client_id, body.client_name,
              body.destination, body.carrier, body.logistics_cost,
              validate_business_date(body.ship_date, field_ru="Дата отгрузки"),
              (body.comment or "").strip() or None,
@@ -331,6 +357,7 @@ def list_shipments(
     date_to:   str | None = Query(None),
     overdue:   bool = Query(False),
     cargo_type: str | None = Query(None),
+    task_kind: str | None = Query(None),
     user=Depends(_get_viewer),
 ):
     show_costs = can_view_costs(user)
@@ -341,6 +368,8 @@ def list_shipments(
         status_filter_applied = False
         if cargo_type in (SHIPMENT_CARGO_GOOD, SHIPMENT_CARGO_DEFECT):
             conds.append(f"COALESCE(d.cargo_type, '{SHIPMENT_CARGO_GOOD}') = ?"); params.append(cargo_type)
+        if task_kind in (SHIPMENT_TASK_PACKING, SHIPMENT_TASK_PUTAWAY):
+            conds.append(f"COALESCE(d.task_kind, '{SHIPMENT_TASK_PACKING}') = ?"); params.append(task_kind)
         if status:
             # Поддерживаем как одно значение, так и CSV ("shipped,cancelled" — вкладка «Завершённые»).
             requested = [s.strip() for s in status.split(",") if s.strip()]
@@ -431,8 +460,8 @@ def list_shipments(
                         -- брак возвращается на хранение и в факт выполнения плана не входит.
                         COALESCE((
                             SELECT SUM(CASE
-                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
-                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') THEN zr.qty
+                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                                 ELSE 0 END)
                             FROM zone_relocations zr
                             JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
@@ -467,6 +496,7 @@ def list_shipments(
             id=str(r["id"]),
             doc_number=str(r["doc_number"]),
             cargo_type=normalize_cargo_type(r.get("cargo_type")),
+            task_kind=normalize_task_kind(r.get("task_kind")),
             client_id=r["client_id"],
             client_name=r["client_name"],
             destination=r["destination"],
@@ -581,8 +611,8 @@ def list_shipment_lines(
                 for a in conn.execute(
                     f"""SELECT zr.shipment_line_id AS line_id,
                             SUM(CASE
-                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
-                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') THEN zr.qty
+                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                                 ELSE 0 END) AS packed_good
                         FROM zone_relocations zr
                         WHERE zr.shipment_line_id IN ({ph})
@@ -654,8 +684,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             f"""SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}')   AND to_quality='{INV_Q_GOOD}'   AND COALESCE(from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN qty
-                                    WHEN from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND from_quality='{INV_Q_GOOD}' AND to_op='{INV_OP_PACKING}'               THEN -qty ELSE 0 END), 0) AS good,
+                  COALESCE(SUM(CASE WHEN to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}')   AND to_quality='{INV_Q_GOOD}'   AND COALESCE(from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') THEN qty
+                                    WHEN from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND from_quality='{INV_Q_GOOD}' AND to_op='{INV_OP_PACKING}'               THEN -qty ELSE 0 END), 0) AS good,
                   COALESCE(SUM(CASE WHEN to_quality='{INV_Q_DEFECT}'   AND COALESCE(from_quality,'')<>'{INV_Q_DEFECT}' THEN qty
                                     WHEN from_quality='{INV_Q_DEFECT}' AND COALESCE(to_quality,'')<>'{INV_Q_DEFECT}'   THEN -qty ELSE 0 END), 0) AS defect,
                   -- «Ещё не размещено» = чистый остаток корзины packed (ждёт раскладки):
@@ -722,6 +752,10 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             str(l["id"]): line_on_packing_qty(conn, str(l["id"]))
             for l in lines_rows
         }
+        is_putaway = normalize_task_kind(row.get("task_kind")) == SHIPMENT_TASK_PUTAWAY
+        boxed_by_line = {str(l["id"]): line_boxed_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
+        placed_by_line = {str(l["id"]): line_placed_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
+        boxes = [ShipmentBoxItem(**b) for b in list_task_boxes(conn, doc_id)] if is_putaway else []
 
         # Статус сохранённых кодов файла считается при каждом чтении: «непривязанный»
         # ШК остаётся видимым в деталке, пока его не привязали (или не привязал кто-то ещё).
@@ -770,6 +804,8 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             packed_defect=packed_by_line.get(str(l["id"]), (0, 0))[1],
             packed_pending_good=pending_by_line.get(str(l["id"]), (0, 0))[0],
             packed_pending_defect=pending_by_line.get(str(l["id"]), (0, 0))[1],
+            boxed_qty=boxed_by_line.get(str(l["id"]), 0),
+            placed_qty=placed_by_line.get(str(l["id"]), 0),
             available_for_pack=available_for_pack.get(str(l["id"]), 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
@@ -795,6 +831,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         id=str(row["id"]),
         doc_number=str(row["doc_number"]),
         cargo_type=normalize_cargo_type(row.get("cargo_type")),
+        task_kind=normalize_task_kind(row.get("task_kind")),
         client_id=row["client_id"],
         client_name=row["client_name"],
         destination=row["destination"],
@@ -824,6 +861,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         updated_at=row["updated_at"],
         lines=lines,
         ops=ops,
+        boxes=boxes,
         sku_count=len(lines),
         total_qty=sum(l.qty for l in lines),
     )
@@ -1727,3 +1765,141 @@ def delete_shipment_doc(doc_id: str, user=Depends(_get_manager)):
         )
         conn.commit()
     return {"message": "ok"}
+
+
+# ── Задача «Размещение по ячейкам»: короба на ТСД ─────────────────────────────
+
+@router.get("/shipments/{doc_id}/boxes", response_model=ShipmentBoxesResponse)
+def list_shipment_boxes(doc_id: str, user=Depends(_get_viewer)):
+    _ = user
+    with get_connection() as conn:
+        return ShipmentBoxesResponse(items=[ShipmentBoxItem(**b) for b in list_task_boxes(conn, doc_id)])
+
+
+@router.post("/shipments/{doc_id}/boxes", response_model=ShipmentBoxItem)
+def take_shipment_box(
+    doc_id: str,
+    body: ShipmentBoxTakePayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Скан этикетки короба: берём свободный короб в задачу (или открываем свой)."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_take")
+        if not proceed:
+            return stored
+        box = take_box(conn, doc_id, body.code, uid)
+        finish_idempotent(conn, x_request_id, box)
+        conn.commit()
+    return box
+
+
+@router.post("/shipments/{doc_id}/boxes/{box_id}/items", response_model=ShipmentBoxItem)
+def add_shipment_box_item(
+    doc_id: str,
+    box_id: str,
+    body: ShipmentBoxItemPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Скан товара в короб."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_item")
+        if not proceed:
+            return stored
+        box = add_box_item(
+            conn, doc_id, box_id,
+            barcode=body.barcode, qty=body.qty, quality=body.quality, user_id=uid,
+        )
+        finish_idempotent(conn, x_request_id, box)
+        conn.commit()
+    return box
+
+
+@router.post("/shipments/{doc_id}/boxes/{box_id}/items/undo", response_model=ShipmentBoxItem)
+def undo_shipment_box_item(
+    doc_id: str,
+    box_id: str,
+    body: ShipmentBoxItemUndoPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Отмена ошибочного скана: товар возвращается из короба на стол."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_item_undo")
+        if not proceed:
+            return stored
+        box = undo_box_item(conn, doc_id, box_id, body.pack_entry_id, uid)
+        finish_idempotent(conn, x_request_id, box)
+        conn.commit()
+    return box
+
+
+@router.post("/shipments/{doc_id}/boxes/{box_id}/close", response_model=ShipmentBoxItem)
+def close_shipment_box(
+    doc_id: str,
+    box_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_close")
+        if not proceed:
+            return stored
+        box = close_box(conn, doc_id, box_id, uid)
+        finish_idempotent(conn, x_request_id, box)
+        conn.commit()
+    return box
+
+
+@router.post("/shipments/{doc_id}/boxes/{box_id}/reopen", response_model=ShipmentBoxItem)
+def reopen_shipment_box(doc_id: str, box_id: str, user=Depends(_get_putaway)):
+    uid = str(user["id"])
+    with get_connection() as conn:
+        box = reopen_box(conn, doc_id, box_id, uid)
+        conn.commit()
+    return box
+
+
+@router.post("/shipments/{doc_id}/boxes/{box_id}/place", response_model=ShipmentBoxItem)
+def place_shipment_box(
+    doc_id: str,
+    box_id: str,
+    body: ShipmentBoxPlacePayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Скан ячейки: короб уехал на стеллаж, товар становится доступен."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_place")
+        if not proceed:
+            return stored
+        box = place_box(conn, doc_id, box_id, body.zone_id, uid)
+        finish_idempotent(conn, x_request_id, box)
+        conn.commit()
+    return box
+
+
+@router.post("/shipments/{doc_id}/finish-putaway")
+def finish_shipment_putaway(
+    doc_id: str,
+    body: ShipmentFinishPutawayPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Закрытие задачи размещения: все короба разложены по ячейкам."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_finish_putaway")
+        if not proceed:
+            return stored
+        status = finish_putaway(conn, doc_id, body.defect_zone_id, uid)
+        result = {"message": status}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result

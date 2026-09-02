@@ -12,7 +12,7 @@ const STATUS_TONE: Record<string, string> = {
 }
 
 export function ShipmentsListScreen() {
-  const { openShipment } = useNav()
+  const { openShipment, openPutawayDoc } = useNav()
   const [items, setItems] = useState<ShipmentListItem[]>([])
   const [truncated, setTruncated] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -79,7 +79,11 @@ export function ShipmentsListScreen() {
               const urgent = s.priority_rank != null && s.priority_rank > 0
               const tone = STATUS_TONE[s.status] ?? ''
               return (
-                <button key={s.id} className="tile" onClick={() => openShipment(s.id)}>
+                <button
+                  key={s.id}
+                  className="tile"
+                  onClick={() => (s.task_kind === 'putaway' ? openPutawayDoc(s.id) : openShipment(s.id))}
+                >
                   <div className={`tile-ico${s.cargo_type === 'defect' ? ' gray' : ''}`}>
                     <Icon name={s.cargo_type === 'defect' ? 'refresh' : 'box'} size={21} />
                   </div>
