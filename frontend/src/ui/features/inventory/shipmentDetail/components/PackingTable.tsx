@@ -41,7 +41,7 @@ export function PackingTable({
           <th style={{ width: 100, textAlign: 'right' }}>План</th>
           {!isResult && <th style={{ width: 110, textAlign: 'right' }}>На упаковке</th>}
           {showGoodDefect && <th style={{ width: 120, textAlign: 'right' }}>Годный / Брак</th>}
-          {!isResult && <th style={{ width: 300 }}>{mode === 'packing' ? 'Действия упаковки' : 'Передача'}</th>}
+          {!isResult && <th style={{ width: 340, whiteSpace: 'nowrap' }}>{mode === 'packing' ? 'Действия упаковки' : 'Передача'}</th>}
         </tr>
       </thead>
       <tbody>
@@ -69,7 +69,7 @@ export function PackingTable({
               )}
               {!isResult && (
                 <Td>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
                     {mode === 'packing' && canPack && (
                       <button className="btn primary sm" disabled={busy} title="Внести годный/брак с датой упаковки" onClick={() => onOpenPacking(line)}>
                         <Icon name="check" size={12} />Внести упаковку

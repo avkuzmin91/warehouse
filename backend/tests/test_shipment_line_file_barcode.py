@@ -28,13 +28,16 @@ def _barcode_png(code: str) -> bytes:
     return buf.getvalue()
 
 
-def _barcode_pdf(code: str) -> bytes:
+def _barcode_pdf(code: str, resolution: int | None = None) -> bytes:
+    """PDF с Code-128. resolution задаёт плотность печати: чем выше, тем мельче
+    этикетка на странице (700 dpi — размер, на котором базовый масштаб рендера
+    уже не читает штрихи)."""
     bc = zxingcpp.create_barcode(code, zxingcpp.BarcodeFormat.Code128)
     img = zxingcpp.write_barcode_to_image(bc, scale=4)
     h, w = img.shape[0], img.shape[1]
     pil = PIL_Image.frombuffer("L", (w, h), img, "raw", "L", 0, 1).convert("RGB")
     buf = io.BytesIO()
-    pil.save(buf, "PDF")
+    pil.save(buf, "PDF", **({"resolution": resolution} if resolution else {}))
     return buf.getvalue()
 
 
@@ -193,6 +196,16 @@ def test_barcode_recognized_in_pdf(admin_client, shipment_with_line):
     assert r.json()["barcodes"] == [
         {"code": code, "status": "unknown", "other_product_name": None, "other_variant_label": None}
     ]
+
+
+def test_small_label_pdf_recognized(admin_client, shipment_with_line):
+    """Мелкая этикетка маркетплейса: на базовом масштабе рендера штрихи сливаются,
+    распознавание должно достать код повторным проходом крупнее."""
+    code = f"BCF-{uuid.uuid4().hex[:10].upper()}"
+    r = _upload(admin_client, shipment_with_line["doc_id"], shipment_with_line["line_id"],
+                "мелкая.pdf", _barcode_pdf(code, resolution=700), "application/pdf")
+    assert r.status_code == 200, r.text
+    assert [b["code"] for b in r.json()["barcodes"]] == [code]
 
 
 def test_unreadable_file_uploads_without_barcodes(admin_client, shipment_with_line):

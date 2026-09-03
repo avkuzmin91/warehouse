@@ -25,6 +25,13 @@ function fileBarcodeCaption(f: ShipmentLineFile): string | undefined {
     .join(' · ')
 }
 
+// Конфликтная подпись — красная: чужая этикетка в составе иначе теряется в мелком тексте.
+function fileBarcodeTone(f: ShipmentLineFile): 'danger' | undefined {
+  return (f.barcode_details ?? []).some((b) => b.status === 'other_variant' || b.status === 'other_product')
+    ? 'danger'
+    : undefined
+}
+
 export function StoreCell({
   value,
   stores,
@@ -187,6 +194,7 @@ export function CompositionTable({
                     mimeType: f.mime_type,
                     href: resolvePublicUploadSrc(f.url),
                     caption: fileBarcodeCaption(f),
+                    captionTone: fileBarcodeTone(f),
                   }))}
                   canEdit={canAttachFiles}
                   uploading={uploadingLines[line.id] ?? false}

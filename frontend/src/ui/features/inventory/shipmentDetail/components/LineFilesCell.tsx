@@ -14,6 +14,8 @@ export type LineFileEntry = {
   href?: string
   /** Подпись под файлом — например, распознанный на нём ШК. */
   caption?: string
+  /** Тон подписи: `danger` — красная (конфликтный ШК на этикетке). */
+  captionTone?: 'default' | 'danger'
 }
 
 export function LineFilesCell({
@@ -297,7 +299,8 @@ export function LineFilesCell({
           className="mono"
           title={single.caption}
           style={{
-            fontSize: 10.5, lineHeight: '12px', color: 'var(--c-text-subtle)',
+            fontSize: 10.5, lineHeight: '12px',
+            color: single.captionTone === 'danger' ? 'var(--c-danger)' : 'var(--c-text-subtle)',
             maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}
         >
@@ -338,7 +341,8 @@ export function LineFilesCell({
                     </span>
                     {entry.caption && (
                       <span className="mono" style={{
-                        fontSize: 10.5, color: 'var(--c-text-subtle)',
+                        fontSize: 10.5,
+                        color: entry.captionTone === 'danger' ? 'var(--c-danger)' : 'var(--c-text-subtle)',
                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       }}>
                         {entry.caption}
