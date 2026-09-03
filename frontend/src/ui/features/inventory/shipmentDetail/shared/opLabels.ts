@@ -14,6 +14,13 @@ export const OP_LABELS: Record<string, string> = {
   cancel: 'Аннулирован',
   pack: 'Упаковка',
   pack_correction: 'Коррекция упаковки',
+  collected: 'Сборка завершена',
+  box_take: 'Короб взят в работу',
+  box_close: 'Короб закрыт',
+  box_place: 'Короб размещён',
+  box_release: 'Короб освобождён',
+  item_place: 'Сборка мимо короба',
+  relocate: 'Разложено по местам',
 }
 
 export const OP_ICONS: Record<string, string> = {
@@ -28,6 +35,13 @@ export const OP_ICONS: Record<string, string> = {
   cancel: 'x',
   pack: 'boxOut',
   pack_correction: 'boxOut',
+  collected: 'check',
+  box_take: 'box',
+  box_close: 'box',
+  box_place: 'archive',
+  box_release: 'arrowLeft',
+  item_place: 'boxOut',
+  relocate: 'archive',
 }
 
 export const OP_TONES: Record<string, string> = {
@@ -42,6 +56,13 @@ export const OP_TONES: Record<string, string> = {
   cancel: 'danger',
   pack: 'accent',
   pack_correction: 'warning',
+  collected: 'success',
+  box_take: '',
+  box_close: '',
+  box_place: 'accent',
+  box_release: 'warning',
+  item_place: 'accent',
+  relocate: 'accent',
 }
 
 /**

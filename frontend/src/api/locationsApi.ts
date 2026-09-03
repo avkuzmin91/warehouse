@@ -51,6 +51,8 @@ export type LocationBulkPayload = {
 
 export type LocationBulkResult = { created: number; skipped: number }
 
+export type LocationBulkDeleteResult = { deleted: number; skipped: number }
+
 export type LocationLookupResponse = { found: boolean; location: LocationItem | null }
 
 export type LocationLabel = {
@@ -102,6 +104,13 @@ export function getLocationLabels(
   if (params.rack) sp.set('rack', params.rack)
   const q = sp.toString()
   return request<LocationLabelsResponse>(`/locations/labels${q ? `?${q}` : ''}`, { signal })
+}
+
+export function bulkDeleteLocations(ids: string[]) {
+  return request<LocationBulkDeleteResult>('/locations/bulk-delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
 }
 
 export function deleteLocation(id: string) {

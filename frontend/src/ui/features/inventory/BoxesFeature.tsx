@@ -211,6 +211,13 @@ export function BoxesFeature() {
             options={STATUS_OPTIONS}
             onChange={(v) => setMany({ status: v, page: '' })}
           />
+          {/* Закрытые короба ждут развозки по местам — операционная очередь кладовщика. */}
+          <button
+            className={`btn sm${status === 'closed' ? ' primary' : ''}`}
+            onClick={() => setMany({ status: status === 'closed' ? '' : 'closed', page: '' })}
+          >
+            Ждут размещения
+          </button>
           {(search || status) && (
             <button className="btn ghost sm" onClick={() => { setSearchInput(''); setMany({ search: '', status: '', page: '' }) }}>
               <Icon name="x" size={12} />Сбросить

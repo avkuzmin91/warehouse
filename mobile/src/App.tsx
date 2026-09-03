@@ -21,6 +21,8 @@ import { DispatchPrepareScreen } from './screens/DispatchPrepareScreen'
 import { ShiftPackingListScreen } from './screens/ShiftPackingListScreen'
 import { ShiftPackingDetailScreen } from './screens/ShiftPackingDetailScreen'
 import { PutawayTaskScreen } from './screens/PutawayTaskScreen'
+import { PlaceScreen } from './screens/PlaceScreen'
+import { ScanBoxScreen } from './screens/ScanBoxScreen'
 import { PutawayBoxScreen } from './screens/PutawayBoxScreen'
 import { ReceiptsListScreen } from './screens/manager/ReceiptsListScreen'
 import { ReceiptFormScreen } from './screens/manager/ReceiptFormScreen'
@@ -97,6 +99,8 @@ function Main() {
     case 'packDoc':   screen = <ShiftPackingDetailScreen shipmentId={route.id} focus={route.focus} />; break
     case 'putawayDoc': screen = <PutawayTaskScreen shipmentId={route.id} />; break
     case 'putawayBox': screen = <PutawayBoxScreen shipmentId={route.id} boxId={route.boxId} />; break
+    case 'place': screen = <PlaceScreen />; break
+    case 'scanBox': screen = <ScanBoxScreen containerId={route.containerId} />; break
   }
   return (
     <>

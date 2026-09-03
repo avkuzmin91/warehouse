@@ -15,15 +15,18 @@ import { fmtDate, moscowTodayYmd } from '../utils/format'
 
 // Активные стадии упаковки, видимые начальнику смены. Внесение годного/брака
 // доступно только на on_packing — остальные показаны для контекста (read-only).
-const ACTIVE_STATUSES: ShipmentStatus[] = ['packing', 'on_packing', 'relocating']
+// `collected` — задача размещения, где сборка закончена и короба ждут развозки:
+// работа по ней ещё есть, поэтому из списка она не пропадает.
+const ACTIVE_STATUSES: ShipmentStatus[] = ['packing', 'on_packing', 'relocating', 'collected']
 
 // Сортировка: сначала «На упаковке» (действие начальника смены), затем остальные.
-const STATUS_ORDER: Record<string, number> = { on_packing: 0, packing: 1, relocating: 2 }
+const STATUS_ORDER: Record<string, number> = { on_packing: 0, packing: 1, relocating: 2, collected: 3 }
 
 const STATUS_TONE: Record<string, string> = {
   packing: 'info',
   on_packing: 'warning',
   relocating: 'info',
+  collected: 'info',
 }
 
 export function ShiftPackingListScreen() {

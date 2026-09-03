@@ -10,7 +10,6 @@ from config import (
     CONTAINER_OP_CLOSE,
     CONTAINER_OP_ITEM_ADD,
     CONTAINER_OP_ITEM_REMOVE,
-    CONTAINER_OP_PLACE,
     CONTAINER_OP_RELEASE,
     CONTAINER_OP_REOPEN,
     CONTAINER_OP_TAKE,
@@ -33,6 +32,7 @@ from config import (
     SHIPMENT_OP_BOX_PLACE,
     SHIPMENT_OP_BOX_RELEASE,
     SHIPMENT_OP_BOX_TAKE,
+    SHIPMENT_OP_COLLECTED,
     SHIPMENT_OP_ITEM_PLACE,
     SHIPMENT_OP_MOVE_RETURN,
     SHIPMENT_OP_PACK,
@@ -46,6 +46,7 @@ from config import (
     SHIPMENT_REPACK_KINDS,
     SHIPMENT_REPACK_PAID,
     SHIPMENT_STATUS_CANCELLED,
+    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKED,
@@ -755,7 +756,6 @@ def record_packing(
     connection, doc_id: str, line_id: str,
     good_delta: int, defect_delta: int, packed_date: str, user_id: str,
     container_id: str | None = None,
-    place_zone: tuple[str, str] | None = None,
 ) -> dict:
     """QC при упаковке: вносит годный и/или брак одной записью с датой упаковки.
 
@@ -763,17 +763,10 @@ def record_packing(
     одного «Записать» получают общий pack_entry_id для группировки/отмены.
 
     Упаковка с ТСД (task_kind=putaway) вносится не разово числом, а поштучно: каждый
-    скан товара в короб — это и есть запись упаковки, поэтому годный уходит сразу в
-    корзину короба `boxed` с привязкой к контейнеру (к отгрузке он станет доступен
-    только после размещения короба в ячейке). Годный без короба в такой задаче не
-    принимается — иначе упакованное зависло бы мимо коробов. Брак в короб не кладётся:
-    он остаётся в `packed` и уезжает на хранение при закрытии задачи.
-
-    place_zone — крупногабарит, который в короб не влезает: тем же скана-движением
-    товар уносится в отсканированную ячейку вторым движением записи (packed → storage)
-    под общим pack_entry_id. Одной прямой записью packing → storage обойтись нельзя:
-    по `_PACKED_NET_SQL` она не была бы упаковкой вовсе — кладовщик остался бы без
-    объёма и заработка.
+    скан — это и есть запись упаковки. Короб в такой задаче просто тара: и годный, и
+    брак уходят в корзину `boxed` («Ждёт размещения») — в коробе (container_id) или
+    мимо него (габарит, брак). Место хранения этому товару назначает отдельный процесс
+    размещения, поэтому к отгрузке он станет доступен только после него.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
 
@@ -795,12 +788,7 @@ def record_packing(
         raise HTTPException(status_code=400, detail="Упаковку можно вносить только в статусе «На упаковке»")
 
     is_putaway = normalize_task_kind(doc_row["task_kind"]) == SHIPMENT_TASK_PUTAWAY
-    if is_putaway and good_delta > 0 and not container_id and not place_zone:
-        raise HTTPException(
-            status_code=400,
-            detail="Годный товар вносится сканом в короб на ТСД — отсканируйте короб",
-        )
-    good_to_op = INV_OP_BOXED if (is_putaway and container_id) else INV_OP_PACKED
+    pack_to_op = INV_OP_BOXED if is_putaway else INV_OP_PACKED
 
     # Задача на переупаковке: новые pack-записи штампуются её видом — free не попадает
     # в деньги производительности, paid тарифицируется клиенту при завершении задачи.
@@ -844,9 +832,10 @@ def record_packing(
 
     pack_entry_id = str(uuid4())
     label = line["product_sku"] or line["product_name"]
-    # И годный, и найденный брак уходят в «Упаковано» (packing,good → packed). Это ещё
-    # НЕ «Готов к отгрузке»: годное переведёт в ready только «Готово к рейсу»
-    # (finish_relocation), брак там же вернётся на хранение.
+    # И годный, и найденный брак уходят одной корзиной: в задаче упаковки — «Упаковано»
+    # (packed), в задаче размещения — «Ждёт размещения» (boxed). Это ещё НЕ «Готов к
+    # отгрузке»: годное переведёт в ready только «Готово к рейсу» (finish_relocation),
+    # брак там же вернётся на хранение; собранное уедет в место хранения размещением.
     # Пул «На упаковке» могли вручную переставить из зоны упаковки по ячейкам —
     # списываем из фактических мест (FIFO, зона упаковки первой). Упакованное
     # складывается в зоне упаковки.
@@ -854,8 +843,8 @@ def record_packing(
         connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
     )
     for kind, delta, to_op in (
-        (INV_Q_GOOD, good_delta, good_to_op),
-        (INV_Q_DEFECT, defect_delta, INV_OP_PACKED),
+        (INV_Q_GOOD, good_delta, pack_to_op),
+        (INV_Q_DEFECT, defect_delta, pack_to_op),
     ):
         if delta <= 0:
             continue
@@ -876,25 +865,10 @@ def record_packing(
                 qty=take, user_id=user_id, shipment_line_id=line_id,
                 to_container_id=container_id if to_op == INV_OP_BOXED else None,
                 comment=(
-                    f"Упаковка в короб ({kind_ru}): +{take} шт." if to_op == INV_OP_BOXED
+                    f"Упаковка в короб ({kind_ru}): +{take} шт." if container_id
+                    else f"Упаковка мимо короба ({kind_ru}): +{take} шт." if to_op == INV_OP_BOXED
                     else f"Упаковка ({kind_ru}): +{take} шт."
                 ),
-                packed_date=packed_date, pack_entry_id=pack_entry_id,
-                repack_kind=repack_kind, repack_price_kop=repack_price_kop,
-            )
-        if place_zone:
-            insert_inventory_move(
-                connection,
-                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                color_id=line["color_id"], color_name=line["color_name"],
-                size_id=line["size_id"], size_name=line["size_name"],
-                client_id=client_id, client_name=None,
-                from_op=to_op, to_op=INV_OP_STORAGE,
-                from_quality=kind, to_quality=kind,
-                from_zone_id=packing_id, from_zone_name=packing_name,
-                to_zone_id=place_zone[0], to_zone_name=place_zone[1],
-                qty=delta, user_id=user_id, shipment_line_id=line_id,
-                comment=f"Размещение без короба ({kind_ru}): {delta} шт → {place_zone[1]}",
                 packed_date=packed_date, pack_entry_id=pack_entry_id,
                 repack_kind=repack_kind, repack_price_kop=repack_price_kop,
             )
@@ -2522,7 +2496,11 @@ def _box_label(row) -> str:
 
 
 def line_boxed_qty(connection, line_id: str) -> int:
-    """Сколько по строке сейчас лежит в коробах на столе (нетто корзины boxed)."""
+    """Сколько по строке собрано и ждёт размещения (нетто корзины boxed).
+
+    Считает и короба, и россыпь мимо коробов: короб — просто тара, ось контейнера
+    на доступность товара не влияет.
+    """
     row = connection.execute(
         f"""SELECT
               COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' THEN qty ELSE 0 END), 0)
@@ -2533,41 +2511,44 @@ def line_boxed_qty(connection, line_id: str) -> int:
     return int(row["qty"] or 0)
 
 
-# Движение «разложено по заданию»: коробом (boxed → storage) либо крупногабарит
-# напрямую (packed → storage). pack_entry_id отличает прямое размещение от возврата
-# остатка на хранение при закрытии задачи — тот пишется без записи упаковки.
-_PLACED_IN_SQL = (
-    f"to_op = '{INV_OP_STORAGE}' AND to_quality = '{INV_Q_GOOD}' AND "
-    f"(from_op = '{INV_OP_BOXED}' OR (from_op = '{INV_OP_PACKED}' AND pack_entry_id IS NOT NULL))"
-)
-_PLACED_OUT_SQL = (
-    f"from_op = '{INV_OP_STORAGE}' AND from_quality = '{INV_Q_GOOD}' AND "
-    f"(to_op = '{INV_OP_BOXED}' OR (to_op = '{INV_OP_PACKED}' AND pack_entry_id IS NOT NULL))"
-)
-
-
-def line_placed_loose_qty(connection, line_id: str) -> int:
-    """Из размещённого — та часть, что уехала в ячейки без короба (крупногабарит).
-
-    Нужна ТСД: отменить можно только прямое размещение, короб двигается целиком.
-    """
+def line_boxed_defect_qty(connection, line_id: str) -> int:
+    """Из ждущего размещения — брак (для карточки задачи и ТСД)."""
     row = connection.execute(
         f"""SELECT
-              COALESCE(SUM(CASE WHEN from_op = '{INV_OP_PACKED}' AND to_op = '{INV_OP_STORAGE}'
-                                 AND to_quality = '{INV_Q_GOOD}' AND pack_entry_id IS NOT NULL THEN qty ELSE 0 END), 0)
-            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_PACKED}'
-                                 AND from_quality = '{INV_Q_GOOD}' AND pack_entry_id IS NOT NULL THEN qty ELSE 0 END), 0) AS qty
+              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS qty
            FROM zone_relocations WHERE shipment_line_id = ?""",
         (line_id,),
     ).fetchone()
     return int(row["qty"] or 0)
 
 
-def line_placed_qty(connection, line_id: str) -> int:
-    """Сколько по строке уже уехало в ячейки: коробами и прямым размещением.
+def line_aside_qty(connection, line_id: str) -> int:
+    """Из ждущего размещения — то, что собрано мимо коробов (габарит, брак).
 
-    Нетто: сторно ошибочного прямого размещения (storage → packed) размещённое
-    уменьшает.
+    Отличается осью короба: у россыпи `*_container_id` пуст, поэтому она уезжает в
+    место хранения отдельным сканом товара, а не сканом короба.
+    """
+    row = connection.execute(
+        f"""SELECT
+              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_container_id IS NULL THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_container_id IS NULL THEN qty ELSE 0 END), 0) AS qty
+           FROM zone_relocations WHERE shipment_line_id = ?""",
+        (line_id,),
+    ).fetchone()
+    return int(row["qty"] or 0)
+
+
+# Движение «размещено по заданию»: собранное уехало в место хранения (boxed → storage)
+# коробом или россыпью. Обратное движение — сторно ошибочного размещения.
+_PLACED_IN_SQL  = f"from_op = '{INV_OP_BOXED}' AND to_op = '{INV_OP_STORAGE}'"
+_PLACED_OUT_SQL = f"from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_BOXED}'"
+
+
+def line_placed_qty(connection, line_id: str) -> int:
+    """Сколько по строке уже уехало в места хранения: коробами и россыпью.
+
+    Нетто: возврат из места хранения обратно в сборку размещённое уменьшает.
     """
     row = connection.execute(
         f"""SELECT
@@ -2693,7 +2674,7 @@ def _require_task_box(connection, doc_id: str, container_id: str, *, status: str
     return box
 
 
-def _variant_by_barcode(connection, code: str) -> dict:
+def variant_by_barcode(connection, code: str) -> dict:
     """ШК → вариант товара. 404, если код не заведён (ручного выбора товара нет)."""
     bc = (code or "").strip()
     row = connection.execute(
@@ -2745,17 +2726,23 @@ def _line_for_variant(connection, doc_id: str, variant: dict, *, prefer_boxable:
     return rows[0]
 
 
+def _normalize_quality(value: str | None) -> str:
+    """Качество скана ТСД: годный по умолчанию, брак — явным переключателем."""
+    q = (value or INV_Q_GOOD).strip()
+    if q not in (INV_Q_GOOD, INV_Q_DEFECT):
+        raise HTTPException(status_code=400, detail="Укажите качество: годный или брак")
+    return q
+
+
 def add_box_item(
     connection, doc_id: str, container_id: str, *,
-    barcode: str, qty: int, user_id: str,
+    barcode: str, qty: int, user_id: str, quality: str = INV_Q_GOOD,
 ) -> dict:
     """Скан товара на ТСД: единица упаковывается и сразу ложится в короб.
 
-    Упаковка в этой задаче идёт поштучно в процессе раскладки, поэтому скан пишет
-    обычную запись упаковки (объём, дата, заработок) — только годный уходит не на
-    стол «Упаковано», а в корзину короба. Короб принимает исключительно годный: брак
-    в него не кладётся (короб уезжает в ячейку годного хранения) и пикается отдельным
-    сканом задачи — `add_putaway_defect`.
+    Упаковка в этой задаче идёт поштучно в процессе сборки, поэтому скан пишет обычную
+    запись упаковки (объём, дата, заработок), а товар уходит не на стол «Упаковано», а
+    в корзину короба. Короб — просто тара: в него ложится и годный, и брак.
     Гейты — от record_packing: годного не больше плана строки и не больше того,
     что физически передано на стол упаковки.
     """
@@ -2766,12 +2753,14 @@ def add_box_item(
     n = int(qty or 0)
     if n <= 0:
         raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+    q = _normalize_quality(quality)
 
-    variant = _variant_by_barcode(connection, barcode)
+    variant = variant_by_barcode(connection, barcode)
     line = _line_for_variant(connection, doc_id, variant, prefer_boxable=True)
+    is_defect = q == INV_Q_DEFECT
     record_packing(
         connection, doc_id, str(line["id"]),
-        good_delta=n, defect_delta=0,
+        good_delta=0 if is_defect else n, defect_delta=n if is_defect else 0,
         packed_date=business_today().isoformat(),
         user_id=user_id,
         container_id=container_id,
@@ -2780,7 +2769,7 @@ def add_box_item(
         connection, container_id=container_id, op_type=CONTAINER_OP_ITEM_ADD, user_id=user_id,
         doc_id=doc_id, product_id=str(line["product_id"]), product_name=line["product_name"],
         product_sku=line["product_sku"], color_name=line["color_name"], size_name=line["size_name"],
-        qty=n, comment=f"+{n} шт.",
+        qty=n, comment=f"+{n} шт." + (" (брак)" if is_defect else ""),
     )
     return box_detail(connection, container_id)
 
@@ -2844,7 +2833,11 @@ def _reverse_pack_entries(
 
 
 def undo_box_item(connection, doc_id: str, container_id: str, line_id: str, qty: int, user_id: str) -> dict:
-    """Изъятие из открытого короба: товар возвращается в пул на столе упаковки."""
+    """Изъятие из открытого короба: товар возвращается в пул на столе упаковки.
+
+    Отменяются записи от новых к старым независимо от качества — на ТСД изымают
+    «последнее, что положили», а не «последний годный».
+    """
     from modules.containers.service import log_container_op
 
     _require_putaway_doc(connection, doc_id)
@@ -2951,67 +2944,12 @@ def release_box(connection, doc_id: str, container_id: str, user_id: str) -> dic
     return {"message": "ok"}
 
 
-def place_box(connection, doc_id: str, container_id: str, zone_id: str, user_id: str) -> dict:
-    """Короб уехал на стеллаж: boxed → storage в отсканированную ячейку.
-
-    Это и есть момент готовности товара: пока короб на столе (корзина boxed), товар
-    не доступен ни отгрузке, ни другой задаче упаковки.
-    """
-    from modules.balances.service import insert_inventory_move
-    from modules.containers.service import container_stock_rows, log_container_op, require_cell
-
-    _require_putaway_doc(connection, doc_id)
-    box = _require_task_box(connection, doc_id, container_id, status=CONTAINER_STATUS_CLOSED)
-    to_zone_id, to_zone_name = require_cell(connection, zone_id)
-
-    stock = [r for r in container_stock_rows(connection, container_id) if r["op"] == INV_OP_BOXED]
-    if not stock:
-        raise HTTPException(status_code=400, detail="Короб пустой — размещать нечего")
-
-    label = _box_label(box)
-    moved = 0
-    for r in stock:
-        insert_inventory_move(
-            connection,
-            product_id=r["product_id"], product_name=r["product_name"], product_sku=r["product_sku"],
-            color_id=r["color_id"], color_name=r["color_name"],
-            size_id=r["size_id"], size_name=r["size_name"],
-            client_id=r["client_id"], client_name=r["client_name"],
-            from_op=INV_OP_BOXED, to_op=INV_OP_STORAGE,
-            from_quality=r["quality"], to_quality=r["quality"],
-            from_zone_id=r["zone_id"], from_zone_name=r["zone_name"],
-            to_zone_id=to_zone_id, to_zone_name=to_zone_name,
-            qty=r["net"], user_id=user_id,
-            from_container_id=container_id, to_container_id=container_id,
-            shipment_line_id=r["shipment_line_id"],
-            comment=f"Размещение короба {label}: {r['net']} шт → {to_zone_name}",
-        )
-        moved += r["net"]
-
-    now = _now()
-    connection.execute(
-        "UPDATE containers SET status = ?, zone_id = ?, zone_name = ?, placed_at = ?, updated_at = ? WHERE id = ?",
-        (CONTAINER_STATUS_PLACED, to_zone_id, to_zone_name, now, now, container_id),
-    )
-    log_container_op(
-        connection, container_id=container_id, op_type=CONTAINER_OP_PLACE, user_id=user_id,
-        doc_id=doc_id, qty=moved, zone_id=to_zone_id, zone_name=to_zone_name,
-        comment=f"Размещён в ячейке {to_zone_name}",
-    )
-    connection.execute(
-        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-        (str(uuid4()), doc_id, SHIPMENT_OP_BOX_PLACE,
-         f"Короб {label} размещён: {moved} шт. → {to_zone_name}", now, user_id),
-    )
-    return box_detail(connection, container_id)
-
-
-def _putaway_defect_total(connection, doc_id: str) -> int:
-    """Найденный при раскладке брак, который ещё ждёт ячейку брака."""
+def _aside_total(connection, doc_id: str) -> int:
+    """Собранное мимо коробов, которое ещё ждёт размещения (габарит, брак)."""
     lines = connection.execute(
         "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
     ).fetchall()
-    return sum(line_packed_pending(connection, str(l["id"]))["defect"] for l in lines)
+    return sum(line_aside_qty(connection, str(l["id"])) for l in lines)
 
 
 def _putaway_line(connection, doc_id: str, line_id: str):
@@ -3024,8 +2962,8 @@ def _putaway_line(connection, doc_id: str, line_id: str):
     return row
 
 
-def _putaway_item_result(connection, doc_id: str, line, *, qty: int, zone_name: str | None = None) -> dict:
-    """Ответ поштучных операций ТСД: что зафиксировано и сколько брака ждёт ячейку."""
+def _putaway_item_result(connection, doc_id: str, line, *, qty: int) -> dict:
+    """Ответ поштучных операций ТСД: что зафиксировано и сколько собрано мимо коробов."""
     return {
         "line_id": str(line["id"]),
         "product_name": line["product_name"],
@@ -3033,205 +2971,102 @@ def _putaway_item_result(connection, doc_id: str, line, *, qty: int, zone_name: 
         "color_name": line["color_name"],
         "size_name": line["size_name"],
         "qty": qty,
-        "zone_name": zone_name,
-        "defect_total": _putaway_defect_total(connection, doc_id),
+        "aside_total": _aside_total(connection, doc_id),
     }
 
 
-def add_putaway_defect(connection, doc_id: str, *, barcode: str, qty: int, user_id: str) -> dict:
-    """Скан найденного брака: он фиксируется как брак упаковки мимо коробов.
+def add_aside_item(connection, doc_id: str, *, barcode: str, qty: int, quality: str, user_id: str) -> dict:
+    """Скан товара мимо короба: габарит не влез либо упаковщик решил не класть в короб.
 
-    В короб брак не кладётся — короб уезжает в ячейку годного хранения. Брак остаётся
-    в корзине `packed` и уезжает в ячейку брака при закрытии задачи, поэтому скан
-    живёт на экране задачи, а не короба.
+    Запись упаковки такая же, как у скана в короб (объём, дата, заработок), только без
+    оси контейнера: товар ждёт размещения россыпью и уедет в место хранения отдельным
+    сканом на ТСД у стеллажа.
     """
     _require_putaway_doc(connection, doc_id)
     n = int(qty or 0)
     if n <= 0:
         raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+    q = _normalize_quality(quality)
 
-    variant = _variant_by_barcode(connection, barcode)
+    variant = variant_by_barcode(connection, barcode)
     line = _line_for_variant(connection, doc_id, variant, prefer_boxable=True)
+    is_defect = q == INV_Q_DEFECT
     record_packing(
         connection, doc_id, str(line["id"]),
-        good_delta=0, defect_delta=n,
+        good_delta=0 if is_defect else n, defect_delta=n if is_defect else 0,
         packed_date=business_today().isoformat(), user_id=user_id,
-    )
-    return _putaway_item_result(connection, doc_id, line, qty=n)
-
-
-def undo_putaway_defect(connection, doc_id: str, line_id: str, qty: int, user_id: str) -> dict:
-    """Отмена ошибочного скана брака: товар возвращается в пул на столе упаковки."""
-    _require_putaway_doc(connection, doc_id)
-    line = _putaway_line(connection, doc_id, line_id)
-    undone = _reverse_pack_entries(
-        connection, doc_id, line_id, qty, user_id,
-        leg_sql=f"zr.to_op = '{INV_OP_PACKED}' AND zr.to_quality = '{INV_Q_DEFECT}'",
-        leg_params=(),
-        empty_detail="По этой позиции брак не пикали",
-    )
-    return _putaway_item_result(connection, doc_id, line, qty=sum(r["qty"] for r in undone))
-
-
-def place_loose_item(
-    connection, doc_id: str, *, barcode: str, qty: int, quality: str, zone_id: str, user_id: str,
-) -> dict:
-    """Крупногабарит: единица размещается в ячейку напрямую, мимо короба.
-
-    Скан товара → скан ячейки. Это та же запись упаковки (объём, дата, заработок),
-    но товар не задерживается в коробе на столе: вторым движением записи он уезжает
-    в отсканированную ячейку. Иначе адрес в системе врал бы — оставленный на столе
-    товар вернулся бы при закрытии задачи туда, откуда пришёл.
-    """
-    from modules.containers.service import require_cell
-
-    _require_putaway_doc(connection, doc_id)
-    n = int(qty or 0)
-    if n <= 0:
-        raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
-    zone = require_cell(connection, zone_id)
-
-    variant = _variant_by_barcode(connection, barcode)
-    line = _line_for_variant(connection, doc_id, variant, prefer_boxable=True)
-    is_defect = quality == INV_Q_DEFECT
-    record_packing(
-        connection, doc_id, str(line["id"]),
-        good_delta=0 if is_defect else n,
-        defect_delta=n if is_defect else 0,
-        packed_date=business_today().isoformat(), user_id=user_id,
-        place_zone=zone,
     )
     kind_ru = "брак" if is_defect else "годный"
     label = line["product_sku"] or line["product_name"]
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_ITEM_PLACE,
-         f"Размещение без короба ({kind_ru}): {n} шт. — {label} → {zone[1]}", _now(), user_id),
+         f"Собрано мимо короба ({kind_ru}): {n} шт. — {label}", _now(), user_id),
     )
-    return _putaway_item_result(connection, doc_id, line, qty=n, zone_name=zone[1])
+    return _putaway_item_result(connection, doc_id, line, qty=n)
 
 
-def undo_placed_item(connection, doc_id: str, line_id: str, qty: int, user_id: str) -> dict:
-    """Отмена прямого размещения: товар уезжает из ячейки обратно на стол упаковки."""
+def undo_aside_item(connection, doc_id: str, line_id: str, qty: int, user_id: str) -> dict:
+    """Отмена ошибочного скана мимо короба: товар возвращается в пул на столе упаковки."""
     _require_putaway_doc(connection, doc_id)
     line = _putaway_line(connection, doc_id, line_id)
     undone = _reverse_pack_entries(
         connection, doc_id, line_id, qty, user_id,
-        leg_sql=(
-            f"zr.from_op = '{INV_OP_PACKED}' AND zr.to_op = '{INV_OP_STORAGE}' "
-            f"AND zr.to_quality = '{INV_Q_GOOD}'"
-        ),
+        leg_sql=f"zr.to_op = '{INV_OP_BOXED}' AND zr.to_container_id IS NULL",
         leg_params=(),
-        empty_detail="По этой позиции нет размещения без короба",
+        empty_detail="По этой позиции нет сборки мимо короба",
     )
     removed = sum(r["qty"] for r in undone)
     label = line["product_sku"] or line["product_name"]
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_ITEM_PLACE,
-         f"Отмена размещения без короба: −{removed} шт. — {label}", _now(), user_id),
+         f"Отмена сборки мимо короба: -{removed} шт. — {label}", _now(), user_id),
     )
     return _putaway_item_result(connection, doc_id, line, qty=removed)
 
 
-def finish_putaway(connection, doc_id: str, defect_zone_id: str | None, user_id: str) -> str:
-    """Закрытие задачи размещения: on_packing → placed.
+def log_placement_op(connection, doc_id: str, *, comment: str, user_id: str) -> None:
+    """Запись о размещении в журнал задачи: развозку ведёт процесс коробов, а не задача.
 
-    Гейт: закрыть можно, только когда весь товар разложен по ячейкам — незакрытых и
-    неразмещённых коробов не осталось. Нерешённый пул со стола возвращается на
-    хранение в те же места, найденный брак уезжает в указанную ячейку брака.
+    Вызывается из `containers`, поэтому знание о `shipment_ops` остаётся здесь.
     """
-    from modules.balances.service import get_packing_zone, insert_inventory_move
-    from modules.containers.service import containers_items_qty, require_cell
+    connection.execute(
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, SHIPMENT_OP_BOX_PLACE, comment, _now(), user_id),
+    )
 
-    doc = _require_putaway_doc(connection, doc_id)
 
-    # Ошибочно взятая этикетка не должна держать задачу: пустые короба освобождаем сами.
-    for box in connection.execute(
-        "SELECT * FROM containers WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 AND status = ?",
-        (doc_id, CONTAINER_STATUS_OPEN),
-    ).fetchall():
-        if containers_items_qty(connection, [str(box["id"])]).get(str(box["id"]), 0) <= 0:
-            _release_empty_box(connection, doc_id, box, user_id)
+def maybe_close_putaway_doc(connection, doc_id: str, user_id: str) -> str | None:
+    """Авто-закрытие задачи размещения: collected -> placed, когда всё уехало на места.
 
-    pending_boxes = connection.execute(
-        "SELECT doc_number FROM containers "
-        "WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 AND status IN (?, ?) ORDER BY doc_number",
+    Отдельного «финиша» у развозки нет: кладовщик ставит последний короб (или последнюю
+    россыпь) — и задача закрывается сама. Вызывается после каждого размещения; пока
+    сборка идёт (on_packing), задачу не трогаем.
+    """
+    doc = connection.execute(
+        "SELECT id, status, task_kind FROM shipment_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (doc_id,),
+    ).fetchone()
+    if not doc or normalize_task_kind(doc["task_kind"]) != SHIPMENT_TASK_PUTAWAY:
+        return None
+    if str(doc["status"]) != SHIPMENT_STATUS_COLLECTED:
+        return None
+
+    pending_box = connection.execute(
+        "SELECT 1 FROM containers WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 AND status IN (?, ?) LIMIT 1",
         (doc_id, CONTAINER_STATUS_OPEN, CONTAINER_STATUS_CLOSED),
-    ).fetchall()
-    if pending_boxes:
-        names = ", ".join(str(r["doc_number"]) for r in pending_boxes)
-        raise HTTPException(
-            status_code=400,
-            detail=f"Сначала закройте и разместите короба по ячейкам: {names}",
-        )
+    ).fetchone()
+    if pending_box:
+        return None
 
     lines = connection.execute(
-        "SELECT * FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+        "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
     ).fetchall()
-    total_defect = sum(line_packed_pending(connection, str(l["id"]))["defect"] for l in lines)
-    defect_zone: tuple[str, str] | None = None
-    if total_defect > 0:
-        if not str(defect_zone_id or "").strip():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Отсканируйте ячейку, куда уходит брак ({total_defect} шт.)",
-            )
-        defect_zone = require_cell(connection, str(defect_zone_id))
+    if any(line_boxed_qty(connection, str(l["id"])) > 0 for l in lines):
+        return None
 
-    packing_id, packing_name = get_packing_zone(connection)
-    client_id = doc["client_id"]
-    placed_total = 0
-    for line in lines:
-        line_id = str(line["id"])
-        placed_total += line_placed_qty(connection, line_id)
-
-        defect = line_packed_pending(connection, line_id)["defect"]
-        if defect > 0 and defect_zone:
-            sources = line_bucket_zone_sources(
-                connection, line_id, op=INV_OP_PACKED, quality=INV_Q_DEFECT, prefer_zone_id=packing_id,
-            )
-            for src_zone_id, src_zone_name, take in _consume_zone_sources(
-                sources, defect, fallback=(packing_id, packing_name)
-            ):
-                insert_inventory_move(
-                    connection,
-                    product_id=str(line["product_id"]), product_name=line["product_name"],
-                    product_sku=line["product_sku"],
-                    color_id=line["color_id"], color_name=line["color_name"],
-                    size_id=line["size_id"], size_name=line["size_name"],
-                    client_id=client_id, client_name=None,
-                    from_op=INV_OP_PACKED, to_op=INV_OP_STORAGE,
-                    from_quality=INV_Q_DEFECT, to_quality=INV_Q_DEFECT,
-                    from_zone_id=src_zone_id, from_zone_name=src_zone_name,
-                    to_zone_id=defect_zone[0], to_zone_name=defect_zone[1],
-                    qty=take, user_id=user_id, shipment_line_id=line_id,
-                    comment=f"Брак со сборки на хранение: {take} шт → {defect_zone[1]}",
-                )
-
-        leftover = line_on_packing_qty(connection, line_id)
-        if leftover > 0:
-            pool_sources = line_bucket_zone_sources(
-                connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
-            )
-            for pool_zone_id, pool_zone_name, part in _consume_zone_sources(
-                pool_sources, leftover, fallback=(packing_id, packing_name)
-            ):
-                insert_inventory_move(
-                    connection,
-                    product_id=str(line["product_id"]), product_name=line["product_name"],
-                    product_sku=line["product_sku"],
-                    color_id=line["color_id"], color_name=line["color_name"],
-                    size_id=line["size_id"], size_name=line["size_name"],
-                    client_id=client_id, client_name=None,
-                    from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
-                    from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-                    from_zone_id=pool_zone_id, from_zone_name=pool_zone_name,
-                    to_zone_id=pool_zone_id, to_zone_name=pool_zone_name,
-                    qty=part, user_id=user_id, shipment_line_id=line_id,
-                    comment=f"Возврат нерешённого пула на хранение: {part} шт.",
-                )
-
+    placed_total = sum(line_placed_qty(connection, str(l["id"])) for l in lines)
     now = _now()
     connection.execute(
         "UPDATE shipment_docs SET status = ?, actual_ship_date = COALESCE(actual_ship_date, ?), updated_at = ? "
@@ -3241,6 +3076,82 @@ def finish_putaway(connection, doc_id: str, defect_zone_id: str | None, user_id:
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_RELOCATE,
-         f"Размещено по ячейкам: {placed_total} шт. — задача закрыта", now, user_id),
+         f"Размещено по местам: {placed_total} шт. — задача закрыта", now, user_id),
     )
     return SHIPMENT_STATUS_PLACED
+
+
+def finish_collecting(connection, doc_id: str, user_id: str) -> str:
+    """Сборка завершена: on_packing -> collected (или сразу placed, если всё уже уехало).
+
+    Гейт: открытых коробов с товаром не осталось. Закрытые короба и собранная россыпь
+    задачу не держат — их развозит по местам отдельный процесс размещения. Нерешённый
+    пул со стола возвращается на хранение в те же места.
+    """
+    from modules.balances.service import get_packing_zone, insert_inventory_move
+    from modules.containers.service import containers_items_qty
+
+    doc = _require_putaway_doc(connection, doc_id)
+
+    # Ошибочно взятая этикетка не должна держать задачу: пустые короба освобождаем сами.
+    open_boxes = connection.execute(
+        "SELECT * FROM containers WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 AND status = ? "
+        "ORDER BY doc_number",
+        (doc_id, CONTAINER_STATUS_OPEN),
+    ).fetchall()
+    unclosed: list[str] = []
+    for box in open_boxes:
+        if containers_items_qty(connection, [str(box["id"])]).get(str(box["id"]), 0) <= 0:
+            _release_empty_box(connection, doc_id, box, user_id)
+        else:
+            unclosed.append(str(box["doc_number"]))
+    if unclosed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Сначала закройте короба: {', '.join(unclosed)}",
+        )
+
+    packing_id, packing_name = get_packing_zone(connection)
+    client_id = doc["client_id"]
+    lines = connection.execute(
+        "SELECT * FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
+    ).fetchall()
+    for line in lines:
+        line_id = str(line["id"])
+        leftover = line_on_packing_qty(connection, line_id)
+        if leftover <= 0:
+            continue
+        pool_sources = line_bucket_zone_sources(
+            connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
+        )
+        for pool_zone_id, pool_zone_name, part in _consume_zone_sources(
+            pool_sources, leftover, fallback=(packing_id, packing_name)
+        ):
+            insert_inventory_move(
+                connection,
+                product_id=str(line["product_id"]), product_name=line["product_name"],
+                product_sku=line["product_sku"],
+                color_id=line["color_id"], color_name=line["color_name"],
+                size_id=line["size_id"], size_name=line["size_name"],
+                client_id=client_id, client_name=None,
+                from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
+                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
+                from_zone_id=pool_zone_id, from_zone_name=pool_zone_name,
+                to_zone_id=pool_zone_id, to_zone_name=pool_zone_name,
+                qty=part, user_id=user_id, shipment_line_id=line_id,
+                comment=f"Возврат нерешённого пула на хранение: {part} шт.",
+            )
+
+    collected_total = sum(line_boxed_qty(connection, str(l["id"])) for l in lines)
+    now = _now()
+    connection.execute(
+        "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
+        (SHIPMENT_STATUS_COLLECTED, now, doc_id),
+    )
+    connection.execute(
+        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+        (str(uuid4()), doc_id, SHIPMENT_OP_COLLECTED,
+         f"Сборка завершена: {collected_total} шт. ждут размещения по местам", now, user_id),
+    )
+    # Всё уже успели развезти (или собирать было нечего) — задача закрывается сразу.
+    return maybe_close_putaway_doc(connection, doc_id, user_id) or SHIPMENT_STATUS_COLLECTED

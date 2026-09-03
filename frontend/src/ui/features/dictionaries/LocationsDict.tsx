@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import {
   bulkCreateLocations,
+  bulkDeleteLocations,
   deleteLocation,
   getLocationLabels,
   getLocations,
@@ -255,6 +256,7 @@ export function LocationsDict({ refreshKey }: LocationsDictProps) {
   const [rack, setRack] = useState('')
   const [genOpen, setGenOpen] = useState(false)
   const [printing, setPrinting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const [sheet, setSheet] = useState<{ isNew: boolean; initial: DictionaryItem | null } | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [dirLabels, setDirLabels] = useState<LocationLabel[] | null>(null)
@@ -310,6 +312,35 @@ export function LocationsDict({ refreshKey }: LocationsDictProps) {
     }
   }
 
+  const onBulkDelete = async () => {
+    const ids = [...selected]
+    if (!ids.length || deleting) return
+    const sample = items.filter((l) => selected.has(l.id)).slice(0, 5).map((l) => l.code)
+    const ok = await confirm({
+      title: `Удалить места (${ids.length})?`,
+      body:
+        `Будут удалены из справочника: ${sample.join(', ')}` +
+        `${ids.length > sample.length ? ` и ещё ${ids.length - sample.length}` : ''}.`,
+      danger: true,
+      confirmLabel: 'Удалить',
+    })
+    if (!ok) return
+    setDeleting(true)
+    try {
+      const res = await bulkDeleteLocations(ids)
+      toast(
+        `Удалено мест: ${res.deleted}${res.skipped ? `, пропущено: ${res.skipped}` : ''}`,
+        'success',
+      )
+      void load()
+      reloadLookups()
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось удалить', 'error')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const onPrint = async () => {
     setPrinting(true)
     try {
@@ -356,6 +387,12 @@ export function LocationsDict({ refreshKey }: LocationsDictProps) {
             <Icon name="print" size={14} />
             {printing ? '…' : selected.size ? `Печать QR (${selected.size})` : 'Печать QR'}
           </button>
+          {selected.size > 0 && (
+            <button className="btn danger" disabled={deleting} onClick={() => void onBulkDelete()}>
+              <Icon name="trash" size={14} />
+              {deleting ? '…' : `Удалить (${selected.size})`}
+            </button>
+          )}
           <button className="btn" onClick={() => setSheet({ isNew: true, initial: null })}>
             <Icon name="plus" size={14} />
             Добавить место

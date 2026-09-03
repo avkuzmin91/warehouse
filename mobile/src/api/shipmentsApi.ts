@@ -7,6 +7,7 @@ export type ShipmentStatus =
   | 'on_packing'
   | 'relocating'
   | 'packed'
+  | 'collected'
   | 'placed'
   | 'completed_no_goods'
   | 'cancelled'
@@ -51,8 +52,9 @@ export type ShipmentLine = {
   packed_pending_defect: number
   // Задача размещения: лежит в коробах на столе / уже уехало в ячейки.
   boxed_qty: number
+  boxed_defect_qty: number
+  aside_qty: number
   placed_qty: number
-  placed_loose_qty: number
   available_for_pack: number
   store_id: string | null
   store_name: string | null
@@ -468,6 +470,7 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
   packed: 'Упакован',
+  collected: 'Собрано',
   placed: 'Размещено',
   completed_no_goods: 'Завершён',
   cancelled: 'Аннулирован',
@@ -524,7 +527,7 @@ export function takeShipmentBox(docId: string, code: string, requestId: string) 
 export function addShipmentBoxItem(
   docId: string,
   boxId: string,
-  payload: { barcode: string; qty?: number },
+  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
   requestId: string,
 ) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {
@@ -564,15 +567,6 @@ export function releaseShipmentBox(docId: string, boxId: string, requestId: stri
   })
 }
 
-/** Скан ячейки: короб уехал на стеллаж, товар становится доступен. */
-export function placeShipmentBox(docId: string, boxId: string, zoneId: string, requestId: string) {
-  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/place`, {
-    method: 'POST',
-    body: JSON.stringify({ zone_id: zoneId }),
-    headers: requestIdHeaders(requestId),
-  })
-}
-
 /** Итог поштучной операции ТСД в задаче размещения. */
 export type PutawayItemResult = {
   line_id: string
@@ -581,57 +575,35 @@ export type PutawayItemResult = {
   color_name: string | null
   size_name: string | null
   qty: number
-  zone_name: string | null
-  defect_total: number
+  aside_total: number
 }
 
-/** Скан найденного брака: фиксируется мимо коробов, уедет в ячейку брака. */
-export function addPutawayDefect(
-  docId: string, payload: { barcode: string; qty?: number }, requestId: string,
-) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/defect`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-    headers: requestIdHeaders(requestId),
-  })
-}
-
-/** Отмена ошибочного скана брака: товар возвращается на стол упаковки. */
-export function undoPutawayDefect(docId: string, lineId: string, qty: number, requestId: string) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/defect/undo`, {
-    method: 'POST',
-    body: JSON.stringify({ line_id: lineId, qty }),
-    headers: requestIdHeaders(requestId),
-  })
-}
-
-/** Крупногабарит: скан товара и ячейки — единица уезжает на стеллаж без короба. */
-export function placePutawayItem(
+/** Скан товара мимо короба: габарит не влез либо в короб его класть не стали. */
+export function addPutawayAsideItem(
   docId: string,
-  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect'; zone_id: string },
+  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
   requestId: string,
 ) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/place-item`, {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/aside`, {
     method: 'POST',
     body: JSON.stringify(payload),
     headers: requestIdHeaders(requestId),
   })
 }
 
-/** Отмена прямого размещения: товар уезжает из ячейки обратно на стол упаковки. */
-export function undoPlacedPutawayItem(docId: string, lineId: string, qty: number, requestId: string) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/place-item/undo`, {
+/** Отмена ошибочного скана мимо короба: товар возвращается на стол упаковки. */
+export function undoPutawayAsideItem(docId: string, lineId: string, qty: number, requestId: string) {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/aside/undo`, {
     method: 'POST',
     body: JSON.stringify({ line_id: lineId, qty }),
     headers: requestIdHeaders(requestId),
   })
 }
 
-/** Закрытие задачи размещения: все короба должны быть разложены по ячейкам. */
-export function finishPutaway(docId: string, defectZoneId: string | null, requestId: string) {
-  return request<{ message: string }>(`/shipments/${docId}/finish-putaway`, {
+/** Сборка завершена: короба закрыты, товар ждёт развозки по местам (containersApi). */
+export function finishCollecting(docId: string, requestId: string) {
+  return request<{ message: string }>(`/shipments/${docId}/finish-collecting`, {
     method: 'POST',
-    body: JSON.stringify({ defect_zone_id: defectZoneId }),
     headers: requestIdHeaders(requestId),
   })
 }

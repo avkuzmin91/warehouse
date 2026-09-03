@@ -46,6 +46,15 @@ class LocationBulkResult(BaseModel):
     skipped: int
 
 
+class LocationBulkDeleteRequest(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=2000)
+
+
+class LocationBulkDeleteResult(BaseModel):
+    deleted: int
+    skipped: int
+
+
 class LocationLookupResponse(BaseModel):
     found: bool
     location: LocationItem | None = None

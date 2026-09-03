@@ -8,12 +8,18 @@ from fastapi import HTTPException
 from config import (
     CONTAINER_BATCH_MAX,
     CONTAINER_OP_CREATE,
+    CONTAINER_OP_ITEM_REMOVE,
     CONTAINER_OP_MOVE,
+    CONTAINER_OP_PLACE,
     CONTAINER_QR_PREFIX,
+    CONTAINER_STATUS_CLOSED,
     CONTAINER_STATUS_NEW,
+    CONTAINER_STATUS_OPEN,
     CONTAINER_STATUS_PLACED,
+    INV_OP_BOXED,
     INV_OP_STORAGE,
-    LOCATION_KIND_CELL,
+    INV_Q_DEFECT,
+    INV_Q_GOOD,
 )
 from dbconn import ci_like_substring_param
 from utils import next_doc_number as _next_doc_number, now_iso as _now, qr_svg
@@ -26,6 +32,9 @@ from .schemas import (
     ContainerListResponse,
     ContainerLookupResponse,
     ContainerOpItem,
+    ContainerPlacedItem,
+    ContainerPlaceItemScan,
+    ContainerPlaceResult,
 )
 
 # Тот же потолок печати, что у этикеток мест хранения.
@@ -326,11 +335,10 @@ def container_labels(connection, ids: list[str] | None) -> ContainerLabelsRespon
     return ContainerLabelsResponse(items=items)
 
 
-def require_cell(connection, zone_id: str) -> tuple[str, str]:
-    """Валидация места назначения короба: активная адресная ячейка. → (id, name)."""
+def _zone_row(connection, zone_id: str, empty_detail: str):
     zid = (zone_id or "").strip()
     if not zid:
-        raise HTTPException(status_code=400, detail="Отсканируйте ячейку стеллажа")
+        raise HTTPException(status_code=400, detail=empty_detail)
     row = connection.execute(
         "SELECT id, name, kind, is_active FROM unloading_zones "
         "WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -338,10 +346,18 @@ def require_cell(connection, zone_id: str) -> tuple[str, str]:
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Место не найдено")
-    if str(row["kind"] or "") != LOCATION_KIND_CELL:
-        raise HTTPException(status_code=400, detail="Короб можно поставить только в адресную ячейку стеллажа")
+    return row
+
+
+def require_location(connection, zone_id: str, *, empty_detail: str) -> tuple[str, str]:
+    """Валидация места хранения: любое активное место справочника. → (id, name).
+
+    Адресной ячейки стеллажа не требуем ни от короба, ни от россыпи: зона брака или
+    негабарита на складе может быть заведена служебным местом.
+    """
+    row = _zone_row(connection, zone_id, empty_detail)
     if not int(row["is_active"] or 0):
-        raise HTTPException(status_code=400, detail="Ячейка отключена — выберите другую")
+        raise HTTPException(status_code=400, detail=f"Место «{row['name']}» отключено — выберите другое")
     return str(row["id"]), str(row["name"])
 
 
@@ -356,7 +372,9 @@ def move_placed_container(connection, container_id: str, zone_id: str, user_id: 
     row = require_container(connection, container_id)
     if str(row["status"]) != CONTAINER_STATUS_PLACED:
         raise HTTPException(status_code=400, detail="Перемещать можно только размещённый короб")
-    to_zone_id, to_zone_name = require_cell(connection, zone_id)
+    to_zone_id, to_zone_name = require_location(
+        connection, zone_id, empty_detail="Отсканируйте место хранения",
+    )
     if str(row["zone_id"] or "") == to_zone_id:
         raise HTTPException(status_code=400, detail="Короб уже стоит в этой ячейке")
 
@@ -395,11 +413,13 @@ def move_placed_container(connection, container_id: str, zone_id: str, user_id: 
 def containers_holding(
     connection, *, product_id: str, color_id: str | None, size_id: str | None,
     client_id: str | None, zone_id: str | None, op: str = INV_OP_STORAGE, quality: str,
-) -> list[str]:
-    """Номера коробов, в которых сейчас лежит позиция в этом месте (нетто > 0).
+) -> list[tuple[str, int]]:
+    """Короба, в которых сейчас лежит позиция в этом месте: [(номер, штук)], нетто > 0.
 
     Гейт ручных операций с остатками: товар, лежащий в коробе, нельзя двигать или
-    списывать «мимо короба» — иначе содержимое короба разойдётся с остатками.
+    списывать «мимо короба» — иначе содержимое короба разойдётся с остатками. Часть
+    той же позиции может лежать в месте россыпью (изъятая из короба), поэтому нужно
+    количество, а не только факт.
     """
     rows = connection.execute(
         """
@@ -426,4 +446,312 @@ def containers_holding(
         (product_id, color_id, size_id, client_id, op, quality, zone_id,
          product_id, color_id, size_id, client_id, op, quality, zone_id),
     ).fetchall()
-    return [str(r["doc_number"]) for r in rows]
+    return [(str(r["doc_number"]), int(r["net"] or 0)) for r in rows]
+
+
+# ── Размещение: собранное едет из «Ждёт размещения» в место хранения ───────────
+
+def _place_closed_box(connection, box, zone: tuple[str, str], user_id: str) -> int:
+    """Короб уехал на стеллаж: boxed → storage в отсканированное место. → сколько штук.
+
+    Это и есть момент готовности товара: пока короб стоит у стола, он не доступен ни
+    отгрузке, ни другой задаче упаковки.
+    """
+    from modules.balances.service import insert_inventory_move
+    from modules.shipments.service import log_placement_op
+
+    container_id = str(box["id"])
+    stock = [r for r in container_stock_rows(connection, container_id) if r["op"] == INV_OP_BOXED]
+    if not stock:
+        raise HTTPException(status_code=400, detail=f"Короб {box['doc_number']} пустой — размещать нечего")
+
+    to_zone_id, to_zone_name = zone
+    moved = 0
+    for r in stock:
+        insert_inventory_move(
+            connection,
+            product_id=r["product_id"], product_name=r["product_name"], product_sku=r["product_sku"],
+            color_id=r["color_id"], color_name=r["color_name"],
+            size_id=r["size_id"], size_name=r["size_name"],
+            client_id=r["client_id"], client_name=r["client_name"],
+            from_op=INV_OP_BOXED, to_op=INV_OP_STORAGE,
+            from_quality=r["quality"], to_quality=r["quality"],
+            from_zone_id=r["zone_id"], from_zone_name=r["zone_name"],
+            to_zone_id=to_zone_id, to_zone_name=to_zone_name,
+            qty=r["net"], user_id=user_id,
+            from_container_id=container_id, to_container_id=container_id,
+            shipment_line_id=r["shipment_line_id"],
+            comment=f"Размещение короба {box['doc_number']}: {r['net']} шт → {to_zone_name}",
+        )
+        moved += r["net"]
+
+    now = _now()
+    connection.execute(
+        "UPDATE containers SET status = ?, zone_id = ?, zone_name = ?, placed_at = ?, updated_at = ? WHERE id = ?",
+        (CONTAINER_STATUS_PLACED, to_zone_id, to_zone_name, now, now, container_id),
+    )
+    log_container_op(
+        connection, container_id=container_id, op_type=CONTAINER_OP_PLACE, user_id=user_id,
+        doc_id=box["doc_id"], qty=moved, zone_id=to_zone_id, zone_name=to_zone_name,
+        comment=f"Размещён в месте {to_zone_name}",
+    )
+    if box["doc_id"]:
+        log_placement_op(
+            connection, str(box["doc_id"]), user_id=user_id,
+            comment=f"Короб {box['doc_number']} размещён: {moved} шт. → {to_zone_name}",
+        )
+    return moved
+
+
+def _aside_sources(connection, variant: dict, quality: str | None) -> list[dict]:
+    """Собранное мимо коробов по варианту: строки задания, где нетто boxed > 0.
+
+    Россыпь опознаётся пустой осью короба. Место назначения ей выбирает кладовщик у
+    стеллажа, поэтому источники берутся по всем живым задачам сразу.
+    """
+    rows = connection.execute(
+        f"""
+        WITH moves AS (
+            SELECT shipment_line_id, product_id, color_id, size_id, client_id,
+                   product_name, product_sku, color_name, size_name, client_name,
+                   to_quality AS quality, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+            FROM zone_relocations
+            WHERE to_op = '{INV_OP_BOXED}' AND to_container_id IS NULL
+              AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
+            UNION ALL
+            SELECT shipment_line_id, product_id, color_id, size_id, client_id,
+                   product_name, product_sku, color_name, size_name, client_name,
+                   from_quality, from_zone_id, from_zone_name, -qty
+            FROM zone_relocations
+            WHERE from_op = '{INV_OP_BOXED}' AND from_container_id IS NULL
+              AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
+        )
+        SELECT shipment_line_id, product_id, color_id, size_id, client_id, quality, zone_id,
+               MIN(product_name) AS product_name, MIN(product_sku) AS product_sku,
+               MIN(color_name) AS color_name, MIN(size_name) AS size_name,
+               MIN(client_name) AS client_name, MIN(zone_name) AS zone_name,
+               SUM(net) AS net
+        FROM moves
+        GROUP BY shipment_line_id, product_id, color_id, size_id, client_id, quality, zone_id
+        HAVING SUM(net) > 0
+        ORDER BY MIN(product_name)
+        """,
+        (variant["product_id"], variant["color_id"], variant["size_id"],
+         variant["product_id"], variant["color_id"], variant["size_id"]),
+    ).fetchall()
+    sources = [
+        {
+            "shipment_line_id": r["shipment_line_id"],
+            "product_id": str(r["product_id"]), "product_name": r["product_name"],
+            "product_sku": r["product_sku"],
+            "color_id": r["color_id"], "color_name": r["color_name"],
+            "size_id": r["size_id"], "size_name": r["size_name"],
+            "client_id": r["client_id"], "client_name": r["client_name"],
+            "quality": str(r["quality"]), "zone_id": r["zone_id"], "zone_name": r["zone_name"],
+            "net": int(r["net"] or 0),
+        }
+        for r in rows
+    ]
+    if quality:
+        return [r for r in sources if r["quality"] == quality]
+    qualities = {r["quality"] for r in sources}
+    if len(qualities) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="По этому товару размещения ждут и годный, и брак — укажите качество",
+        )
+    return sources
+
+
+def _place_aside_item(
+    connection, *, barcode: str, qty: int, quality: str | None, zone: tuple[str, str], user_id: str,
+) -> tuple[dict, set[str]]:
+    """Скан россыпи у стеллажа: boxed → storage в отсканированное место. → (строка, задачи)."""
+    from modules.balances.service import insert_inventory_move
+    from modules.shipments.service import variant_by_barcode
+
+    n = int(qty or 0)
+    if n <= 0:
+        raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+    q = (quality or "").strip() or None
+    if q and q not in (INV_Q_GOOD, INV_Q_DEFECT):
+        raise HTTPException(status_code=400, detail="Укажите качество: годный или брак")
+
+    variant = variant_by_barcode(connection, barcode)
+    sources = _aside_sources(connection, variant, q)
+    available = sum(r["net"] for r in sources)
+    if available < n:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Размещения ждёт только {available} шт. этого товара — проверьте, что сканируете",
+        )
+
+    to_zone_id, to_zone_name = zone
+    lines: set[str] = set()
+    remaining = n
+    placed_quality = q or (sources[0]["quality"] if sources else INV_Q_GOOD)
+    label = None
+    for src in sources:
+        if remaining <= 0:
+            break
+        take = min(remaining, src["net"])
+        insert_inventory_move(
+            connection,
+            product_id=src["product_id"], product_name=src["product_name"], product_sku=src["product_sku"],
+            color_id=src["color_id"], color_name=src["color_name"],
+            size_id=src["size_id"], size_name=src["size_name"],
+            client_id=src["client_id"], client_name=src["client_name"],
+            from_op=INV_OP_BOXED, to_op=INV_OP_STORAGE,
+            from_quality=src["quality"], to_quality=src["quality"],
+            from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
+            to_zone_id=to_zone_id, to_zone_name=to_zone_name,
+            qty=take, user_id=user_id, shipment_line_id=src["shipment_line_id"],
+            comment=f"Размещение мимо короба: {take} шт → {to_zone_name}",
+        )
+        if src["shipment_line_id"]:
+            lines.add(str(src["shipment_line_id"]))
+        label = label or src
+        remaining -= take
+
+    item = ContainerPlacedItem(
+        product_name=(label or {}).get("product_name"),
+        product_sku=(label or {}).get("product_sku"),
+        color_name=(label or {}).get("color_name"),
+        size_name=(label or {}).get("size_name"),
+        quality=placed_quality, qty=n,
+    )
+    return item.model_dump(), lines
+
+
+def place_batch(
+    connection, *, zone_id: str, box_ids: list[str], items: list[ContainerPlaceItemScan], user_id: str,
+) -> ContainerPlaceResult:
+    """Пачка коробов и/или россыпи в одно место хранения — одна ходка кладовщика.
+
+    Короб решает сам, что с ним делать: закрытый — размещается, уже размещённый —
+    переезжает. Задачи размещения закрываются автоматически, когда уехал их последний
+    объект: отдельного «финиша» у развозки нет.
+    """
+    from modules.shipments.service import maybe_close_putaway_doc
+
+    boxes = [str(b).strip() for b in (box_ids or []) if str(b).strip()]
+    scans = list(items or [])
+    if not boxes and not scans:
+        raise HTTPException(status_code=400, detail="Отсканируйте короб или товар")
+
+    zone = require_location(connection, zone_id, empty_detail="Отсканируйте место хранения")
+    placed_qty = 0
+    placed_boxes: list[ContainerItem] = []
+    placed_items: list[dict] = []
+    doc_ids: set[str] = set()
+    line_ids: set[str] = set()
+
+    for container_id in boxes:
+        box = require_container(connection, container_id)
+        status = str(box["status"])
+        if status in (CONTAINER_STATUS_NEW, CONTAINER_STATUS_OPEN):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Короб {box['doc_number']} ещё не закрыт — закройте его в задаче сборки",
+            )
+        if status == CONTAINER_STATUS_CLOSED:
+            placed_qty += _place_closed_box(connection, box, zone, user_id)
+        else:  # уже стоит на месте — это перенос
+            moved = move_placed_container(connection, container_id, zone[0], user_id)
+            placed_qty += moved.items_qty
+        if box["doc_id"]:
+            doc_ids.add(str(box["doc_id"]))
+        placed_boxes.append(container_item(connection, container_id))
+
+    for scan in scans:
+        item, lines = _place_aside_item(
+            connection, barcode=scan.barcode, qty=int(scan.qty), quality=scan.quality,
+            zone=zone, user_id=user_id,
+        )
+        placed_items.append(item)
+        line_ids |= lines
+        placed_qty += int(item["qty"])
+
+    if line_ids:
+        rows = connection.execute(
+            "SELECT DISTINCT doc_id FROM shipment_lines WHERE id = ANY(?)", (list(line_ids),)
+        ).fetchall()
+        doc_ids |= {str(r["doc_id"]) for r in rows}
+
+    closed_tasks: list[str] = []
+    for doc_id in sorted(doc_ids):
+        if maybe_close_putaway_doc(connection, doc_id, user_id):
+            row = connection.execute(
+                "SELECT doc_number FROM shipment_docs WHERE id = ?", (doc_id,)
+            ).fetchone()
+            if row:
+                closed_tasks.append(str(row["doc_number"]))
+
+    return ContainerPlaceResult(
+        zone_id=zone[0], zone_name=zone[1],
+        boxes=placed_boxes, items=[ContainerPlacedItem(**i) for i in placed_items],
+        placed_qty=placed_qty, closed_tasks=closed_tasks,
+    )
+
+
+def remove_item_from_placed(connection, container_id: str, *, barcode: str, qty: int, user_id: str) -> ContainerItem:
+    """Изъятие позиции из размещённого короба: товар остаётся в месте, но вне короба.
+
+    Пересорт находят и у стеллажа, а ручные операции с содержимым короба запрещены
+    (иначе короб и остатки разойдутся). Изъятие снимает ось короба, не двигая товар:
+    дальше он живёт обычной россыпью в том же месте.
+    """
+    from modules.balances.service import insert_inventory_move
+    from modules.shipments.service import variant_by_barcode
+
+    row = require_container(connection, container_id)
+    if str(row["status"]) != CONTAINER_STATUS_PLACED:
+        raise HTTPException(status_code=400, detail="Изымать можно только из размещённого короба")
+    n = int(qty or 0)
+    if n <= 0:
+        raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
+
+    variant = variant_by_barcode(connection, barcode)
+    stock = [
+        r for r in container_stock_rows(connection, container_id)
+        if r["product_id"] == variant["product_id"]
+        and (r["color_id"] or None) == (variant["color_id"] or None)
+        and (r["size_id"] or None) == (variant["size_id"] or None)
+    ]
+    available = sum(r["net"] for r in stock)
+    if available < n:
+        raise HTTPException(
+            status_code=400,
+            detail=f"В коробе {row['doc_number']} этого товара только {available} шт.",
+        )
+
+    remaining = n
+    for r in stock:
+        if remaining <= 0:
+            break
+        take = min(remaining, r["net"])
+        insert_inventory_move(
+            connection,
+            product_id=r["product_id"], product_name=r["product_name"], product_sku=r["product_sku"],
+            color_id=r["color_id"], color_name=r["color_name"],
+            size_id=r["size_id"], size_name=r["size_name"],
+            client_id=r["client_id"], client_name=r["client_name"],
+            from_op=r["op"], to_op=r["op"],
+            from_quality=r["quality"], to_quality=r["quality"],
+            from_zone_id=r["zone_id"], from_zone_name=r["zone_name"],
+            to_zone_id=r["zone_id"], to_zone_name=r["zone_name"],
+            qty=take, user_id=user_id,
+            from_container_id=container_id, to_container_id=None,
+            shipment_line_id=r["shipment_line_id"],
+            comment=f"Изъятие из короба {row['doc_number']}: {take} шт. остаются в месте {r['zone_name'] or '—'}",
+        )
+        log_container_op(
+            connection, container_id=container_id, op_type=CONTAINER_OP_ITEM_REMOVE, user_id=user_id,
+            doc_id=row["doc_id"], product_id=r["product_id"], product_name=r["product_name"],
+            product_sku=r["product_sku"], color_name=r["color_name"], size_name=r["size_name"],
+            qty=take, zone_id=r["zone_id"], zone_name=r["zone_name"],
+            comment=f"Изъятие из размещённого короба: -{take} шт.",
+        )
+        remaining -= take
+
+    return container_item(connection, container_id)

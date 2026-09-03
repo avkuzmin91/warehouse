@@ -308,11 +308,12 @@ class ShipmentLineItem(BaseModel):
     # частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
     packed_pending_good:   int = 0
     packed_pending_defect: int = 0
-    # Задача размещения: сколько лежит в коробах на столе и сколько уже уехало в ячейки
-    # (placed_loose_qty — из них крупногабарит, размещённый напрямую, мимо короба).
+    # Задача размещения: сколько собрано и ждёт развозки по местам (boxed_qty, из них
+    # брак и собранное мимо коробов) и сколько уже уехало в места хранения.
     boxed_qty:        int = 0
+    boxed_defect_qty: int = 0
+    aside_qty:        int = 0
     placed_qty:       int = 0
-    placed_loose_qty: int = 0
     available_for_pack: int = 0
     storage_zone_id:   str | None
     storage_zone_name: str | None
@@ -432,12 +433,12 @@ class ShipmentBoxTakePayload(BaseModel):
 class ShipmentBoxItemPayload(BaseModel):
     """Скан товара в короб на ТСД. Товар опознаётся только по ШК (ручного выбора нет).
 
-    Короб принимает только годный: найденный брак пикается сканом задачи
-    (`/putaway/defect`), в короб он не кладётся.
+    Короб — просто тара: принимает и годный, и брак (качество переключателем на ТСД).
     """
 
     barcode: str = Field(min_length=1)
     qty:     int = Field(ge=1, default=1)
+    quality: str = "good"
 
 
 class ShipmentBoxItemUndoPayload(BaseModel):
@@ -447,20 +448,12 @@ class ShipmentBoxItemUndoPayload(BaseModel):
     qty:     int = Field(ge=1, default=1)
 
 
-class ShipmentPutawayDefectPayload(BaseModel):
-    """Скан найденного при раскладке брака (мимо коробов)."""
-
-    barcode: str = Field(min_length=1)
-    qty:     int = Field(ge=1, default=1)
-
-
-class ShipmentPutawayPlacePayload(BaseModel):
-    """Крупногабарит: скан товара + скан ячейки, минуя короб."""
+class ShipmentPutawayAsidePayload(BaseModel):
+    """Скан товара мимо короба: габарит не влез либо в короб его класть не стали."""
 
     barcode: str = Field(min_length=1)
     qty:     int = Field(ge=1, default=1)
     quality: str = "good"
-    zone_id: str = Field(min_length=1)
 
 
 class ShipmentPutawayUndoPayload(BaseModel):
@@ -471,7 +464,7 @@ class ShipmentPutawayUndoPayload(BaseModel):
 
 
 class ShipmentPutawayItemResult(BaseModel):
-    """Итог поштучной операции ТСД: что зафиксировано и сколько брака ждёт ячейку."""
+    """Итог поштучной операции ТСД: что зафиксировано и сколько собрано мимо коробов."""
 
     line_id:      str
     product_name: str | None = None
@@ -479,19 +472,7 @@ class ShipmentPutawayItemResult(BaseModel):
     color_name:   str | None = None
     size_name:    str | None = None
     qty:          int
-    zone_name:    str | None = None
-    defect_total: int = 0
-
-
-class ShipmentBoxPlacePayload(BaseModel):
-    """Скан QR ячейки, куда встал короб."""
-
-    zone_id: str = Field(min_length=1)
-
-
-class ShipmentFinishPutawayPayload(BaseModel):
-    # Куда уходит найденный при сборке брак (обязательно, если брак есть).
-    defect_zone_id: str | None = None
+    aside_total:  int = 0
 
 
 class ShipmentDetailResponse(BaseModel):

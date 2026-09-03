@@ -15,10 +15,13 @@ from .schemas import (
     ContainerBatchResult,
     ContainerDetailResponse,
     ContainerItem,
+    ContainerItemRemoveRequest,
     ContainerLabelsResponse,
     ContainerListResponse,
     ContainerLookupResponse,
     ContainerMoveRequest,
+    ContainerPlaceRequest,
+    ContainerPlaceResult,
 )
 from .service import (
     container_contents,
@@ -29,6 +32,8 @@ from .service import (
     list_containers,
     lookup_container,
     move_placed_container,
+    place_batch,
+    remove_item_from_placed,
 )
 
 router = APIRouter(tags=["containers"])
@@ -91,6 +96,31 @@ def lookup_container_endpoint(code: str, user=Depends(get_current_stock_operator
         return lookup_container(conn, code)
 
 
+@router.post("/containers/place", response_model=ContainerPlaceResult)
+def place_containers_endpoint(
+    payload: ContainerPlaceRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_stock_operator),
+):
+    """Размещение пачки: сканы коробов и товара, затем скан места хранения.
+
+    Одна ходка кладовщика = один запрос: закрытые короба встают на место, уже
+    размещённые переезжают, россыпь мимо коробов уезжает туда же. Задача сборки
+    закрывается сама, когда уехал её последний объект.
+    """
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "containers_place")
+        if not proceed:
+            return stored
+        result = place_batch(
+            conn, zone_id=payload.zone_id, box_ids=payload.box_ids, items=payload.items, user_id=uid,
+        )
+        finish_idempotent(conn, x_request_id, result.model_dump())
+        conn.commit()
+    return result
+
+
 @router.get("/containers/{container_id}", response_model=ContainerDetailResponse)
 def get_container_endpoint(container_id: str, user=Depends(get_current_shipment_viewer)):
     _ = user
@@ -109,13 +139,34 @@ def move_container_endpoint(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(get_current_stock_operator),
 ):
-    """Перенос размещённого короба в другую ячейку (скан короба → скан ячейки)."""
+    """Перенос размещённого короба в другое место (скан короба → скан места)."""
     uid = str(user["id"])
     with get_connection() as conn:
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "container_move")
         if not proceed:
             return stored
         item = move_placed_container(conn, container_id, payload.zone_id, uid)
+        finish_idempotent(conn, x_request_id, item.model_dump())
+        conn.commit()
+    return item
+
+
+@router.post("/containers/{container_id}/items/remove", response_model=ContainerItem)
+def remove_container_item_endpoint(
+    container_id: str,
+    payload: ContainerItemRemoveRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_stock_operator),
+):
+    """Изъятие товара из размещённого короба: пересорт нашли уже у стеллажа."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "container_item_remove")
+        if not proceed:
+            return stored
+        item = remove_item_from_placed(
+            conn, container_id, barcode=payload.barcode, qty=payload.qty, user_id=uid,
+        )
         finish_idempotent(conn, x_request_id, item.model_dump())
         conn.commit()
     return item

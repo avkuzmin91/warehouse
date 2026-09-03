@@ -1193,10 +1193,12 @@ def _bucket_attribution_nets(
 
 
 def _ensure_not_boxed(connection, payload, *, op: str, quality: str, zone_id: str | None, action: str) -> None:
-    """Гейт ручных операций: товар, лежащий в коробе, двигается только коробом.
+    """Гейт ручных операций: то, что лежит в коробе, двигается только коробом.
 
-    Иначе остаток уедет из ячейки, а содержимое короба останется прежним — короб и
-    остатки разойдутся. Перенос короба целиком — POST /containers/{id}/move.
+    Иначе остаток уедет из места, а содержимое короба останется прежним — короб и
+    остатки разойдутся. Короб целиком развозит процесс размещения; отдельную позицию
+    из размещённого короба сначала изымают (POST /containers/{id}/items/remove).
+    Считаем свободный остаток: часть той же позиции могла лежать россыпью, её двигать можно.
     """
     from fastapi import HTTPException
     from modules.containers.service import containers_holding
@@ -1206,11 +1208,23 @@ def _ensure_not_boxed(connection, payload, *, op: str, quality: str, zone_id: st
         product_id=payload.product_id, color_id=payload.color_id, size_id=payload.size_id,
         client_id=payload.client_id, zone_id=zone_id, op=op, quality=quality,
     )
-    if boxes:
+    if not boxes:
+        return
+
+    in_boxes = sum(qty for _number, qty in boxes)
+    available = get_available_in_zone(
+        connection,
+        product_id=payload.product_id, color_id=payload.color_id, size_id=payload.size_id,
+        client_id=payload.client_id, zone_id=zone_id, op=op, quality=quality,
+    )
+    free = max(available - in_boxes, 0)
+    if int(payload.qty or 0) > free:
+        names = ", ".join(number for number, _qty in boxes)
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Товар лежит в коробе {', '.join(boxes)} — {action} можно только коробом целиком"
+                f"Товар лежит в коробе {names} ({in_boxes} шт.) — {action} можно только коробом целиком"
+                + (f", свободно {free} шт." if free else "")
             ),
         )
 

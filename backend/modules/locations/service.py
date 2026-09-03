@@ -11,6 +11,7 @@ from dbconn import get_connection
 
 from .schemas import (
     LocationBulkCreateRequest,
+    LocationBulkDeleteResult,
     LocationBulkResult,
     LocationCreateRequest,
     LocationItem,
@@ -272,3 +273,28 @@ def delete_location(loc_id: str, editor_id: str) -> MessageResponse:
         )
         conn.commit()
     return MessageResponse(message="Удалено")
+
+
+def bulk_delete_locations(ids: list[str], editor_id: str) -> LocationBulkDeleteResult:
+    uniq: list[str] = []
+    seen: set[str] = set()
+    for raw in ids:
+        s = str(raw or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            uniq.append(s)
+    if not uniq:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Выберите места для удаления")
+    now = _now()
+    with get_connection() as conn:
+        # Уже удалённые и несуществующие id просто не попадают в UPDATE — массовое
+        # удаление идемпотентно, повтор после обрыва связи не ломается.
+        rows = conn.execute(
+            "UPDATE unloading_zones SET is_deleted = 1, deleted_at = ?, deleted_by_id = ?, "
+            "updated_at = ?, updated_by_id = ? "
+            "WHERE id = ANY(?) AND COALESCE(is_deleted, 0) = 0 RETURNING id",
+            (now, editor_id, now, editor_id, uniq),
+        ).fetchall()
+        conn.commit()
+    deleted = len(rows)
+    return LocationBulkDeleteResult(deleted=deleted, skipped=len(uniq) - deleted)

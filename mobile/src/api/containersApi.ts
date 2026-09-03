@@ -1,4 +1,4 @@
-import { request } from './http'
+import { request, requestIdHeaders } from './http'
 
 // --- Types ---
 /** Короб: тара задачи «Размещение по ячейкам». */
@@ -71,13 +71,6 @@ export type ContainerListParams = {
   search?: string
 }
 
-export type ContainerLabel = {
-  id: string
-  doc_number: string
-  payload: string // содержимое QR: «wms:box:<id>»
-  qr_svg: string
-}
-
 export type ContainerLookupResponse = { found: boolean; container: ContainerItem | null }
 
 /** Скан товара, собранного мимо короба: качество определится само, если оно одно. */
@@ -98,7 +91,7 @@ export type ContainerPlaceResult = {
   boxes: ContainerItem[]
   items: ContainerPlacedItem[]
   placed_qty: number
-  closed_tasks: string[]  // задачи, закрывшиеся этим размещением
+  closed_tasks: string[] // задачи, закрывшиеся этим размещением
 }
 
 // --- API functions ---
@@ -119,29 +112,8 @@ export function getContainer(id: string, signal?: AbortSignal) {
   return request<ContainerDetailResponse>(`/containers/${id}`, { signal })
 }
 
-/** Завести пачку пустых коробов под печать этикеток. */
-export function createContainers(count: number) {
-  return request<{ items: ContainerItem[] }>('/containers', {
-    method: 'POST',
-    body: JSON.stringify({ count }),
-  })
-}
-
-export function getContainerLabels(ids: string[], signal?: AbortSignal) {
-  const sp = new URLSearchParams({ ids: ids.join(',') })
-  return request<{ items: ContainerLabel[] }>(`/containers/labels?${sp.toString()}`, { signal })
-}
-
 export function getContainerByCode(code: string, signal?: AbortSignal) {
   return request<ContainerLookupResponse>(`/containers/by-code/${encodeURIComponent(code)}`, { signal })
-}
-
-/** Перенос размещённого короба в другое место. */
-export function moveContainer(id: string, zoneId: string) {
-  return request<ContainerItem>(`/containers/${id}/move`, {
-    method: 'POST',
-    body: JSON.stringify({ zone_id: zoneId }),
-  })
 }
 
 /** Размещение пачки: сканы коробов и товара, затем скан места хранения.
@@ -149,22 +121,38 @@ export function moveContainer(id: string, zoneId: string) {
  * Одна ходка кладовщика = один запрос. Закрытые короба встают на место, уже
  * размещённые переезжают, россыпь мимо коробов уезжает туда же.
  */
-export function placeContainers(payload: {
-  zone_id: string
-  box_ids?: string[]
-  items?: ContainerPlaceItemScan[]
-}) {
+export function placeContainers(
+  payload: { zone_id: string; box_ids?: string[]; items?: ContainerPlaceItemScan[] },
+  requestId: string,
+) {
   return request<ContainerPlaceResult>('/containers/place', {
     method: 'POST',
-    body: JSON.stringify({ zone_id: payload.zone_id, box_ids: payload.box_ids ?? [], items: payload.items ?? [] }),
+    body: JSON.stringify({
+      zone_id: payload.zone_id,
+      box_ids: payload.box_ids ?? [],
+      items: payload.items ?? [],
+    }),
+    headers: requestIdHeaders(requestId),
+  })
+}
+
+/** Перенос размещённого короба в другое место. */
+export function moveContainer(id: string, zoneId: string, requestId: string) {
+  return request<ContainerItem>(`/containers/${id}/move`, {
+    method: 'POST',
+    body: JSON.stringify({ zone_id: zoneId }),
+    headers: requestIdHeaders(requestId),
   })
 }
 
 /** Изъятие позиции из размещённого короба: товар остаётся в месте россыпью. */
-export function removeContainerItem(id: string, payload: { barcode: string; qty?: number }) {
+export function removeContainerItem(
+  id: string, payload: { barcode: string; qty?: number }, requestId: string,
+) {
   return request<ContainerItem>(`/containers/${id}/items/remove`, {
     method: 'POST',
     body: JSON.stringify(payload),
+    headers: requestIdHeaders(requestId),
   })
 }
 
@@ -176,9 +164,10 @@ export const CONTAINER_STATUS_LABELS: Record<ContainerStatus, string> = {
   placed: 'Размещён',
 }
 
-export function containerStatusTone(status: ContainerStatus): string {
-  if (status === 'placed') return 'success'
-  if (status === 'closed') return 'info'
-  if (status === 'open') return 'warning'
-  return ''
+/** QR короба: «wms:box:<id>». Номер BOX-000123 печатается рядом и тоже принимается. */
+export const CONTAINER_QR_PREFIX = 'wms:box:'
+
+export function isContainerCode(raw: string): boolean {
+  const s = (raw || '').trim()
+  return s.startsWith(CONTAINER_QR_PREFIX) || /^BOX-\d+$/i.test(s)
 }

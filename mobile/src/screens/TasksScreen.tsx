@@ -22,7 +22,8 @@ function sinceLabel(since?: string | null): string {
 function taskVisual(kind: string, direction?: string | null): { icon: IconName; tone: string } {
   if (kind === 'shipment_move_in') return { icon: 'box', tone: 'amber' }
   if (kind === 'shipment_relocate') return { icon: 'layers', tone: 'blue' }
-  if (kind === 'shipment_putaway') return { icon: 'layers', tone: 'blue' }
+  if (kind === 'shipment_putaway') return { icon: 'box', tone: 'blue' }
+  if (kind === 'shipment_place_boxes') return { icon: 'layers', tone: 'blue' }
   if (kind === 'shipment_defect_prepare') return { icon: 'box', tone: 'gray' }
   if (kind.startsWith('shipment')) return { icon: 'box', tone: 'gray' }
   if (kind.startsWith('dispatch')) return { icon: 'forklift', tone: 'green' }
@@ -33,7 +34,7 @@ function taskVisual(kind: string, direction?: string | null): { icon: IconName; 
 
 export function TasksScreen() {
   const { user } = useAuth()
-  const { openTrip, openShipment, openDispatchPrepare, openPackDoc, openPutawayDoc, openReceiptDoc } = useNav()
+  const { openTrip, openShipment, openDispatchPrepare, openPackDoc, openPutawayDoc, openPlace, openReceiptDoc } = useNav()
   const toast = useToast()
   // Сводка дня — только менеджерский состав (контроль склада со смартфона).
   const isManager = canCreateDocuments(user?.role)
@@ -159,8 +160,10 @@ export function TasksScreen() {
                 if (t.doc_type === 'trip') openTrip(t.doc_id)
                 // «Упаковать» — внесение годного/брака: экран упаковки, не деталка кладовщика.
                 else if (t.kind === 'shipment_pack') openPackDoc(t.doc_id)
-                // «Разложить по ячейкам» — сборка коробов и размещение на стеллаже.
+                // «Собрать короба» — сборка на столе; «Развезти по местам» — развозка,
+                // она идёт сканом коробов и мест, без привязки к одной задаче.
                 else if (t.kind === 'shipment_putaway') openPutawayDoc(t.doc_id)
+                else if (t.kind === 'shipment_place_boxes') openPlace()
                 else if (t.doc_type === 'shipment') openShipment(t.doc_id)
                 else if (t.doc_type === 'dispatch') openDispatchPrepare(t.doc_id)
                 else if (t.doc_type === 'receipt') openReceiptDoc(t.doc_id)

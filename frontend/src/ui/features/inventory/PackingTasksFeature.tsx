@@ -272,8 +272,9 @@ export function PackingTasksFeature() {
             options={[
               { value: '', label: 'Все статусы' },
               { value: 'overdue', label: 'Просрочка' },
-              // `placed` — терминал задачи размещения по ячейкам, в маршрут упаковки не входит.
-              ...([...SHIPMENT_STATUS_ORDER, 'placed', 'cancelled'] as ShipmentStatus[])
+              // `collected`/`placed` — статусы задачи размещения по ячейкам, в маршрут
+              // упаковки не входят, но фильтровать список по ним нужно.
+              ...([...SHIPMENT_STATUS_ORDER, 'collected', 'placed', 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
             onChange={(v) => setStatusFilter(v)}

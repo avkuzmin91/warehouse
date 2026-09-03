@@ -2,19 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
 import {
-  addPutawayDefect,
-  finishPutaway,
+  addPutawayAsideItem,
+  finishCollecting,
   getShipment,
-  placePutawayItem,
   takeShipmentBox,
-  undoPlacedPutawayItem,
-  undoPutawayDefect,
+  undoPutawayAsideItem,
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
   type ShipmentDetail,
 } from '../api/shipmentsApi'
-import { getLocationByCode } from '../api/locationsApi'
-import { getProductByBarcode } from '../api/productsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
@@ -29,29 +25,28 @@ const BOX_TONE: Record<ShipmentBox['status'], string> = {
   placed: 'success',
 }
 
-/** Задача «Упаковка с ТСД»: упаковка идёт в ходе раскладки по коробам.
+/** Задача «Упаковка с ТСД», фаза сборки: товар пикается в короба у стола.
  *
- * Кладовщик берёт короб сканом этикетки и пикает в него товар поштучно — каждый
- * скан и есть запись упаковки (объём, дата, заработок). Заполненный короб
- * закрывается и ставится в ячейку сканом её QR. Задача закрывается, когда все
- * короба разложены по ячейкам.
+ * Кладовщик или начальник смены берёт короб сканом этикетки и пикает в него товар
+ * поштучно — каждый скан и есть запись упаковки (объём, дата, заработок). Короб —
+ * просто тара: в него ложится и годный, и брак. Что в короб не идёт (габарит,
+ * особые причины) — пикается «мимо короба».
  *
- * Мимо коробов идут две вещи: найденный брак (в короб он не кладётся и уезжает в
- * ячейку брака при закрытии) и крупногабарит, который в короб не влезает — он
- * пикается сразу в ячейку.
+ * Ячейку здесь никто не сканирует: закрытые короба и собранное мимо коробов
+ * развозит по местам отдельный процесс на ТСД у стеллажа («Перенос»). Кнопка
+ * «Сборка завершена» закрывает эту фазу, а задача уходит в «Размещено» сама,
+ * когда уедет её последний объект.
  */
 export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
-  const { back, openPutawayBox } = useNav()
+  const { back, openPutawayBox, openPlace } = useNav()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmFinish, setConfirmFinish] = useState(false)
-  const [defectZoneId, setDefectZoneId] = useState<string | null>(null)
-  const [defectZoneName, setDefectZoneName] = useState<string | null>(null)
   const [notice, setNotice] = useState('')
-  // Размещение без короба идёт в два скана: сначала товар, потом ячейка.
-  const [loose, setLoose] = useState<{ barcode: string; label: string } | null>(null)
+  // Качество скана мимо короба: липкий переключатель, брак пикают сериями.
+  const [asideQuality, setAsideQuality] = useState<'good' | 'defect'>('good')
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -83,12 +78,14 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const packedTotal = lines.reduce((s, l) => s + l.packed_good, 0)
   const boxedTotal = lines.reduce((s, l) => s + l.boxed_qty, 0)
   const placedTotal = lines.reduce((s, l) => s + l.placed_qty, 0)
-  const defectTotal = lines.reduce((s, l) => s + l.packed_pending_defect, 0)
-  const looseTotal = lines.reduce((s, l) => s + l.placed_loose_qty, 0)
-  // Пустой открытый короб задачу не держит: при закрытии он освобождается сам.
-  const pendingBoxes = boxes.filter((b) => b.status === 'closed' || (b.status === 'open' && b.items_qty > 0))
-  const asideLines = lines.filter((l) => l.packed_pending_defect > 0 || l.placed_loose_qty > 0)
+  const asideTotal = lines.reduce((s, l) => s + l.aside_qty, 0)
+  const defectTotal = lines.reduce((s, l) => s + l.boxed_defect_qty, 0)
+  // Сборку держит только набранный, но не закрытый короб: пустой освобождается сам.
+  const unclosedBoxes = boxes.filter((b) => b.status === 'open' && b.items_qty > 0)
+  const waitingBoxes = boxes.filter((b) => b.status === 'closed')
+  const asideLines = lines.filter((l) => l.aside_qty > 0)
   const onPacking = doc?.status === 'on_packing'
+  const collected = doc?.status === 'collected'
 
   async function onTakeBox() {
     if (busy) return
@@ -108,7 +105,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
     }
   }
 
-  async function onScanDefect() {
+  async function onScanAside() {
     if (busy) return
     setBusy(true)
     setError('')
@@ -116,124 +113,36 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
     try {
       const code = await scanSource.scan()
       if (!code) return
-      const res = await addPutawayDefect(shipmentId, { barcode: code, qty: 1 }, newRequestId())
+      const res = await addPutawayAsideItem(
+        shipmentId, { barcode: code, qty: 1, quality: asideQuality }, newRequestId(),
+      )
       scanSuccessFeedback()
       setNotice(
-        `Брак: ${variantTitle(res.product_name ?? '—', [res.color_name, res.size_name])} +${res.qty} шт. — `
-        + 'в короб не кладётся, уедет в ячейку брака',
+        `${asideQuality === 'defect' ? 'Брак' : 'Мимо короба'}: `
+        + `${variantTitle(res.product_name ?? '—', [res.color_name, res.size_name])} +${res.qty} шт. — `
+        + 'уедет на место отдельно',
       )
       await refresh()
     } catch (err) {
       scanNotFoundFeedback()
-      setError(err instanceof Error ? err.message : 'Брак не принят')
+      setError(err instanceof Error ? err.message : 'Товар не принят')
     } finally {
       setBusy(false)
     }
   }
 
-  async function onScanLooseItem() {
+  async function onUndoAside(lineId: string) {
     if (busy) return
     setBusy(true)
     setError('')
     setNotice('')
     try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const found = await getProductByBarcode(code)
-      if (!found.found || !found.match) {
-        scanNotFoundFeedback()
-        setError(`Штрих-код «${code}» не найден`)
-        return
-      }
-      scanSuccessFeedback()
-      setLoose({
-        barcode: code,
-        label: variantTitle(found.match.product_name, [found.match.color_name, found.match.size_name]),
-      })
-    } catch (err) {
-      scanNotFoundFeedback()
-      setError(err instanceof Error ? err.message : 'Сканирование не удалось')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onScanLooseZone() {
-    if (busy || !loose) return
-    setBusy(true)
-    setError('')
-    try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const res = await getLocationByCode(code)
-      if (!res.found || !res.location) {
-        scanNotFoundFeedback()
-        setError(`Ячейка по коду «${code}» не найдена`)
-        return
-      }
-      const done = await placePutawayItem(
-        shipmentId,
-        { barcode: loose.barcode, qty: 1, zone_id: res.location.id },
-        newRequestId(),
-      )
-      scanSuccessFeedback()
-      setNotice(`Размещено без короба: ${loose.label} ${done.qty} шт. → ${done.zone_name ?? '—'}`)
-      setLoose(null)
+      await undoPutawayAsideItem(shipmentId, lineId, 1, newRequestId())
       await refresh()
     } catch (err) {
-      scanNotFoundFeedback()
-      setError(err instanceof Error ? err.message : 'Не удалось разместить товар')
+      setError(err instanceof Error ? err.message : 'Не удалось отменить')
     } finally {
       setBusy(false)
-    }
-  }
-
-  async function onUndoDefect(lineId: string) {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      await undoPutawayDefect(shipmentId, lineId, 1, newRequestId())
-      await refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось отменить брак')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onUndoLoose(lineId: string) {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      await undoPlacedPutawayItem(shipmentId, lineId, 1, newRequestId())
-      await refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось отменить размещение')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onScanDefectZone() {
-    setError('')
-    try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const res = await getLocationByCode(code)
-      if (!res.found || !res.location) {
-        scanNotFoundFeedback()
-        setError(`Место по коду «${code}» не найдено`)
-        return
-      }
-      scanSuccessFeedback()
-      setDefectZoneId(res.location.id)
-      setDefectZoneName(res.location.code)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Сканирование не удалось')
     }
   }
 
@@ -241,11 +150,11 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
     setBusy(true)
     setError('')
     try {
-      await finishPutaway(shipmentId, defectZoneId, newRequestId())
+      await finishCollecting(shipmentId, newRequestId())
       setConfirmFinish(false)
       await refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось закрыть задачу')
+      setError(err instanceof Error ? err.message : 'Не удалось завершить сборку')
     } finally {
       setBusy(false)
     }
@@ -266,25 +175,25 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
           <>
             <div className="summary">
               <div className="kv">
-                <span className="k">Разложено по ячейкам</span>
-                <span className="v">{placedTotal} из {planTotal}</span>
+                <span className="k">Собрано сканом</span>
+                <span className="v">{packedTotal} из {planTotal}</span>
               </div>
               <div className="kv">
-                <span className="k">Упаковано (скан в короб)</span>
-                <span className="v">{packedTotal}</span>
-              </div>
-              <div className="kv">
-                <span className="k">В коробах на столе</span>
+                <span className="k">Ждёт размещения</span>
                 <span className="v">{boxedTotal}</span>
+              </div>
+              <div className="kv">
+                <span className="k">Размещено по местам</span>
+                <span className="v">{placedTotal}</span>
               </div>
               <div className="kv">
                 <span className="k">Осталось на столе</span>
                 <span className="v">{poolTotal}</span>
               </div>
-              {looseTotal > 0 && (
+              {asideTotal > 0 && (
                 <div className="kv">
-                  <span className="k">Размещено без короба</span>
-                  <span className="v">{looseTotal}</span>
+                  <span className="k">Мимо коробов</span>
+                  <span className="v">{asideTotal}</span>
                 </div>
               )}
               {defectTotal > 0 && (
@@ -294,6 +203,19 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                 </div>
               )}
             </div>
+
+            {collected && (
+              <>
+                <div className="alert ok">
+                  <Icon name="check" size={15} />
+                  Сборка завершена. Осталось развезти по местам: коробов {waitingBoxes.length}
+                  {asideTotal > 0 ? `, мимо коробов ${asideTotal} шт.` : ''}
+                </div>
+                <button className="btn" style={{ width: '100%' }} onClick={openPlace}>
+                  <Icon name="layers" size={18} /> Развезти по местам
+                </button>
+              </>
+            )}
 
             <div className="sec">
               Короба
@@ -308,8 +230,8 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
               <div className="line">
                 <div className="line-sub">
                   Наклейте на короб напечатанную этикетку и отсканируйте её. Дальше пикайте товар
-                  в короб — каждый скан вносит упаковку. Заполнили — закройте короб и отсканируйте
-                  ячейку, куда его поставили.
+                  в короб — каждый скан вносит упаковку. Заполнили — закройте короб и поставьте
+                  рядом: развозить их будут отдельно.
                 </div>
               </div>
             ) : (
@@ -337,26 +259,30 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
             </div>
             {onPacking && (
               <>
-                <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanDefect() }}>
-                  <Icon name="qr" size={18} /> Нашёл брак — скан товара
-                </button>
-                {loose ? (
-                  <>
-                    <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanLooseZone() }}>
-                      <Icon name="qr" size={18} /> Скан ячейки для «{loose.label}»
-                    </button>
-                    <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => setLoose(null)}>
-                      Отменить размещение
-                    </button>
-                  </>
-                ) : (
-                  <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanLooseItem() }}>
-                    <Icon name="qr" size={18} /> Не влезает в короб — скан товара
+                <div className="line-row" style={{ marginTop: 0 }}>
+                  <button
+                    className={asideQuality === 'good' ? 'btn' : 'btn ghost'}
+                    style={{ flex: 1 }}
+                    disabled={busy}
+                    onClick={() => setAsideQuality('good')}
+                  >
+                    Годный
                   </button>
-                )}
+                  <button
+                    className={asideQuality === 'defect' ? 'btn danger' : 'btn ghost'}
+                    style={{ flex: 1 }}
+                    disabled={busy}
+                    onClick={() => setAsideQuality('defect')}
+                  >
+                    Брак
+                  </button>
+                </div>
+                <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanAside() }}>
+                  <Icon name="qr" size={18} /> В короб не идёт — скан товара
+                </button>
                 <div className="line-sub" style={{ textAlign: 'center' }}>
-                  Брак в короб не кладётся: он уедет в ячейку брака при закрытии задачи.
-                  Крупногабарит пикайте сразу в ячейку — товар и следом её QR.
+                  Габарит не влез или короб не подходит — пикайте сюда. Место такому товару
+                  назначит кладовщик у стеллажа, вместе с коробами.
                 </div>
                 {notice && (
                   <div className="line-sub" style={{ textAlign: 'center', color: 'var(--c-success)' }}>{notice}</div>
@@ -367,37 +293,21 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
               <div key={`aside-${l.id}`} className="line">
                 <div className="line-name">{variantTitle(l.product_name, [l.color_name, l.size_name])}</div>
                 <div className="line-sub mono">{l.product_sku}</div>
-                {l.packed_pending_defect > 0 && (
-                  <>
-                    <div className="line-sub">
-                      Брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_pending_defect}</b> шт. — ждёт ячейку брака
-                    </div>
-                    {onPacking && (
-                      <button
-                        className="btn ghost sm"
-                        style={{ width: '100%', marginTop: 4 }}
-                        disabled={busy}
-                        onClick={() => { void onUndoDefect(l.id) }}
-                      >
-                        <Icon name="refresh" size={14} /> Отменить брак 1 шт.
-                      </button>
-                    )}
-                  </>
-                )}
-                {l.placed_loose_qty > 0 && (
-                  <>
-                    <div className="line-sub">Размещено без короба <b>{l.placed_loose_qty}</b> шт.</div>
-                    {onPacking && (
-                      <button
-                        className="btn ghost sm"
-                        style={{ width: '100%', marginTop: 4 }}
-                        disabled={busy}
-                        onClick={() => { void onUndoLoose(l.id) }}
-                      >
-                        <Icon name="refresh" size={14} /> Отменить размещение 1 шт.
-                      </button>
-                    )}
-                  </>
+                <div className="line-sub">
+                  Ждёт размещения <b>{l.aside_qty}</b> шт.
+                  {l.boxed_defect_qty > 0 && (
+                    <> · из них брак <b style={{ color: 'var(--c-danger)' }}>{l.boxed_defect_qty}</b></>
+                  )}
+                </div>
+                {onPacking && (
+                  <button
+                    className="btn ghost sm"
+                    style={{ width: '100%', marginTop: 4 }}
+                    disabled={busy}
+                    onClick={() => { void onUndoAside(l.id) }}
+                  >
+                    <Icon name="refresh" size={14} /> Отменить 1 шт.
+                  </button>
                 )}
               </div>
             ))}
@@ -415,8 +325,8 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   {l.packed_defect > 0 && <> · брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_defect}</b></>}
                 </div>
                 <div className="line-sub">
-                  В коробах {l.boxed_qty} · размещено {l.placed_qty}
-                  {l.placed_loose_qty > 0 && ` (из них без короба ${l.placed_loose_qty})`}
+                  Ждёт размещения {l.boxed_qty} · размещено {l.placed_qty}
+                  {l.aside_qty > 0 && ` (из них мимо коробов ${l.aside_qty})`}
                   {' '}· на столе {l.available_for_pack}
                 </div>
               </div>
@@ -429,27 +339,21 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   {error}
                 </div>
               )}
-              {onPacking && defectTotal > 0 && (
-                <button className="btn ghost" onClick={() => { void onScanDefectZone() }}>
-                  <Icon name="qr" size={16} />
-                  {defectZoneName ? `Ячейка брака: ${defectZoneName}` : `Ячейка для брака (${defectTotal} шт.)`}
-                </button>
-              )}
-              {onPacking && pendingBoxes.length > 0 && (
+              {onPacking && unclosedBoxes.length > 0 && (
                 <div className="line-sub" style={{ color: 'var(--c-warning)', textAlign: 'center' }}>
-                  Не размещено коробов: {pendingBoxes.length}
+                  Не закрыто коробов: {unclosedBoxes.length}
                 </div>
               )}
-              {onPacking && pendingBoxes.length === 0 && (
+              {onPacking && unclosedBoxes.length === 0 && (
                 <ConfirmAction
-                  label={<><Icon name="check" size={18} /> Задача выполнена</>}
+                  label={<><Icon name="check" size={18} /> Сборка завершена</>}
                   prompt={
                     poolTotal > 0
-                      ? `Разложено ${placedTotal} шт. На столе ещё ${poolTotal} шт — они вернутся на хранение. Закрыть задачу?`
-                      : `Разложено ${placedTotal} шт. Закрыть задачу?`
+                      ? `Собрано ${boxedTotal} шт. На столе ещё ${poolTotal} шт — они вернутся на хранение. Завершить сборку?`
+                      : `Собрано ${boxedTotal} шт. Завершить сборку?`
                   }
-                  confirmLabel="Закрыть"
-                  saving={busy || (defectTotal > 0 && !defectZoneId)}
+                  confirmLabel="Завершить"
+                  saving={busy}
                   open={confirmFinish}
                   onOpen={() => setConfirmFinish(true)}
                   onClose={() => setConfirmFinish(false)}

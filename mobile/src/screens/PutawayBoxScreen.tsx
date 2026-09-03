@@ -5,14 +5,12 @@ import {
   addShipmentBoxItem,
   closeShipmentBox,
   getShipmentBoxes,
-  placeShipmentBox,
   releaseShipmentBox,
   reopenShipmentBox,
   undoShipmentBoxItem,
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
 } from '../api/shipmentsApi'
-import { getLocationByCode } from '../api/locationsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
@@ -20,13 +18,16 @@ import { scanSource } from '../scan/ScanSource'
 import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 import { variantTitle } from '../utils/format'
 
-/** Короб задачи «Упаковка с ТСД»: скан товара внутрь, закрытие и постановка в ячейку.
+/** Короб задачи «Упаковка с ТСД»: скан товара внутрь и закрытие короба.
  *
  * Каждый скан — это и есть запись упаковки (объём, дата, заработок), поэтому
- * упаковка идёт поштучно в ходе раскладки. Короб принимает только годный: брак
- * пикается на экране задачи и уезжает в ячейку брака. Товар опознаётся только по
- * ШК — скан неизвестного кода отклоняется. Пустой короб можно освободить: взятая
- * по ошибке этикетка иначе держала бы всю задачу.
+ * упаковка идёт поштучно в ходе сборки. Короб — просто тара: переключатель
+ * «Годный / Брак» решает, чем пишется скан. Товар опознаётся только по ШК —
+ * скан неизвестного кода отклоняется. Пустой короб можно освободить: взятая по
+ * ошибке этикетка иначе держала бы всю задачу.
+ *
+ * Развозки здесь нет: закрытый короб уезжает на место отдельным процессом
+ * (экран «Перенос» или скан короба у стеллажа).
  */
 export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; boxId: string }) {
   const { back } = useNav()
@@ -34,6 +35,8 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  // Качество скана: липкий переключатель — брак пикают сериями, а не по одной штуке.
+  const [quality, setQuality] = useState<'good' | 'defect'>('good')
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -64,7 +67,9 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
       for (;;) {
         const code = await scanSource.scan()
         if (!code) return
-        const next = await addShipmentBoxItem(shipmentId, boxId, { barcode: code, qty: 1 }, newRequestId())
+        const next = await addShipmentBoxItem(
+          shipmentId, boxId, { barcode: code, qty: 1, quality }, newRequestId(),
+        )
         scanSuccessFeedback()
         setBox(next)
         if (next.status !== 'open') return
@@ -126,30 +131,6 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
     }
   }
 
-  async function onPlace() {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const loc = await getLocationByCode(code)
-      if (!loc.found || !loc.location) {
-        scanNotFoundFeedback()
-        setError(`Ячейка по коду «${code}» не найдена`)
-        return
-      }
-      const next = await placeShipmentBox(shipmentId, boxId, loc.location.id, newRequestId())
-      scanSuccessFeedback()
-      setBox(next)
-    } catch (err) {
-      scanNotFoundFeedback()
-      setError(err instanceof Error ? err.message : 'Не удалось разместить короб')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const status = box?.status
   const total = box?.items_qty ?? 0
 
@@ -175,7 +156,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
               </div>
               {box.zone_name && (
                 <div className="kv">
-                  <span className="k">Ячейка</span>
+                  <span className="k">Место</span>
                   <span className="v">{box.zone_name}</span>
                 </div>
               )}
@@ -183,17 +164,35 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
 
             {status === 'open' && (
               <>
+                <div className="line-row" style={{ marginTop: 0 }}>
+                  <button
+                    className={quality === 'good' ? 'btn' : 'btn ghost'}
+                    style={{ flex: 1 }}
+                    disabled={busy}
+                    onClick={() => setQuality('good')}
+                  >
+                    Годный
+                  </button>
+                  <button
+                    className={quality === 'defect' ? 'btn danger' : 'btn ghost'}
+                    style={{ flex: 1 }}
+                    disabled={busy}
+                    onClick={() => setQuality('defect')}
+                  >
+                    Брак
+                  </button>
+                </div>
                 <button
                   className="btn"
                   style={{ width: '100%' }}
                   disabled={busy}
                   onClick={() => { void onScanItem() }}
                 >
-                  <Icon name="qr" size={18} /> Скан товара в короб
+                  <Icon name="qr" size={18} /> Скан товара в короб{quality === 'defect' ? ' (брак)' : ''}
                 </button>
                 <div className="line-sub" style={{ textAlign: 'center' }}>
                   Сканер не закрывается — пикайте подряд. «Отмена» в сканере завершает серию.
-                  Брак в короб не кладётся — пикайте его на экране задачи.
+                  Качество переключается кнопками выше и держится до смены.
                 </div>
               </>
             )}
@@ -249,9 +248,10 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
               )}
               {status === 'closed' && (
                 <>
-                  <button className="btn" disabled={busy} onClick={() => { void onPlace() }}>
-                    <Icon name="qr" size={18} /> Разместить — скан ячейки
-                  </button>
+                  <div className="line-sub" style={{ textAlign: 'center' }}>
+                    Короб закрыт и ждёт развозки: его увезут к стеллажу и поставят на место
+                    сканом на ТСД.
+                  </div>
                   <button className="btn ghost" disabled={busy} onClick={() => { void onReopen() }}>
                     Открыть заново
                   </button>
@@ -259,7 +259,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
               )}
               {status === 'placed' && (
                 <div className="line-sub" style={{ textAlign: 'center', color: 'var(--c-success)' }}>
-                  Короб размещён в ячейке {box.zone_name ?? '—'}
+                  Короб размещён в месте {box.zone_name ?? '—'}
                 </div>
               )}
             </div>

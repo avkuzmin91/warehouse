@@ -7,6 +7,8 @@ from modules.dictionaries.schemas import MessageResponse
 
 from .schemas import (
     LocationBulkCreateRequest,
+    LocationBulkDeleteRequest,
+    LocationBulkDeleteResult,
     LocationBulkResult,
     LocationCreateRequest,
     LocationItem,
@@ -16,6 +18,7 @@ from .schemas import (
 )
 from .service import (
     bulk_create_locations,
+    bulk_delete_locations,
     create_location,
     delete_location,
     list_location_labels,
@@ -50,6 +53,11 @@ def create_location_endpoint(payload: LocationCreateRequest, admin=Depends(get_c
 @router.post("/locations/bulk", response_model=LocationBulkResult)
 def bulk_create_locations_endpoint(payload: LocationBulkCreateRequest, admin=Depends(get_current_admin)):
     return bulk_create_locations(payload, admin["id"])
+
+
+@router.post("/locations/bulk-delete", response_model=LocationBulkDeleteResult)
+def bulk_delete_locations_endpoint(payload: LocationBulkDeleteRequest, admin=Depends(get_current_admin)):
+    return bulk_delete_locations(payload.ids, admin["id"])
 
 
 @router.get("/locations/labels", response_model=LocationLabelsResponse)

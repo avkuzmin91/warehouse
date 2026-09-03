@@ -90,3 +90,51 @@ class ContainerLabelsResponse(BaseModel):
 
 class ContainerMoveRequest(BaseModel):
     zone_id: str = Field(min_length=1)
+
+
+class ContainerPlaceItemScan(BaseModel):
+    """Скан товара, собранного мимо короба (габарит, брак).
+
+    quality не обязателен: если по ШК ждёт размещения товар только одного качества,
+    он определяется сам — у стеллажа кладовщику незачем решать за упаковщика.
+    """
+
+    barcode: str = Field(min_length=1)
+    qty: int = Field(ge=1, default=1)
+    quality: str | None = None
+
+
+class ContainerPlaceRequest(BaseModel):
+    """Пачка коробов и/или товара в одно место хранения (сессия «взял → положил»)."""
+
+    zone_id: str = Field(min_length=1)
+    box_ids: list[str] = []
+    items: list[ContainerPlaceItemScan] = []
+
+
+class ContainerPlacedItem(BaseModel):
+    """Строка размещённой россыпи: что и сколько уехало в место хранения."""
+
+    product_name: str | None = None
+    product_sku: str | None = None
+    color_name: str | None = None
+    size_name: str | None = None
+    quality: str
+    qty: int
+
+
+class ContainerPlaceResult(BaseModel):
+    zone_id: str
+    zone_name: str
+    boxes: list[ContainerItem] = []
+    items: list[ContainerPlacedItem] = []
+    placed_qty: int = 0
+    # Номера задач размещения, которые закрылись этим размещением (последний объект).
+    closed_tasks: list[str] = []
+
+
+class ContainerItemRemoveRequest(BaseModel):
+    """Изъятие позиции из размещённого короба: товар остаётся в том же месте россыпью."""
+
+    barcode: str = Field(min_length=1)
+    qty: int = Field(ge=1, default=1)

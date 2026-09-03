@@ -153,6 +153,10 @@ SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
 # короба разложены по адресным ячейкам. Отдельный статус от `packed`: `packed`
 # означает «упаковано и ждёт отгрузку», а размещённый товар лежит на хранении.
 SHIPMENT_STATUS_PLACED            = "placed"
+# Задача «Размещение по ячейкам», конец сборки: короба закрыты и стоят у стола, товар
+# ждёт перевозки к стеллажам. НЕ терминал — документ уходит в `placed` сам, когда
+# размещён последний его объект (короб или россыпь мимо короба).
+SHIPMENT_STATUS_COLLECTED         = "collected"
 SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
@@ -161,6 +165,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_PACKED,
+    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_PLACED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
@@ -180,6 +185,7 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
     SHIPMENT_STATUS_PACKED:            "Упакован",
+    SHIPMENT_STATUS_COLLECTED:         "Собрано",
     SHIPMENT_STATUS_PLACED:            "Размещено",
     SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
@@ -278,8 +284,9 @@ SHIPMENT_TASK_KIND_LABELS: dict[str, str] = {
     SHIPMENT_TASK_PUTAWAY: "Размещение по ячейкам",
 }
 
-# on_packing → placed делает отдельный эндпоинт finish_putaway (гейт: все короба
-# закрыты и размещены, на столе ничего не осталось).
+# on_packing → collected делает отдельный эндпоинт finish_collecting (гейт: открытых
+# коробов с товаром не осталось). Дальше документ закрывается сам: collected → placed,
+# когда размещён последний короб/россыпь задачи (см. maybe_close_putaway_doc).
 SHIPMENT_TRANSITIONS_PUTAWAY: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_ON_PACKING,
@@ -321,10 +328,11 @@ INV_OP_PACKING     = "packing"
 # отгрузке: готовность наступает явным действием склада «Готово к рейсу»
 # (finish_relocation, relocating → packed), которое и переводит годное packed → ready.
 INV_OP_PACKED      = "packed"
-# «Собран в короб» — задача размещения по ячейкам: товар лежит в коробе на столе,
-# короб ещё не уехал на стеллаж. Корзина намеренно НЕ входит ни в один пул
-# доступности (ready+packed у отгрузки, storage у упаковки): по FBS товар готов к
-# отгрузке только после размещения короба в ячейке (boxed → storage@ячейка).
+# «Ждёт размещения» — задача размещения по ячейкам: товар собран у стола (в коробе
+# либо мимо короба — габарит, брак), но ещё не уехал на стеллаж. Корзина намеренно НЕ
+# входит ни в один пул доступности (ready+packed у отгрузки, storage у упаковки): по
+# FBS товар готов к отгрузке только после размещения в месте хранения
+# (boxed → storage@место). Ось короба (`*_container_id`) отличает короб от россыпи.
 INV_OP_BOXED       = "boxed"
 INV_OP_READY       = "ready"
 INV_OP_SHIPPED     = "shipped"
@@ -335,7 +343,7 @@ INV_OP_LABELS: dict[str, str] = {
     INV_OP_STORAGE:     "На хранении",
     INV_OP_PACKING:     "На упаковке",
     INV_OP_PACKED:      "Упакован",
-    INV_OP_BOXED:       "Собран в короб",
+    INV_OP_BOXED:       "Ждёт размещения",
     INV_OP_READY:       "Готов к отгрузке",
     INV_OP_SHIPPED:     "Отгружен",
     INV_OP_WRITTEN_OFF: "Списан",
@@ -486,8 +494,10 @@ SHIPMENT_OP_BOX_CLOSE   = "box_close"
 SHIPMENT_OP_BOX_PLACE   = "box_place"
 # Пустой короб снят с задачи (ошибочно взятая этикетка не должна блокировать финиш).
 SHIPMENT_OP_BOX_RELEASE = "box_release"
-# Крупногабарит: единица размещена в ячейку напрямую, мимо короба.
+# Товар собран мимо короба (габарит, брак) и уедет в место хранения отдельно.
 SHIPMENT_OP_ITEM_PLACE  = "item_place"
+# Сборка завершена: короба закрыты, задача ждёт перевозки к стеллажам.
+SHIPMENT_OP_COLLECTED   = "collected"
 SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
 # Менеджер запустил переупаковку (ошибка постановки задачи) / платная переупаковка
 # выставлена клиенту автосозданной записью «Доп. работы» при выходе в «Упаковано».

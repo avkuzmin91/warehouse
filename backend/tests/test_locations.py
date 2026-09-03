@@ -140,6 +140,41 @@ def test_labels_by_selected_ids(admin_client):
         _cleanup_room(room)
 
 
+def test_bulk_delete_hides_cells_and_is_idempotent(admin_client):
+    room = f"T{uuid.uuid4().hex[:4]}"
+    try:
+        admin_client.post(
+            "/locations/bulk", json={"room": room, "racks": ["А"], "sections": 3, "floors": 1}
+        )
+        lst = admin_client.get("/locations", params={"room": room, "limit": 500}).json()["items"]
+        assert len(lst) == 3
+        chosen = [lst[0]["id"], lst[2]["id"]]
+
+        r = admin_client.post("/locations/bulk-delete", json={"ids": chosen})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"deleted": 2, "skipped": 0}
+
+        left = admin_client.get("/locations", params={"room": room, "limit": 500}).json()
+        assert left["total"] == 1
+        assert left["items"][0]["id"] == lst[1]["id"]
+
+        # повтор (обрыв связи / двойной клик) ничего не ломает
+        r2 = admin_client.post("/locations/bulk-delete", json={"ids": chosen})
+        assert r2.json() == {"deleted": 0, "skipped": 2}
+    finally:
+        _cleanup_room(room)
+
+
+def test_bulk_delete_requires_ids_and_backoffice(admin_client, shift_supervisor_client):
+    empty = admin_client.post("/locations/bulk-delete", json={"ids": []})
+    assert empty.status_code == 422
+
+    forbidden = shift_supervisor_client.post(
+        "/locations/bulk-delete", json={"ids": [str(uuid.uuid4())]}
+    )
+    assert forbidden.status_code == 403
+
+
 def test_delete_hides_cell_from_list(admin_client):
     room = f"T{uuid.uuid4().hex[:4]}"
     try:

@@ -2,7 +2,7 @@ import { request, requestForm } from './http'
 import { moscowTodayYmd } from '../utils/format'
 import type { DuplicateCheckResponse } from './domainTypes'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'placed' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'collected' | 'placed' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Черновик',
@@ -10,6 +10,7 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
   packed:            'Упакован',
+  collected:         'Собрано',
   placed:            'Размещено',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
@@ -21,7 +22,8 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   on_packing:        'Упакован',
   relocating:        'Передан кладовщику',
   packed:            'Упакован',
-  placed:            'Разложено по ячейкам',
+  collected:         'Собрано в короба',
+  placed:            'Разложено по местам',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -32,6 +34,7 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   on_packing:        'info',
   relocating:        'info',
   packed:            'success',
+  collected:         'info',
   placed:            'success',
   completed_no_goods: 'warning',
   cancelled:         'danger',
@@ -71,12 +74,14 @@ export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
 }
 
 /** Маршрут задачи размещения: короба собираются и уезжают в ячейки, отгрузки нет. */
-export const SHIPMENT_PUTAWAY_STATUS_ORDER: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'placed']
+export const SHIPMENT_PUTAWAY_STATUS_ORDER: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'collected', 'placed']
 
 export type ShipmentOpType =
   | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
   | 'pack' | 'pack_correction' | 'move_return' | 'relocate' | 'return_to_packing' | 'reject'
   | 'repack_start' | 'repack_charge'
+  // Задача размещения: жизненный цикл коробов и конец сборки.
+  | 'box_take' | 'box_close' | 'box_place' | 'box_release' | 'item_place' | 'collected'
 
 // Переупаковка (задача была поставлена с ошибкой, товар пакуется заново):
 // free — за наш счёт (объём в производительности виден, деньги 0),
@@ -136,8 +141,9 @@ export type ShipmentLine = {
   packed_pending_defect: number
   /** Задача размещения: лежит в коробах на столе / уже уехало в ячейки. */
   boxed_qty:          number
+  boxed_defect_qty:   number
+  aside_qty:          number
   placed_qty:         number
-  placed_loose_qty:   number
   available_for_pack: number
   storage_zone_id:   string | null
   storage_zone_name: string | null
@@ -772,9 +778,9 @@ export function takeShipmentBox(docId: string, code: string) {
   })
 }
 
-/** Скан товара на ТСД: единица упаковывается и ложится в короб (только по ШК, годный). */
+/** Скан товара на ТСД: единица упаковывается и ложится в короб (только по ШК). */
 export function addShipmentBoxItem(
-  docId: string, boxId: string, payload: { barcode: string; qty?: number },
+  docId: string, boxId: string, payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
 ) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {
     method: 'POST',
@@ -803,14 +809,6 @@ export function releaseShipmentBox(docId: string, boxId: string) {
   return request<{ message: string }>(`/shipments/${docId}/boxes/${boxId}/release`, { method: 'POST' })
 }
 
-/** Скан ячейки: короб уехал на стеллаж, товар становится доступен. */
-export function placeShipmentBox(docId: string, boxId: string, zoneId: string) {
-  return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/place`, {
-    method: 'POST',
-    body: JSON.stringify({ zone_id: zoneId }),
-  })
-}
-
 /** Итог поштучной операции ТСД в задаче размещения. */
 export type PutawayItemResult = {
   line_id:      string
@@ -819,49 +817,28 @@ export type PutawayItemResult = {
   color_name:   string | null
   size_name:    string | null
   qty:          number
-  zone_name:    string | null
-  defect_total: number
+  aside_total:  number
 }
 
-/** Скан найденного брака: фиксируется мимо коробов, уедет в ячейку брака. */
-export function addPutawayDefect(docId: string, payload: { barcode: string; qty?: number }) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/defect`, {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  })
-}
-
-/** Отмена ошибочного скана брака: товар возвращается на стол упаковки. */
-export function undoPutawayDefect(docId: string, lineId: string, qty: number) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/defect/undo`, {
-    method: 'POST',
-    body: JSON.stringify({ line_id: lineId, qty }),
-  })
-}
-
-/** Крупногабарит: скан товара и ячейки — единица уезжает на стеллаж без короба. */
-export function placePutawayItem(
-  docId: string,
-  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect'; zone_id: string },
+/** Скан товара мимо короба: габарит не влез либо в короб его класть не стали. */
+export function addPutawayAsideItem(
+  docId: string, payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
 ) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/place-item`, {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/aside`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
 }
 
-/** Отмена прямого размещения: товар уезжает из ячейки обратно на стол упаковки. */
-export function undoPlacedPutawayItem(docId: string, lineId: string, qty: number) {
-  return request<PutawayItemResult>(`/shipments/${docId}/putaway/place-item/undo`, {
+/** Отмена ошибочного скана мимо короба: товар возвращается на стол упаковки. */
+export function undoPutawayAsideItem(docId: string, lineId: string, qty: number) {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/aside/undo`, {
     method: 'POST',
     body: JSON.stringify({ line_id: lineId, qty }),
   })
 }
 
-/** Закрытие задачи размещения: все короба должны быть разложены по ячейкам. */
-export function finishPutaway(docId: string, defectZoneId?: string | null) {
-  return request<{ message: string }>(`/shipments/${docId}/finish-putaway`, {
-    method: 'POST',
-    body: JSON.stringify({ defect_zone_id: defectZoneId ?? null }),
-  })
+/** Сборка завершена: короба закрыты, товар ждёт развозки по местам (см. containersApi). */
+export function finishCollecting(docId: string) {
+  return request<{ message: string }>(`/shipments/${docId}/finish-collecting`, { method: 'POST' })
 }

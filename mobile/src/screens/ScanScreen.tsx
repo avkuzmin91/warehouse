@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon'
 import { scanSource } from '../scan/ScanSource'
 import { getProductByBarcode } from '../api/productsApi'
 import { getLocationByCode, isLocationCode } from '../api/locationsApi'
+import { getContainerByCode, isContainerCode } from '../api/containersApi'
 import { isCisCode, parseCis } from '../utils/cis'
 import { isScanAutoStartEnabled } from '../utils/scanSettings'
 import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
@@ -16,7 +17,7 @@ import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 let returningFromResult = false
 
 export function ScanScreen() {
-  const { back, openScanProduct, openScanLocation, openScanCis } = useNav()
+  const { back, openScanProduct, openScanLocation, openScanCis, openScanBox } = useNav()
   const [code, setCode] = useState('')
   const [looking, setLooking] = useState(false)
   const [error, setError] = useState('')
@@ -55,6 +56,20 @@ export function ScanScreen() {
     setError('')
     setNotFound('')
     try {
+      // QR короба («wms:box:<id>») ведёт на его карточку: кладовщик стоит с коробом
+      // в руках, и работа начинается отсюда — разместить, переместить, изъять.
+      if (isContainerCode(c)) {
+        const found = await getContainerByCode(c)
+        if (found.found && found.container) {
+          scanSuccessFeedback()
+          returningFromResult = true
+          openScanBox(found.container.id)
+        } else {
+          scanNotFoundFeedback()
+          setNotFound(c)
+        }
+        return
+      }
       // QR ячейки («wms:loc:<id>») ведёт на карточку места, всё прочее — ШК товара.
       if (isLocationCode(c)) {
         const res = await getLocationByCode(c)

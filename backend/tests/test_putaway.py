@@ -1,9 +1,11 @@
 """Интеграционные тесты задачи «Размещение по ячейкам» (task_kind=putaway).
 
-Полный поток ТСД: передали на стол → взяли короб → скан товара → закрыли короб →
-скан ячейки → закрытие задачи. Ключевой инвариант: пока товар в коробе на столе
-(корзина boxed), он НЕ доступен ни отгрузке, ни другой задаче упаковки — готовность
-наступает только после размещения короба в ячейке.
+Процесс разделён на две фазы. Сборка (документ): передали на стол → взяли короб →
+скан товара → закрыли короб → «Сборка завершена». Развозка (без документа): скан
+коробов и россыпи → скан места хранения. Ключевой инвариант: пока товар собран, но
+не развезён (корзина boxed), он НЕ доступен ни отгрузке, ни другой задаче упаковки —
+готовность наступает только после размещения. Задача закрывается сама, когда уехал
+её последний объект.
 """
 from __future__ import annotations
 
@@ -46,8 +48,8 @@ def client_id():
 
 @pytest.fixture
 def zones():
-    """Зона упаковки (стол) и адресная ячейка стеллажа."""
-    packing_id, cell_id = str(uuid.uuid4()), str(uuid.uuid4())
+    """Зона упаковки (стол), адресная ячейка стеллажа и служебное место (зона брака)."""
+    packing_id, cell_id, special_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO unloading_zones (id, name, is_active, is_deleted, is_packing_zone, created_at) "
@@ -59,10 +61,17 @@ def zones():
             "VALUES (?, ?, 'cell', '1', 'А', '01', '1', 1, 0, NOW())",
             (cell_id, f"1-А-01-{cell_id[:4]}"),
         )
+        conn.execute(
+            "INSERT INTO unloading_zones (id, name, kind, is_active, is_deleted, created_at) "
+            "VALUES (?, ?, 'special', 1, 0, NOW())",
+            (special_id, f"Брак-{special_id[:6]}"),
+        )
         conn.commit()
-    yield {"packing_id": packing_id, "cell_id": cell_id}
+    yield {"packing_id": packing_id, "cell_id": cell_id, "special_id": special_id}
     with get_connection() as conn:
-        conn.execute("DELETE FROM unloading_zones WHERE id IN (?, ?)", (packing_id, cell_id))
+        conn.execute(
+            "DELETE FROM unloading_zones WHERE id IN (?, ?, ?)", (packing_id, cell_id, special_id)
+        )
         conn.commit()
 
 
@@ -154,7 +163,16 @@ def _bucket(client_id: str, product_id: str, op: str, quality: str = "good") -> 
     return int(row["n"] or 0)
 
 
+def _place(api, *, zone_id: str, box_ids=None, items=None):
+    return api.post("/containers/place", json={
+        "zone_id": zone_id,
+        "box_ids": list(box_ids or []),
+        "items": list(items or []),
+    })
+
+
 def test_full_putaway_flow(api, client_id, product, zones):
+    """Сборка закрывает задачу в «Собрано», развозка коробом закрывает её сама."""
     doc_id, _line_id = _create_task(api, client_id, product, qty=5)
     code = _new_box_code(api)
 
@@ -172,7 +190,7 @@ def test_full_putaway_flow(api, client_id, product, zones):
     assert put.json()["items_qty"] == 3
     assert put.json()["contents"][0]["qty"] == 3
 
-    # Товар в коробе на столе: упакован сканом, но к отгрузке ещё не доступен.
+    # Товар собран в короб: упакован сканом, но к отгрузке ещё не доступен.
     assert _bucket(client_id, product["product_id"], "boxed") == 3
     assert _bucket(client_id, product["product_id"], "packed") == 0
     assert _bucket(client_id, product["product_id"], "ready") == 0
@@ -182,10 +200,19 @@ def test_full_putaway_flow(api, client_id, product, zones):
     closed = api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
     assert closed.status_code == 200 and closed.json()["status"] == "closed", closed.text
 
-    placed = api.post(f"/shipments/{doc_id}/boxes/{box_id}/place", json={"zone_id": zones["cell_id"]})
+    # Сборка завершается, не дожидаясь развозки: короб ещё стоит у стола.
+    fin = api.post(f"/shipments/{doc_id}/finish-collecting")
+    assert fin.status_code == 200, fin.text
+    assert fin.json()["message"] == "collected"
+    assert _bucket(client_id, product["product_id"], "boxed") == 3
+    # Нерешённый пул со стола вернулся на хранение — товар не завис на упаковке.
+    assert _bucket(client_id, product["product_id"], "packing") == 0
+
+    placed = _place(api, zone_id=zones["cell_id"], box_ids=[box_id])
     assert placed.status_code == 200, placed.text
-    assert placed.json()["status"] == "placed"
-    assert placed.json()["zone_id"] == zones["cell_id"]
+    assert placed.json()["placed_qty"] == 3
+    assert placed.json()["boxes"][0]["status"] == "placed"
+    assert placed.json()["boxes"][0]["zone_id"] == zones["cell_id"]
 
     # После размещения товар лежит на хранении в ячейке — вот теперь он доступен.
     assert _bucket(client_id, product["product_id"], "boxed") == 0
@@ -197,38 +224,49 @@ def test_full_putaway_flow(api, client_id, product, zones):
         ).fetchone()
     assert int(row["n"]) == 3
 
-    fin = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
-    assert fin.status_code == 200, fin.text
-    assert fin.json()["message"] == "placed"
-
+    # Уехал последний объект задачи — она закрылась сама, без отдельного финиша.
     detail = api.get(f"/shipments/{doc_id}").json()
     assert detail["status"] == "placed"
     assert detail["task_kind"] == "putaway"
     assert detail["lines"][0]["placed_qty"] == 3
     assert detail["lines"][0]["boxed_qty"] == 0
     assert len(detail["boxes"]) == 1
-
-    # Нерешённый пул со стола вернулся на хранение — товар не завис на упаковке.
-    assert _bucket(client_id, product["product_id"], "packing") == 0
+    assert placed.json()["closed_tasks"] == [detail["doc_number"]]
 
 
-def test_finish_blocked_until_boxes_placed(api, client_id, product, zones):
+def test_collecting_blocked_by_open_box_with_goods(api, client_id, product, zones):
+    """Сборку держит только незакрытый короб — закрытый уезжает отдельным процессом."""
     doc_id, _line_id = _create_task(api, client_id, product, qty=4)
     code = _new_box_code(api)
     _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
 
-    blocked = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
+    blocked = api.post(f"/shipments/{doc_id}/finish-collecting")
     assert blocked.status_code == 400
-    assert "разместите короба" in blocked.json()["detail"].lower()
+    assert "закройте короба" in blocked.json()["detail"].lower()
 
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
-    still_blocked = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
-    assert still_blocked.status_code == 400, still_blocked.text
+    assert api.post(f"/shipments/{doc_id}/finish-collecting").json()["message"] == "collected"
 
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/place", json={"zone_id": zones["cell_id"]})
-    assert api.post(f"/shipments/{doc_id}/finish-putaway", json={}).status_code == 200
+
+def test_placement_can_run_before_collecting_is_finished(api, client_id, product, zones):
+    """Кладовщик увозит закрытый короб, пока сборка ещё идёт: процессы независимы."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=4)
+    code = _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
+
+    placed = _place(api, zone_id=zones["cell_id"], box_ids=[box_id])
+    assert placed.status_code == 200, placed.text
+    # Задача ещё собирается — авто-закрытие её не трогает.
+    assert placed.json()["closed_tasks"] == []
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "on_packing"
+
+    fin = api.post(f"/shipments/{doc_id}/finish-collecting")
+    assert fin.status_code == 200 and fin.json()["message"] == "placed", fin.text
 
 
 def test_scan_limited_by_what_is_on_the_table(api, client_id, product, zones):
@@ -242,8 +280,8 @@ def test_scan_limited_by_what_is_on_the_table(api, client_id, product, zones):
     assert over.status_code == 400, over.text
 
 
-def test_defect_scan_goes_past_boxes(api, client_id, product, zones):
-    """Брак пикается сканом задачи: в короб не кладётся и уезжает в ячейку брака."""
+def test_defect_goes_into_the_box_too(api, client_id, product, zones):
+    """Короб — просто тара: брак кладётся в него так же, как годный."""
     doc_id, _line_id = _create_task(api, client_id, product, qty=3)
     code = _new_box_code(api)
     _as(_WAREHOUSE)
@@ -251,38 +289,129 @@ def test_defect_scan_goes_past_boxes(api, client_id, product, zones):
 
     good = api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
     assert good.status_code == 200, good.text
-    defect = api.post(f"/shipments/{doc_id}/putaway/defect", json={"barcode": product["barcode"], "qty": 1})
+    defect = api.post(
+        f"/shipments/{doc_id}/boxes/{box_id}/items",
+        json={"barcode": product["barcode"], "qty": 1, "quality": "defect"},
+    )
     assert defect.status_code == 200, defect.text
-    assert defect.json()["defect_total"] == 1
-    # Короб брак не принял: в нём по-прежнему только годный.
-    assert api.get(f"/shipments/{doc_id}/boxes").json()["items"][0]["items_qty"] == 2
+    assert defect.json()["items_qty"] == 3
 
     line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
     assert line["packed_good"] == 2 and line["packed_defect"] == 1
+    assert line["boxed_qty"] == 3 and line["boxed_defect_qty"] == 1
+    assert _bucket(client_id, product["product_id"], "boxed", "defect") == 1
 
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/place", json={"zone_id": zones["cell_id"]})
+    api.post(f"/shipments/{doc_id}/finish-collecting")
+    assert _place(api, zone_id=zones["cell_id"], box_ids=[box_id]).status_code == 200
 
-    no_zone = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
-    assert no_zone.status_code == 400 and "брак" in no_zone.json()["detail"].lower()
-
-    fin = api.post(f"/shipments/{doc_id}/finish-putaway", json={"defect_zone_id": zones["cell_id"]})
-    assert fin.status_code == 200, fin.text
+    # Качество при размещении сохраняется: брак лёг браком в то же место.
     assert _bucket(client_id, product["product_id"], "storage", "defect") == 1
+    assert _bucket(client_id, product["product_id"], "storage", "good") == 2
 
 
-def test_undo_defect_returns_goods_to_table(api, client_id, product, zones):
-    """Ошибочный скан брака отменяется с ТСД: товар возвращается на стол упаковки."""
-    doc_id, line_id = _create_task(api, client_id, product, qty=3)
+def test_aside_item_placed_by_scan_at_the_rack(api, client_id, product, zones):
+    """Мимо короба (габарит, брак): собрали сканом, место назначил кладовщик у стеллажа."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=3)
     _as(_WAREHOUSE)
-    api.post(f"/shipments/{doc_id}/putaway/defect", json={"barcode": product["barcode"], "qty": 1})
-
-    undo = api.post(f"/shipments/{doc_id}/putaway/defect/undo", json={"line_id": line_id, "qty": 1})
-    assert undo.status_code == 200, undo.text
-    assert undo.json()["defect_total"] == 0
+    aside = api.post(
+        f"/shipments/{doc_id}/putaway/aside",
+        json={"barcode": product["barcode"], "qty": 2, "quality": "defect"},
+    )
+    assert aside.status_code == 200, aside.text
+    assert aside.json()["aside_total"] == 2
 
     line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
-    assert line["packed_defect"] == 0
+    # Это полноценная запись упаковки (объём и заработок), но товар ещё не размещён.
+    assert line["packed_defect"] == 2
+    assert line["aside_qty"] == 2 and line["placed_qty"] == 0
+    assert _bucket(client_id, product["product_id"], "boxed", "defect") == 2
+
+    fin = api.post(f"/shipments/{doc_id}/finish-collecting")
+    assert fin.status_code == 200 and fin.json()["message"] == "collected", fin.text
+
+    # Место для россыпи — любое активное: зона брака заведена служебным местом.
+    placed = _place(
+        api, zone_id=zones["special_id"],
+        items=[{"barcode": product["barcode"], "qty": 2}],
+    )
+    assert placed.status_code == 200, placed.text
+    assert placed.json()["items"][0]["quality"] == "defect"
+    assert _bucket(client_id, product["product_id"], "storage", "defect") == 2
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "placed"
+
+
+def test_aside_quality_must_be_explicit_when_ambiguous(api, client_id, product, zones):
+    """По одному ШК ждут годный и брак — качество спрашиваем, а не угадываем."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=4)
+    _as(_WAREHOUSE)
+    api.post(f"/shipments/{doc_id}/putaway/aside", json={"barcode": product["barcode"], "qty": 1})
+    api.post(
+        f"/shipments/{doc_id}/putaway/aside",
+        json={"barcode": product["barcode"], "qty": 1, "quality": "defect"},
+    )
+
+    ambiguous = _place(api, zone_id=zones["cell_id"], items=[{"barcode": product["barcode"], "qty": 1}])
+    assert ambiguous.status_code == 400
+    assert "качество" in ambiguous.json()["detail"].lower()
+
+    ok = _place(
+        api, zone_id=zones["cell_id"],
+        items=[{"barcode": product["barcode"], "qty": 1, "quality": "good"}],
+    )
+    assert ok.status_code == 200, ok.text
+    assert _bucket(client_id, product["product_id"], "storage", "good") == 1
+
+
+def test_place_batch_takes_boxes_and_items_at_once(api, client_id, product, zones):
+    """Пачка: два короба и россыпь уезжают в одно место одним запросом."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=5)
+    code_a, code_b = _new_box_code(api), _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_a = api.post(f"/shipments/{doc_id}/boxes", json={"code": code_a}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_a}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_a}/close")
+    box_b = api.post(f"/shipments/{doc_id}/boxes", json={"code": code_b}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_b}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_b}/close")
+    api.post(f"/shipments/{doc_id}/putaway/aside", json={"barcode": product["barcode"], "qty": 1})
+    api.post(f"/shipments/{doc_id}/finish-collecting")
+
+    placed = _place(
+        api, zone_id=zones["cell_id"], box_ids=[box_a, box_b],
+        items=[{"barcode": product["barcode"], "qty": 1}],
+    )
+    assert placed.status_code == 200, placed.text
+    assert placed.json()["placed_qty"] == 5
+    assert len(placed.json()["boxes"]) == 2
+    assert _bucket(client_id, product["product_id"], "boxed") == 0
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "placed"
+
+
+def test_place_rejects_open_box(api, client_id, product, zones):
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
+    code = _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 1})
+
+    placed = _place(api, zone_id=zones["cell_id"], box_ids=[box_id])
+    assert placed.status_code == 400
+    assert "не закрыт" in placed.json()["detail"]
+
+
+def test_undo_aside_item_returns_goods_to_table(api, client_id, product, zones):
+    """Ошибочный скан мимо короба отменяется с ТСД: товар возвращается на стол."""
+    doc_id, line_id = _create_task(api, client_id, product, qty=3)
+    _as(_WAREHOUSE)
+    api.post(f"/shipments/{doc_id}/putaway/aside", json={"barcode": product["barcode"], "qty": 1})
+
+    undo = api.post(f"/shipments/{doc_id}/putaway/aside/undo", json={"line_id": line_id, "qty": 1})
+    assert undo.status_code == 200, undo.text
+    assert undo.json()["aside_total"] == 0
+
+    line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
+    assert line["packed_good"] == 0
     assert line["available_for_pack"] == 3
 
 
@@ -317,69 +446,26 @@ def test_release_rejects_box_with_goods(api, client_id, product, zones):
 
 
 def test_finish_releases_forgotten_empty_box(api, client_id, product, zones):
-    """Забытый пустой короб не блокирует закрытие задачи — он освобождается сам."""
+    """Забытый пустой короб не блокирует конец сборки — он освобождается сам."""
     doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     code_a, code_b = _new_box_code(api), _new_box_code(api)
     _as(_WAREHOUSE)
     box_a = api.post(f"/shipments/{doc_id}/boxes", json={"code": code_a}).json()["id"]
     api.post(f"/shipments/{doc_id}/boxes/{box_a}/items", json={"barcode": product["barcode"], "qty": 2})
     api.post(f"/shipments/{doc_id}/boxes/{box_a}/close")
-    api.post(f"/shipments/{doc_id}/boxes/{box_a}/place", json={"zone_id": zones["cell_id"]})
     box_b = api.post(f"/shipments/{doc_id}/boxes", json={"code": code_b}).json()["id"]
 
-    fin = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
+    fin = api.post(f"/shipments/{doc_id}/finish-collecting")
     assert fin.status_code == 200, fin.text
     assert api.get(f"/containers/{box_b}").json()["doc"]["status"] == "new"
 
 
-def test_oversized_item_placed_without_box(api, client_id, product, zones):
-    """Крупногабарит: скан товара + скан ячейки, минуя короб."""
-    doc_id, _line_id = _create_task(api, client_id, product, qty=3)
+def test_task_without_goods_closes_immediately(api, client_id, product, zones):
+    """Собирать было нечего: «Сборка завершена» закрывает задачу сразу."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     _as(_WAREHOUSE)
-    placed = api.post(
-        f"/shipments/{doc_id}/putaway/place-item",
-        json={"barcode": product["barcode"], "qty": 2, "zone_id": zones["cell_id"]},
-    )
-    assert placed.status_code == 200, placed.text
-    assert placed.json()["zone_name"]
-
-    line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
-    # Это полноценная запись упаковки (объём и заработок кладовщика) и сразу размещение.
-    assert line["packed_good"] == 2
-    assert line["placed_qty"] == 2 and line["placed_loose_qty"] == 2
-    assert line["available_for_pack"] == 1
-    # На столе товар не задержался: ни в коробе, ни в «Упаковано».
-    assert _bucket(client_id, product["product_id"], "boxed") == 0
-    assert _bucket(client_id, product["product_id"], "packed") == 0
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
-            "WHERE product_id = ? AND to_op = 'storage' AND to_zone_id = ?",
-            (product["product_id"], zones["cell_id"]),
-        ).fetchone()
-    assert int(row["n"]) == 2
-
-    # Коробов в задаче нет — закрывается сразу.
-    fin = api.post(f"/shipments/{doc_id}/finish-putaway", json={})
-    assert fin.status_code == 200 and fin.json()["message"] == "placed"
-
-
-def test_undo_loose_placement(api, client_id, product, zones):
-    """Ошибочное прямое размещение сторнируется: товар уезжает обратно на стол."""
-    doc_id, line_id = _create_task(api, client_id, product, qty=2)
-    _as(_WAREHOUSE)
-    api.post(
-        f"/shipments/{doc_id}/putaway/place-item",
-        json={"barcode": product["barcode"], "qty": 1, "zone_id": zones["cell_id"]},
-    )
-
-    undo = api.post(f"/shipments/{doc_id}/putaway/place-item/undo", json={"line_id": line_id, "qty": 1})
-    assert undo.status_code == 200, undo.text
-
-    line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
-    assert line["placed_qty"] == 0 and line["placed_loose_qty"] == 0
-    assert line["packed_good"] == 0
-    assert line["available_for_pack"] == 2
+    fin = api.post(f"/shipments/{doc_id}/finish-collecting")
+    assert fin.status_code == 200 and fin.json()["message"] == "placed", fin.text
 
 
 def test_unknown_barcode_and_foreign_product_rejected(api, client_id, product, zones):
@@ -426,15 +512,22 @@ def test_box_of_another_task_rejected(api, client_id, product, zones):
     assert "занят задачей" in taken.json()["detail"]
 
 
-def test_manual_move_of_boxed_stock_rejected(api, client_id, product, zones):
-    """Товар в размещённом коробе двигается только коробом целиком."""
-    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
+def _collect_and_place(api, client_id, product, zones, qty: int = 2):
+    """Задача, собранная в один короб и размещённая в ячейке. → (doc_id, box_id)."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=qty)
     code = _new_box_code(api)
     _as(_WAREHOUSE)
     box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": qty})
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/place", json={"zone_id": zones["cell_id"]})
+    api.post(f"/shipments/{doc_id}/finish-collecting")
+    assert _place(api, zone_id=zones["cell_id"], box_ids=[box_id]).status_code == 200
+    return doc_id, box_id
+
+
+def test_manual_move_of_boxed_stock_rejected(api, client_id, product, zones):
+    """Товар в размещённом коробе двигается только коробом целиком."""
+    _doc_id, _box_id = _collect_and_place(api, client_id, product, zones, qty=2)
 
     move = api.post("/balances/relocations", json={
         "product_id": product["product_id"],
@@ -450,36 +543,44 @@ def test_manual_move_of_boxed_stock_rejected(api, client_id, product, zones):
     assert "коробе" in move.json()["detail"]
 
 
-def test_placed_box_moves_between_cells(api, client_id, product, zones):
-    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
-    code = _new_box_code(api)
-    _as(_WAREHOUSE)
-    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
-    api.post(f"/shipments/{doc_id}/boxes/{box_id}/place", json={"zone_id": zones["cell_id"]})
+def test_item_can_be_removed_from_placed_box(api, client_id, product, zones):
+    """Пересорт нашли у стеллажа: позиция изымается из короба, оставаясь в ячейке."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
 
-    other_cell = str(uuid.uuid4())
-    with get_connection() as conn:
-        conn.execute(
-            "INSERT INTO unloading_zones (id, name, kind, room, rack, section, floor, is_active, is_deleted, created_at) "
-            "VALUES (?, ?, 'cell', '1', 'Б', '02', '1', 1, 0, NOW())",
-            (other_cell, f"1-Б-02-{other_cell[:4]}"),
-        )
-        conn.commit()
-    try:
-        moved = api.post(f"/containers/{box_id}/move", json={"zone_id": other_cell})
-        assert moved.status_code == 200, moved.text
-        assert moved.json()["zone_id"] == other_cell
-        assert moved.json()["items_qty"] == 2  # содержимое короба при переезде не изменилось
+    removed = api.post(
+        f"/containers/{box_id}/items/remove",
+        json={"barcode": product["barcode"], "qty": 1},
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["items_qty"] == 1
+    # Остаток из ячейки никуда не уехал — ушла только привязка к коробу.
+    assert _bucket(client_id, product["product_id"], "storage") == 2
 
-        detail = api.get(f"/containers/{box_id}").json()
-        assert detail["doc"]["zone_id"] == other_cell
-        assert sum(c["qty"] for c in detail["contents"]) == 2
-    finally:
-        with get_connection() as conn:
-            conn.execute("DELETE FROM unloading_zones WHERE id = ?", (other_cell,))
-            conn.commit()
+    # Изъятое перестало быть «в коробе» — обычное перемещение снова разрешено.
+    move = api.post("/balances/relocations", json={
+        "product_id": product["product_id"],
+        "product_name": "Putaway Product",
+        "product_sku": product["sku"],
+        "client_id": client_id,
+        "quality": "good",
+        "qty": 1,
+        "from_zone_id": zones["cell_id"],
+        "to_zone_id": zones["packing_id"],
+    })
+    assert move.status_code == 200, move.text
+
+
+def test_placed_box_moves_between_locations(api, client_id, product, zones):
+    """Перемещение — то же действие, что размещение: скан короба → скан места."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    moved = _place(api, zone_id=zones["special_id"], box_ids=[box_id])
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["boxes"][0]["zone_id"] == zones["special_id"]
+
+    detail = api.get(f"/containers/{box_id}").json()
+    assert detail["doc"]["zone_id"] == zones["special_id"]
+    assert sum(c["qty"] for c in detail["contents"]) == 2  # содержимое при переезде не изменилось
 
 
 def test_packing_task_has_no_boxes(api, client_id, product, zones):

@@ -7,6 +7,7 @@ from config import (
     DISPATCH_STATUS_PREPARING,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
+    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -100,19 +101,25 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         today = today_date.isoformat()
         shipment_rows = connection.execute(
             "SELECT id, doc_number, status, cargo_type, task_kind, ship_date, priority_rank, updated_at, created_at FROM shipment_docs "
-            "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?)",
-            (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_RELOCATING),
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?,?)",
+            (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_RELOCATING,
+             SHIPMENT_STATUS_COLLECTED),
         ).fetchall()
         for r in shipment_rows:
             status = str(r["status"])
             is_defect_cargo = str(r["cargo_type"] or "") == SHIPMENT_CARGO_DEFECT
             is_putaway = str(r.get("task_kind") or "") == SHIPMENT_TASK_PUTAWAY
-            if is_putaway and status == SHIPMENT_STATUS_ON_PACKING:
-                # Сборку коробов и раскладку по ячейкам делают и кладовщик, и начальник
+            if is_putaway and status in (SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_COLLECTED):
+                # Сборку коробов и развозку по местам делают и кладовщик, и начальник
                 # смены — карточка одна, роль подставляется под смотрящего, чтобы у тех,
                 # кто видит обе очереди, задача не задваивалась.
                 task_role = ROLE_WAREHOUSE if ROLE_WAREHOUSE in visible_roles else ROLE_SHIFT
-                kind, title = "shipment_putaway", f"Разложить по ячейкам {r['doc_number']}"
+                if status == SHIPMENT_STATUS_COLLECTED:
+                    kind, title = "shipment_place_boxes", f"Развезти по местам {r['doc_number']}"
+                else:
+                    kind, title = "shipment_putaway", f"Собрать короба {r['doc_number']}"
+            elif status == SHIPMENT_STATUS_COLLECTED:
+                continue  # «Собрано» бывает только у задачи размещения
             elif status == SHIPMENT_STATUS_PACKING:
                 ship_date = r["ship_date"]
                 if not ship_date or _prev_working_day(date.fromisoformat(str(ship_date)[:10])) > today_date:
