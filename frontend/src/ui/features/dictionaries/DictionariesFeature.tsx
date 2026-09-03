@@ -134,9 +134,11 @@ export function DictionariesFeature() {
           <div className="page-subtitle">Базовые сущности системы и правила их создания</div>
         </div>
         <div className="row gap-8">
-          <button className="btn">
-            <Icon name="upload" size={14} />Импорт
-          </button>
+          {active === 'products' && !activeForbidden && (
+            <button className="btn" onClick={() => navigate('/dictionaries/products/import')}>
+              <Icon name="upload" size={14} />Импорт из Excel
+            </button>
+          )}
           {createLabel && (
             <button className="btn primary" onClick={handleCreate}>
               <Icon name="plus" size={14} />

@@ -778,6 +778,7 @@ async def _accrual_loop() -> None:
     Отключается в тестах (SALARY_SCHEDULER=0), чтобы не писать в тестовую БД."""
     from idempotency import purge_expired_idempotency_keys
     from modules.expenses.service import run_rent_accruals, run_salary_accruals
+    from modules.products.service import purge_stale_product_import_batches
     from modules.recurring_expenses.service import run_recurring_accruals
     from modules.storage_pricing.service import run_storage_accruals
     from modules.timesheet.service import business_today
@@ -793,6 +794,7 @@ async def _accrual_loop() -> None:
                 if created:
                     conn.commit()
                 purge_expired_idempotency_keys(conn)
+                purge_stale_product_import_batches(conn)
                 conn.commit()
         except asyncio.CancelledError:
             raise

@@ -1212,6 +1212,29 @@ PRODUCT_LIST_SORT_COLUMNS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Массовая загрузка товаров из Excel
+# ---------------------------------------------------------------------------
+
+PRODUCT_IMPORT_STATUS_PREVIEW = "preview"
+PRODUCT_IMPORT_STATUS_COMMITTED = "committed"
+
+PRODUCT_IMPORT_ACTION_CREATE = "create"
+PRODUCT_IMPORT_ACTION_APPEND = "append"
+PRODUCT_IMPORT_ACTION_SKIP = "skip"
+PRODUCT_IMPORT_ACTION_ERROR = "error"
+
+PRODUCT_IMPORT_ACTION_LABELS: dict[str, str] = {
+    PRODUCT_IMPORT_ACTION_CREATE: "Новый товар",
+    PRODUCT_IMPORT_ACTION_APPEND: "Новый вариант",
+    PRODUCT_IMPORT_ACTION_SKIP: "Уже есть",
+    PRODUCT_IMPORT_ACTION_ERROR: "Ошибка",
+}
+
+PRODUCT_IMPORT_MAX_ROWS = 5000
+PRODUCT_IMPORT_MAX_BYTES = 20 * 1024 * 1024  # 20 МБ
+PRODUCT_IMPORT_BATCH_TTL_HOURS = 72
+
+# ---------------------------------------------------------------------------
 # Логгеры
 # ---------------------------------------------------------------------------
 

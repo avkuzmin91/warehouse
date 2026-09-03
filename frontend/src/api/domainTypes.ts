@@ -195,6 +195,50 @@ export type ProductListResponse = {
   limit: number
 }
 
+export type ProductImportAction = 'create' | 'append' | 'skip' | 'error'
+
+export type ProductImportRowItem = {
+  row_no: number
+  sku: string
+  name: string
+  type_name: string
+  color_name: string
+  size_name: string
+  variant_sku: string
+  action: ProductImportAction
+  errors: string[]
+  warnings: string[]
+}
+
+export type ProductImportSummary = {
+  rows_total: number
+  rows_ok: number
+  rows_with_errors: number
+  rows_with_warnings: number
+  products_new: number
+  products_existing: number
+  variants_new: number
+  variants_skipped: number
+  barcodes_new: number
+  import_ready: boolean
+  can_import_partial: boolean
+}
+
+export type ProductImportPreviewResponse = {
+  import_id: string
+  client_id: string
+  client_name: string | null
+  file_name: string
+  status_label: string
+  summary: ProductImportSummary
+  rows: ProductImportRowItem[]
+}
+
+export type ProductImportCommitResponse = {
+  message: string
+  summary: ProductImportSummary
+}
+
 export type DictionaryListResponse = {
   items: DictionaryItem[]
   total: number

@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile, status
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Response, UploadFile, status
 from psycopg import IntegrityError
 
 from config import (
@@ -12,6 +14,8 @@ from config import (
     INV_OP_SINKS,
     INV_Q_DEFECT,
     INV_Q_GOOD,
+    PRODUCT_IMPORT_STATUS_COMMITTED,
+    PRODUCT_IMPORT_STATUS_PREVIEW,
     PRODUCT_LIST_SORT_COLUMNS,
     UPLOADS_DIR,
     MAX_UPLOAD_BYTES,
@@ -44,9 +48,21 @@ from .schemas import (
     ProductBarcodeFileItem,
     ProductBarcodeItem,
     ProductFileItem,
+    ProductImportCommitResponse,
+    ProductImportPreviewResponse,
+    ProductImportRowItem,
+    ProductImportSummary,
     VariantIdentityChangeRequest,
 )
 from .service import (
+    _barcode_owner_label,
+    _find_barcode_owner,
+    apply_product_import_plan,
+    build_product_import_plan,
+    build_product_import_report_bytes,
+    build_product_import_template_bytes,
+    import_file_kind,
+    parse_product_import_workbook,
     _assign_variant_skus_from_base,
     _build_variant_rows_for_create,
     _decode_images_json,
@@ -765,27 +781,6 @@ def find_product_variant_for_receipt(
         )
 
 
-def _find_barcode_owner(connection, code: str):
-    return connection.execute(
-        """
-        SELECT p.name AS product_name, col.name AS color_name, sz.name AS size_name
-        FROM product_barcodes pb
-        JOIN products p ON p.id = pb.product_id
-        LEFT JOIN product_variants v ON v.id = pb.variant_id
-        LEFT JOIN colors col ON col.id = v.color_id
-        LEFT JOIN sizes sz ON sz.id = v.size_id
-        WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0
-        LIMIT 1
-        """,
-        (code,),
-    ).fetchone()
-
-
-def _barcode_owner_label(owner) -> str:
-    label = " · ".join(x for x in (owner["color_name"], owner["size_name"]) if x)
-    return f"«{owner['product_name']}»" + (f" ({label})" if label else "")
-
-
 @router.post("/products/{item_id}/barcodes", response_model=MessageResponse)
 def add_product_barcode(item_id: str, payload: ProductBarcodeAdd, admin=Depends(get_current_admin)):
     code = payload.barcode.strip()
@@ -1006,4 +1001,163 @@ def lookup_product_by_barcode(code: str, user=Depends(get_current_warehouse)):
             client_id=str(row["client_id"]) if row["client_id"] else None,
             client_name=str(row["client_name"]).strip() if row["client_name"] else None,
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Массовая загрузка товаров из Excel: шаблон → проверка → применение
+# ---------------------------------------------------------------------------
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _xlsx_response(content: bytes, *, filename_ru: str, filename_ascii: str) -> Response:
+    return Response(
+        content=content,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{filename_ascii}"; filename*=UTF-8\'\'{quote(filename_ru)}',
+        },
+    )
+
+
+def _import_status_label(summary: dict) -> str:
+    if summary["rows_with_errors"]:
+        return f"Есть ошибки: {summary['rows_with_errors']} из {summary['rows_total']}"
+    if not summary["variants_new"]:
+        return "Нечего импортировать: все позиции уже заведены"
+    return "Готов к импорту"
+
+
+def _load_import_batch(connection, batch_id: str, user_id: str):
+    row = connection.execute(
+        "SELECT * FROM product_import_batches WHERE id = ?", (str(batch_id).strip(),)
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Файл импорта не найден или устарел")
+    if str(row["created_by"]) != str(user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Нет доступа к файлу импорта")
+    return row
+
+
+@router.get("/products/bulk-import/template")
+def download_product_import_template(user=Depends(get_current_manager)):
+    _ = user
+    with get_connection() as connection:
+        content = build_product_import_template_bytes(connection)
+    return _xlsx_response(
+        content,
+        filename_ru="Шаблон загрузки товаров.xlsx",
+        filename_ascii="products-import-template.xlsx",
+    )
+
+
+@router.post("/products/bulk-import/preview", response_model=ProductImportPreviewResponse)
+async def preview_product_import(
+    client_id: str = Form(...),
+    file: UploadFile = File(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
+    filename = (file.filename or "").strip() or "upload.xlsx"
+    if import_file_kind(filename) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неподдерживаемый формат файла. Нужен .xlsx, .xlsm или .xls",
+        )
+    raw = await file.read()
+    rows = parse_product_import_workbook(raw, filename=filename)
+
+    with get_connection() as connection:
+        cid = _require_active_client(connection, client_id)
+        proceed, stored = begin_idempotent(connection, x_request_id, str(user["id"]), "product_import_preview")
+        if not proceed:
+            return ProductImportPreviewResponse(**stored)
+        plan = build_product_import_plan(connection, client_id=cid, rows=rows)
+        batch_id = str(uuid4())
+        connection.execute(
+            "INSERT INTO product_import_batches "
+            "(id, client_id, file_name, status, rows_json, summary_json, created_at, created_by) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                batch_id, cid, filename, PRODUCT_IMPORT_STATUS_PREVIEW,
+                json.dumps(rows, ensure_ascii=False),
+                json.dumps(plan["summary"], ensure_ascii=False),
+                _now(), str(user["id"]),
+            ),
+        )
+        client_row = connection.execute("SELECT name FROM clients WHERE id = ?", (cid,)).fetchone()
+        result = ProductImportPreviewResponse(
+            import_id=batch_id,
+            client_id=cid,
+            client_name=str(client_row["name"]) if client_row else None,
+            file_name=filename,
+            status_label=_import_status_label(plan["summary"]),
+            summary=ProductImportSummary(**plan["summary"]),
+            rows=[ProductImportRowItem(**r) for r in plan["rows"]],
+        )
+        finish_idempotent(connection, x_request_id, result.model_dump())
+        connection.commit()
+    return result
+
+
+@router.post("/products/bulk-import/{batch_id}/commit", response_model=ProductImportCommitResponse)
+def commit_product_import(
+    batch_id: str,
+    partial: bool = Query(False, description="Если true — записываются только корректные строки"),
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
+    uid = str(user["id"])
+    with get_connection() as connection:
+        proceed, stored = begin_idempotent(connection, x_request_id, uid, "product_import_commit")
+        if not proceed:
+            return ProductImportCommitResponse(**stored)
+        batch = _load_import_batch(connection, batch_id, uid)
+        if str(batch["status"]) == PRODUCT_IMPORT_STATUS_COMMITTED:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Этот файл уже загружен")
+
+        # План пересобирается по живой БД: между проверкой и импортом SKU или
+        # штрих-код мог занять кто-то другой.
+        plan = build_product_import_plan(
+            connection, client_id=str(batch["client_id"]), rows=json.loads(batch["rows_json"])
+        )
+        summary = plan["summary"]
+        if summary["rows_with_errors"] and not partial:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="В файле есть ошибки. Исправьте файл или импортируйте только корректные строки",
+            )
+        if not summary["variants_new"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Нечего импортировать: новых товаров и вариантов в файле нет",
+            )
+        apply_product_import_plan(connection, plan, user_id=uid)
+        connection.execute(
+            "UPDATE product_import_batches SET status = ?, summary_json = ?, committed_at = ? WHERE id = ?",
+            (PRODUCT_IMPORT_STATUS_COMMITTED, json.dumps(summary, ensure_ascii=False), _now(), str(batch["id"])),
+        )
+        result = ProductImportCommitResponse(
+            message=f"Создано товаров {summary['products_new']}, вариантов {summary['variants_new']}",
+            summary=ProductImportSummary(**summary),
+        )
+        finish_idempotent(connection, x_request_id, result.model_dump())
+        connection.commit()
+    return result
+
+
+@router.get("/products/bulk-import/{batch_id}/report")
+def download_product_import_report(batch_id: str, user=Depends(get_current_manager)):
+    with get_connection() as connection:
+        batch = _load_import_batch(connection, batch_id, str(user["id"]))
+        plan = build_product_import_plan(
+            connection, client_id=str(batch["client_id"]), rows=json.loads(batch["rows_json"])
+        )
+        content = build_product_import_report_bytes(plan)
+    return _xlsx_response(
+        content,
+        filename_ru="Проверка загрузки товаров.xlsx",
+        filename_ascii="products-import-report.xlsx",
     )

@@ -62,7 +62,7 @@
   - `frontend/src/ui/data/SortableTh.tsx`
   - `frontend/src/ui/primitives/Tabs.tsx`
   - Таблицы `inventory_operations`, `app_migrations`, имена `receipt2_*` / `shipment2_*`
-  - Backend-эндпоинты `/import/*`, `/analytics/*`, `/client-portal/*` (410-заглушки; живые `/expenses/analytics`, `/pnl/*`, `/cabinet/*` и фронтовая страница `/analytics` — НЕ они, их трогать можно)
+  - Backend-эндпоинты `/import/*`, `/analytics/*`, `/client-portal/*` (410-заглушки; живые `/expenses/analytics`, `/pnl/*`, `/cabinet/*`, `/products/bulk-import/*` и фронтовая страница `/analytics` — НЕ они, их трогать можно)
 - **Не** использовать `window.confirm` / `window.alert` — только `useConfirm()` / `useToast()`.
 - **Не** хардкодить цвета — только `var(--c-*)`.
 - **Не** хардкодить строковые статусы / op_type на backend — импорт из `config.py`.

@@ -50,7 +50,7 @@ CI-only деплой (ADR [docs/adr/0001](docs/adr/0001-ci-only-deployment-via-g
 |---|---|
 | `auth`, `users` | JWT + refresh-сессии (cookie `wms_rt`, мобильный режим `X-Client: mobile`), rate-limit; учётные записи |
 | `dictionaries` | справочники (clients, colors, sizes, warehouses, carriers, positions, own_warehouses, ...) |
-| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_barcodes` с `variant_id`; этикетки — `product_barcode_files`), фото; смена цвета/размера варианта — журнал `variant_identity_changes` |
+| `products` | товары и варианты: SKU (+`sku_pending`), штрих-коды (несколько на вариант, `product_barcodes` с `variant_id`; этикетки — `product_barcode_files`), фото; смена цвета/размера варианта — журнал `variant_identity_changes`; массовая загрузка из Excel по клиенту — `/products/bulk-import/*` (строка файла = вариант, справочники строгие, превью `product_import_batches` → применение) |
 | `receipts` | поступления `WH-xxxxx`; приёмка идёт через рейс (разгрузка); QC-статусы строк — `RECEIPT_LINE_QC_STATUS_*` |
 | `shipments` | «Задача упаковки» склада; терминальный исход — `packed` |
 | `dispatch` | «Отгрузка» клиенту `DSP-xxxx`; дробление по рейсам через `trip_alloc` |
@@ -537,7 +537,7 @@ URL-конвенции inventory: `/inventory/receipts`, `/inventory/balances` �
 - Таблицы `inventory_operations`, `app_migrations`.
 - Имена `receipt2_*`, `shipment2_*`.
 - Backend-эндпоинты `/import/*`, `/analytics/*`, `/client-portal/*` — заглушки 410 Gone, не оживлять. **Не путать с живым функционалом**: фронтовая страница `/analytics` (ExpensesAnalyticsFeature → `/expenses/analytics`), модуль `pnl` (`/pnl/*`) и ЛК клиента (`/cabinet/*`) — рабочие, их трогать можно.
-- Excel-импорт.
+- Легаси Excel-импорт движений и остатков (модуль `/import/*`, staging-файлы на диске). **Не путать** с живой массовой загрузкой номенклатуры `POST /products/bulk-import/*` (товары по клиенту, превью → применение) — она рабочая.
 
 **Архитектурное:**
 - Прямые `fetch` в `ui/pages/`.

@@ -6,7 +6,20 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from config import PRODUCT_LIST_SORT_COLUMNS, UPLOADS_DIR, MAX_UPLOAD_BYTES
+from config import (
+    MAX_UPLOAD_BYTES,
+    PRODUCT_IMPORT_ACTION_APPEND,
+    PRODUCT_IMPORT_ACTION_CREATE,
+    PRODUCT_IMPORT_ACTION_ERROR,
+    PRODUCT_IMPORT_ACTION_LABELS,
+    PRODUCT_IMPORT_ACTION_SKIP,
+    PRODUCT_IMPORT_BATCH_TTL_HOURS,
+    PRODUCT_IMPORT_MAX_BYTES,
+    PRODUCT_IMPORT_MAX_ROWS,
+    PRODUCT_IMPORT_STATUS_PREVIEW,
+    PRODUCT_LIST_SORT_COLUMNS,
+    UPLOADS_DIR,
+)
 from dbconn import escape_like, get_connection
 
 from .schemas import (
@@ -940,4 +953,864 @@ def _row_to_product_item(row: Mapping[str, Any]) -> ProductItem:
         created_by=row["created_by"],
         updated_at=row["updated_at"],
         updated_by=row["updated_by"],
+    )
+
+
+def _find_barcode_owner(connection, code: str):
+    return connection.execute(
+        """
+        SELECT p.name AS product_name, col.name AS color_name, sz.name AS size_name
+        FROM product_barcodes pb
+        JOIN products p ON p.id = pb.product_id
+        LEFT JOIN product_variants v ON v.id = pb.variant_id
+        LEFT JOIN colors col ON col.id = v.color_id
+        LEFT JOIN sizes sz ON sz.id = v.size_id
+        WHERE pb.barcode = ? AND COALESCE(pb.is_deleted, 0) = 0
+        LIMIT 1
+        """,
+        (code,),
+    ).fetchone()
+
+
+def _barcode_owner_label(owner) -> str:
+    label = " · ".join(x for x in (owner["color_name"], owner["size_name"]) if x)
+    return f"«{owner['product_name']}»" + (f" ({label})" if label else "")
+
+
+# ---------------------------------------------------------------------------
+# Массовая загрузка товаров из Excel
+# ---------------------------------------------------------------------------
+
+# Строка файла = ВАРИАНТ товара: варианты несут собственные габариты и штрих-коды,
+# одной «плоской» строкой на товар их не описать. Товары собираются группировкой
+# по базовому SKU (для позиций без SKU — по названию и типу внутри одного файла).
+_IMPORT_COLUMNS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("sku", "SKU базовый", ("sku", "артикул", "шк", "штрих-код товара")),
+    ("name", "Название товара", ("название", "name")),
+    ("type", "Тип товара", ("тип", "type")),
+    ("color", "Цвет", ("color",)),
+    ("size", "Размер", ("size",)),
+    ("length", "Длина, см", ("длина",)),
+    ("width", "Ширина, см", ("ширина",)),
+    ("height", "Высота, см", ("высота",)),
+    ("weight", "Вес, гр", ("вес", "вес, г", "вес, гр.")),
+    ("items_per_box", "Кол-во в коробе", ("количество в коробе", "в коробе")),
+    ("boxes_per_pallet", "Коробов на палете", ("коробов на паллете", "на палете")),
+    ("barcodes", "Штрих-код(ы)", ("штрих-коды", "штрихкод", "штрих-код варианта")),
+    ("price_good", "Цена упаковки годный, ₽", ("цена упаковки годный",)),
+    ("price_defect", "Цена упаковки брак, ₽", ("цена упаковки брак",)),
+    ("active", "Активен", ("активность",)),
+)
+
+_IMPORT_REQUIRED_COLUMNS = ("sku", "name", "type")
+
+_IMPORT_BARCODE_SOURCE = "Загрузка из Excel"
+
+_IMPORT_STRUCTURE_ERROR = "Неверная структура файла"
+_IMPORT_UNREADABLE_ERROR = "Не удалось прочитать файл"
+
+
+class _ImportRowError(Exception):
+    """Ошибка поля строки — попадает в отчёт, а не роняет разбор файла."""
+
+
+def _import_collapse_ws(raw: str) -> str:
+    """Трим и схлопывание внутренних пробелов: файл клиента полон случайных пробелов."""
+    return re.sub(r"\s+", " ", str(raw)).strip()
+
+
+def _import_cell_str(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "да" if value else "нет"
+    if isinstance(value, float) and float(value).is_integer():
+        # Числовая ячейка со штрих-кодом иначе приедет как «4600000000001.0».
+        return str(int(value))
+    return _import_collapse_ws(str(value))
+
+
+def _import_field(errors: list[str], fn, *args, **kwargs):
+    """Собрать все ошибки строки, а не падать на первой (как в отчёте легаси-импорта)."""
+    try:
+        return fn(*args, **kwargs)
+    except _ImportRowError as exc:
+        errors.append(str(exc))
+        return None
+
+
+def _import_number(raw: str, label: str) -> float | None:
+    s = str(raw).replace(" ", "").replace(" ", "").replace(",", ".")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError as exc:
+        raise _ImportRowError(f"{label}: «{raw}» — не число") from exc
+
+
+def _import_int(raw: str, label: str) -> int | None:
+    value = _import_number(raw, label)
+    if value is None:
+        return None
+    if value < 0:
+        raise _ImportRowError(f"{label}: значение не может быть отрицательным")
+    return int(round(value))
+
+
+def _import_kopecks(raw: str, label: str) -> int | None:
+    value = _import_number(raw, label)
+    if value is None:
+        return None
+    if value < 0:
+        raise _ImportRowError(f"{label}: значение не может быть отрицательным")
+    return int(round(value * 100))
+
+
+def _import_dimension(raw: str, label: str) -> float:
+    value = _import_number(raw, label)
+    if value is None:
+        return 0.0
+    if value < 0:
+        raise _ImportRowError(f"{label}: значение не может быть отрицательным")
+    return float(value)
+
+
+_IMPORT_TRUE = frozenset({"да", "true", "1", "истина", "yes", "y", "+"})
+_IMPORT_FALSE = frozenset({"нет", "false", "0", "ложь", "no", "n", "-"})
+
+
+def _import_bool(raw: str, label: str) -> bool:
+    s = _fold_ci_str(raw).strip()
+    if not s:
+        return True
+    if s in _IMPORT_TRUE:
+        return True
+    if s in _IMPORT_FALSE:
+        return False
+    raise _ImportRowError(f"{label}: укажите «да» или «нет»")
+
+
+def _import_barcodes(raw: str) -> list[str]:
+    out: list[str] = []
+    for part in re.split(r"[;\n\r]+", str(raw)):
+        code = _import_collapse_ws(part)
+        if not code:
+            continue
+        if code in out:
+            raise _ImportRowError(f"Штрих-код {code} указан в строке дважды")
+        out.append(code)
+    return out
+
+
+def import_file_kind(filename: str) -> str | None:
+    lower = str(filename).strip().lower()
+    if lower.endswith(".xlsx") or lower.endswith(".xlsm"):
+        return "xlsx"
+    if lower.endswith(".xls"):
+        return "xls"
+    return None
+
+
+def _import_header_map(header_cells: list[tuple[int, object]]) -> dict[int, str]:
+    aliases: dict[str, str] = {}
+    for key, title, extra in _IMPORT_COLUMNS:
+        aliases[_fold_ci_str(title)] = key
+        for alias in extra:
+            aliases[_fold_ci_str(alias)] = key
+    found: dict[int, str] = {}
+    for col_idx, value in header_cells:
+        key = aliases.get(_fold_ci_str(_import_cell_str(value)))
+        if key and key not in found.values():
+            found[col_idx] = key
+    return found
+
+
+def _import_rows_from_matrix(rows: list[list[object]]) -> list[dict]:
+    """Общий разбор для xlsx и xls: поиск шапки, отбрасывание пустых строк, лимиты."""
+    header_idx = -1
+    col_map: dict[int, str] = {}
+    # Шапка ищется в первых пяти строках: файл клиента часто приходит с титулом над таблицей.
+    for idx, row in enumerate(rows[:5]):
+        candidate = _import_header_map(list(enumerate(row)))
+        if len(candidate) >= 3:
+            header_idx = idx
+            col_map = candidate
+            break
+    if not col_map:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{_IMPORT_STRUCTURE_ERROR}: не найдена строка заголовков. Скачайте шаблон",
+        )
+    missing = [
+        title for key, title, _ in _IMPORT_COLUMNS
+        if key in _IMPORT_REQUIRED_COLUMNS and key not in col_map.values()
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{_IMPORT_STRUCTURE_ERROR}: нет обязательных колонок — " + ", ".join(missing),
+        )
+
+    out: list[dict] = []
+    for idx in range(header_idx + 1, len(rows)):
+        row = rows[idx]
+        values = {key: "" for key, _, _ in _IMPORT_COLUMNS}
+        has_value = False
+        for col_idx, key in col_map.items():
+            text = _import_cell_str(row[col_idx]) if col_idx < len(row) else ""
+            values[key] = text
+            if text:
+                has_value = True
+        if not has_value:
+            continue
+        values["row_no"] = idx + 1
+        out.append(values)
+        if len(out) > PRODUCT_IMPORT_MAX_ROWS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"В файле больше {PRODUCT_IMPORT_MAX_ROWS} строк — разбейте загрузку на части",
+            )
+    if not out:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Нет ни одной строки данных под заголовком",
+        )
+    return out
+
+
+def _import_matrix_xlsx(content: bytes) -> list[list[object]]:
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_IMPORT_UNREADABLE_ERROR) from exc
+    try:
+        if not wb.sheetnames:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_IMPORT_UNREADABLE_ERROR)
+        ws = wb[wb.sheetnames[0]]
+        return [list(row) for row in ws.iter_rows(values_only=True)]
+    finally:
+        wb.close()
+
+
+def _import_matrix_xls(content: bytes) -> list[list[object]]:
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_IMPORT_UNREADABLE_ERROR) from exc
+    try:
+        book = xlrd.open_workbook(file_contents=content)
+        sheet = book.sheet_by_index(0)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_IMPORT_UNREADABLE_ERROR) from exc
+    return [[sheet.cell_value(r, c) for c in range(sheet.ncols)] for r in range(sheet.nrows)]
+
+
+def parse_product_import_workbook(content: bytes, *, filename: str) -> list[dict]:
+    """Разбор файла в список сырых строк. В БД не обращается."""
+    if not content or len(content) < 10:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=_IMPORT_UNREADABLE_ERROR)
+    if len(content) > PRODUCT_IMPORT_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Размер файла превышает допустимый лимит {PRODUCT_IMPORT_MAX_BYTES // (1024 * 1024)} МБ",
+        )
+    kind = import_file_kind(filename)
+    if kind is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Неподдерживаемый формат файла. Нужен .xlsx, .xlsm или .xls",
+        )
+    # Расширение может врать — формат определяется сигнатурой (xlsx это zip).
+    is_zip = content[0:2] == b"PK"
+    rows = _import_matrix_xlsx(content) if is_zip else _import_matrix_xls(content)
+    return _import_rows_from_matrix(rows)
+
+
+def _import_dictionaries(connection: Any) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
+    types: dict[str, dict] = {}
+    for r in connection.execute(
+        "SELECT id, name, requires_color, requires_size FROM product_types "
+        "WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0"
+    ).fetchall():
+        types[_fold_ci_str(_import_collapse_ws(r["name"]))] = {
+            "id": str(r["id"]),
+            "name": str(r["name"]),
+            "requires_color": bool(r["requires_color"]),
+            "requires_size": bool(r["requires_size"]),
+        }
+    colors = {
+        _fold_ci_str(_import_collapse_ws(r["name"])): {"id": str(r["id"]), "name": str(r["name"])}
+        for r in connection.execute(
+            "SELECT id, name FROM colors WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0"
+        ).fetchall()
+    }
+    sizes = {
+        _fold_ci_str(_import_collapse_ws(r["name"])): {"id": str(r["id"]), "name": str(r["name"])}
+        for r in connection.execute(
+            "SELECT id, name FROM sizes WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0"
+        ).fetchall()
+    }
+    return types, colors, sizes
+
+
+def _parse_import_row(
+    raw: dict, *, types: dict, colors: dict, sizes: dict
+) -> tuple[dict | None, list[str], list[str]]:
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    name = _import_cell_str(raw.get("name"))
+    if not name:
+        errors.append("Укажите название товара")
+
+    type_name = _import_cell_str(raw.get("type"))
+    ptype: dict | None = None
+    if not type_name:
+        errors.append("Укажите тип товара")
+    else:
+        ptype = types.get(_fold_ci_str(type_name))
+        if not ptype:
+            errors.append(f"Тип товара «{type_name}» не найден в справочнике")
+
+    color_name = _import_cell_str(raw.get("color"))
+    color_id: str | None = None
+    if color_name:
+        color = colors.get(_fold_ci_str(color_name))
+        if not color:
+            errors.append(f"Цвет «{color_name}» не найден в справочнике")
+        else:
+            color_id = color["id"]
+            if ptype and not ptype["requires_color"]:
+                warnings.append("Тип товара не требует цвета — цвет всё равно будет записан")
+    elif ptype and ptype["requires_color"]:
+        errors.append("Для этого типа товара укажите цвет")
+
+    size_name = _import_cell_str(raw.get("size"))
+    size_id: str | None = None
+    if ptype and ptype["requires_size"]:
+        if not size_name:
+            errors.append("Для этого типа товара укажите размер")
+        else:
+            size = sizes.get(_fold_ci_str(size_name))
+            if not size:
+                errors.append(f"Размер «{size_name}» не найден в справочнике")
+            else:
+                size_id = size["id"]
+    elif size_name and ptype:
+        warnings.append("Тип товара не требует размера — значение будет проигнорировано")
+
+    length = _import_field(errors, _import_dimension, _import_cell_str(raw.get("length")), "Длина")
+    width = _import_field(errors, _import_dimension, _import_cell_str(raw.get("width")), "Ширина")
+    height = _import_field(errors, _import_dimension, _import_cell_str(raw.get("height")), "Высота")
+    weight = _import_field(errors, _import_int, _import_cell_str(raw.get("weight")), "Вес")
+    items_per_box = _import_field(errors, _import_int, _import_cell_str(raw.get("items_per_box")), "Кол-во в коробе")
+    boxes_per_pallet = _import_field(errors, _import_int, _import_cell_str(raw.get("boxes_per_pallet")), "Коробов на палете")
+    price_good = _import_field(errors, _import_kopecks, _import_cell_str(raw.get("price_good")), "Цена упаковки годный")
+    price_defect = _import_field(errors, _import_kopecks, _import_cell_str(raw.get("price_defect")), "Цена упаковки брак")
+    is_active = _import_field(errors, _import_bool, _import_cell_str(raw.get("active")), "Активен")
+    barcodes = _import_field(errors, _import_barcodes, _import_cell_str(raw.get("barcodes")))
+
+    sku = _import_cell_str(raw.get("sku"))
+    if not sku:
+        warnings.append("SKU не указан — товар будет заведён без SKU (уточнить позже)")
+    if not (length or width or height):
+        warnings.append("Габариты не заданы")
+    if weight is None:
+        warnings.append("Вес не указан")
+    if items_per_box is None and boxes_per_pallet is None:
+        warnings.append("Кратность коробов и палет не указана")
+
+    if errors:
+        return None, errors, warnings
+
+    return {
+        "sku": sku,
+        "name": name,
+        "type_id": ptype["id"],
+        "type_name": ptype["name"],
+        "requires_color": ptype["requires_color"],
+        "requires_size": ptype["requires_size"],
+        "color_id": color_id,
+        "color_name": color_name if color_id else "",
+        "size_id": size_id,
+        "size_name": size_name if size_id else "",
+        "length": length or 0.0,
+        "width": width or 0.0,
+        "height": height or 0.0,
+        "weight_grams": weight,
+        "items_per_box": items_per_box,
+        "boxes_per_pallet": boxes_per_pallet,
+        "price_good_kop": price_good,
+        "price_defect_kop": price_defect,
+        "is_active": True if is_active is None else is_active,
+        "barcodes": barcodes or [],
+    }, errors, warnings
+
+
+_IMPORT_GROUP_ATTRS: tuple[tuple[str, str], ...] = (
+    ("name", "название товара"),
+    ("type_id", "тип товара"),
+    ("weight_grams", "вес"),
+    ("items_per_box", "кол-во в коробе"),
+    ("boxes_per_pallet", "коробов на палете"),
+    ("price_good_kop", "цену упаковки (годный)"),
+    ("price_defect_kop", "цену упаковки (брак)"),
+    ("is_active", "признак активности"),
+)
+
+
+def _merge_import_group_attrs(group: dict, parsed: dict) -> str | None:
+    """Атрибуты товара берутся из первой строки группы; расхождение — ошибка строки."""
+    for field, label in _IMPORT_GROUP_ATTRS:
+        incoming = parsed[field]
+        if incoming is None or incoming == "":
+            continue
+        current = group[field]
+        if current is None or current == "":
+            group[field] = incoming
+            continue
+        if current != incoming:
+            return f"Расхождение с первой строкой товара (строка {group['first_row_no']}): {label}"
+    return None
+
+
+def _import_variant_identity(parsed: dict) -> tuple:
+    if parsed["requires_size"]:
+        return (parsed["color_id"] or "", parsed["size_id"] or "")
+    return (
+        parsed["color_id"] or "",
+        round(float(parsed["length"]), 3),
+        round(float(parsed["width"]), 3),
+        round(float(parsed["height"]), 3),
+    )
+
+
+def _import_variant_sku(
+    connection: Any,
+    *,
+    sku_base: str,
+    client_id: str,
+    color_label: str,
+    size_label: str,
+    requires_size: bool,
+    multi_dim: bool,
+    length: float,
+    width: float,
+    height: float,
+    used: set[str],
+) -> str:
+    """SKU варианта по тем же правилам, что и при ручном заведении товара."""
+    tokens: list[str] = []
+    if color_label:
+        tokens.append(_sku_token_from_label(color_label))
+    if requires_size and size_label:
+        tokens.append(_sku_token_from_label(size_label))
+    if multi_dim and not requires_size:
+        tokens.append(_sku_dim_token(length, width, height))
+    candidate = "-".join([sku_base, *tokens]) if tokens else f"{sku_base}-1"
+    sku = candidate
+    salt = 0
+    while sku in used or _variant_sku_in_use(connection, sku, None, client_id):
+        salt += 1
+        sku = f"{candidate}-{salt}"
+    used.add(sku)
+    return sku
+
+
+def build_product_import_plan(connection: Any, *, client_id: str, rows: list[dict]) -> dict:
+    """Проверить строки файла и собрать план записи. В БД ничего не пишет."""
+    types, colors, sizes = _import_dictionaries(connection)
+    groups: dict[tuple, dict] = {}
+    out_rows: list[dict] = []
+    barcode_rows: dict[str, int] = {}
+    sku_case_rows: dict[str, tuple[str, int]] = {}
+
+    for raw in rows:
+        item = {
+            "row_no": int(raw.get("row_no") or 0),
+            "sku": _import_cell_str(raw.get("sku")),
+            "name": _import_cell_str(raw.get("name")),
+            "type_name": _import_cell_str(raw.get("type")),
+            "color_name": _import_cell_str(raw.get("color")),
+            "size_name": _import_cell_str(raw.get("size")),
+            "variant_sku": "",
+            "action": PRODUCT_IMPORT_ACTION_ERROR,
+            "errors": [],
+            "warnings": [],
+        }
+        out_rows.append(item)
+
+        parsed, errors, warnings = _parse_import_row(raw, types=types, colors=colors, sizes=sizes)
+        item["errors"].extend(errors)
+        item["warnings"].extend(warnings)
+        if parsed is None:
+            continue
+
+        for code in parsed["barcodes"]:
+            if code in barcode_rows:
+                item["errors"].append(f"Штрих-код {code} уже указан в строке {barcode_rows[code]}")
+                continue
+            owner = _find_barcode_owner(connection, code)
+            if owner:
+                item["errors"].append(f"Штрих-код {code} уже присвоен: {_barcode_owner_label(owner)}")
+                continue
+            barcode_rows[code] = item["row_no"]
+
+        sku = parsed["sku"]
+        if sku:
+            folded = _fold_ci_str(sku)
+            seen = sku_case_rows.get(folded)
+            if seen and seen[0] != sku:
+                item["errors"].append(
+                    f"SKU {sku} отличается только регистром от строки {seen[1]} ({seen[0]})"
+                )
+            elif not seen:
+                sku_case_rows[folded] = (sku, item["row_no"])
+
+        if item["errors"]:
+            continue
+
+        key = ("sku", sku) if sku else ("pending", _fold_ci_str(parsed["name"]), parsed["type_id"])
+        group = groups.get(key)
+        if group is None:
+            group = {
+                "key": "|".join(str(k) for k in key),
+                "sku": sku,
+                "sku_pending": not sku,
+                "first_row_no": item["row_no"],
+                "requires_size": parsed["requires_size"],
+                "existing_product_id": None,
+                "variants": [],
+                "identities": {},
+            }
+            for field, _ in _IMPORT_GROUP_ATTRS:
+                group[field] = None
+            groups[key] = group
+
+        conflict = _merge_import_group_attrs(group, parsed)
+        if conflict:
+            item["errors"].append(conflict)
+            continue
+
+        identity = _import_variant_identity(parsed)
+        if identity in group["identities"]:
+            item["errors"].append(
+                f"Такой вариант уже есть в файле (строка {group['identities'][identity]})"
+            )
+            continue
+        group["identities"][identity] = item["row_no"]
+        group["variants"].append({
+            "row_no": item["row_no"],
+            "color_id": parsed["color_id"],
+            "color_name": parsed["color_name"],
+            "size_id": parsed["size_id"],
+            "size_name": parsed["size_name"],
+            "length": parsed["length"],
+            "width": parsed["width"],
+            "height": parsed["height"],
+            "barcodes": parsed["barcodes"],
+            "identity": identity,
+            "sku": "",
+            "action": PRODUCT_IMPORT_ACTION_CREATE,
+        })
+
+    rows_by_no = {r["row_no"]: r for r in out_rows}
+    plan_groups: list[dict] = []
+    used_skus: set[str] = set()
+
+    for group in groups.values():
+        if not group["variants"]:
+            continue
+        first_row = rows_by_no.get(group["first_row_no"])
+        group_error: str | None = None
+
+        if group["sku"]:
+            existing = connection.execute(
+                "SELECT id, name, type_id FROM products WHERE client_id = ? AND sku = ? "
+                "AND COALESCE(is_deleted, 0) = 0 AND COALESCE(sku_pending, 0) = 0",
+                (client_id, group["sku"]),
+            ).fetchone()
+            if existing:
+                if str(existing["type_id"]) != str(group["type_id"]):
+                    group_error = "У товара с этим SKU в системе другой тип товара"
+                else:
+                    group["existing_product_id"] = str(existing["id"])
+                    system_name = str(existing["name"] or "")
+                    if _fold_ci_str(system_name) != _fold_ci_str(group["name"]) and first_row:
+                        first_row["warnings"].append(
+                            f"Название в системе отличается: {system_name} (останется прежним)"
+                        )
+            elif _sku_taken_for_client_except_product(connection, group["sku"], client_id, None):
+                group_error = f"SKU {group['sku']} уже занят у этого клиента другим товаром"
+
+        existing_identities: set[tuple] = set()
+        if group["existing_product_id"]:
+            for r in connection.execute(
+                "SELECT color_id, size_id, length, width, height FROM product_variants "
+                "WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0",
+                (group["existing_product_id"],),
+            ).fetchall():
+                if group["requires_size"]:
+                    existing_identities.add((str(r["color_id"] or ""), str(r["size_id"] or "")))
+                else:
+                    existing_identities.add((
+                        str(r["color_id"] or ""),
+                        round(float(r["length"]), 3),
+                        round(float(r["width"]), 3),
+                        round(float(r["height"]), 3),
+                    ))
+
+        dims = {(v["length"], v["width"], v["height"]) for v in group["variants"]}
+        multi_dim = len(dims) > 1
+        for variant in group["variants"]:
+            row = rows_by_no.get(variant["row_no"])
+            if group_error:
+                variant["action"] = PRODUCT_IMPORT_ACTION_ERROR
+                if row:
+                    row["errors"].append(group_error)
+                continue
+            if variant["identity"] in existing_identities:
+                variant["action"] = PRODUCT_IMPORT_ACTION_SKIP
+            elif group["existing_product_id"]:
+                variant["action"] = PRODUCT_IMPORT_ACTION_APPEND
+            else:
+                variant["action"] = PRODUCT_IMPORT_ACTION_CREATE
+            if variant["action"] != PRODUCT_IMPORT_ACTION_SKIP and not group["sku_pending"]:
+                variant["sku"] = _import_variant_sku(
+                    connection,
+                    sku_base=group["sku"],
+                    client_id=client_id,
+                    color_label=variant["color_name"],
+                    size_label=variant["size_name"],
+                    requires_size=group["requires_size"],
+                    multi_dim=multi_dim,
+                    length=variant["length"],
+                    width=variant["width"],
+                    height=variant["height"],
+                    used=used_skus,
+                )
+            if row:
+                row["action"] = variant["action"]
+                row["variant_sku"] = variant["sku"]
+        if not group_error:
+            group.pop("identities", None)
+            for variant in group["variants"]:
+                variant.pop("identity", None)
+            plan_groups.append(group)
+
+    rows_with_errors = sum(1 for r in out_rows if r["errors"])
+    variants_new = sum(
+        1 for g in plan_groups for v in g["variants"]
+        if v["action"] in (PRODUCT_IMPORT_ACTION_CREATE, PRODUCT_IMPORT_ACTION_APPEND)
+    )
+    summary = {
+        "rows_total": len(out_rows),
+        "rows_ok": len(out_rows) - rows_with_errors,
+        "rows_with_errors": rows_with_errors,
+        "rows_with_warnings": sum(1 for r in out_rows if r["warnings"]),
+        "products_new": sum(1 for g in plan_groups if not g["existing_product_id"]),
+        "products_existing": sum(1 for g in plan_groups if g["existing_product_id"]),
+        "variants_new": variants_new,
+        "variants_skipped": sum(
+            1 for g in plan_groups for v in g["variants"] if v["action"] == PRODUCT_IMPORT_ACTION_SKIP
+        ),
+        "barcodes_new": sum(
+            len(v["barcodes"]) for g in plan_groups for v in g["variants"]
+            if v["action"] != PRODUCT_IMPORT_ACTION_SKIP
+        ),
+        "import_ready": rows_with_errors == 0 and variants_new > 0,
+        "can_import_partial": rows_with_errors > 0 and variants_new > 0,
+    }
+    return {"client_id": client_id, "groups": plan_groups, "rows": out_rows, "summary": summary}
+
+
+def apply_product_import_plan(connection: Any, plan: dict, *, user_id: str) -> dict:
+    """Записать план в БД (группы с ошибками в план не попадают). Коммитит вызывающий."""
+    from config import INV_Q_DEFECT, INV_Q_GOOD
+    from modules.pricing.service import add_price
+    from modules.timesheet.service import business_today
+
+    client_id = str(plan["client_id"])
+    now = _now()
+    effective_from = business_today().isoformat()
+
+    for group in plan["groups"]:
+        product_id = group.get("existing_product_id")
+        is_active = 0 if group["is_active"] is False else 1
+        if not product_id:
+            product_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO products (id, name, type_id, client_id, supplier_id, sku, sku_pending,
+                                      weight_grams, items_per_box, boxes_per_pallet,
+                                      image_url, gallery_json, is_active, created_at, creator_id)
+                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
+                """,
+                (
+                    product_id, group["name"], group["type_id"], client_id,
+                    group["sku"] or "", 1 if group["sku_pending"] else 0,
+                    group["weight_grams"], group["items_per_box"], group["boxes_per_pallet"],
+                    is_active, now, user_id,
+                ),
+            )
+            # Тариф пишется только для нового товара: у существующего цена ведётся
+            # в справочнике «Стоимость упаковки», и файл не должен её переписывать.
+            if group["price_good_kop"] is not None:
+                add_price(connection, product_id=product_id, client_id=client_id, quality=INV_Q_GOOD,
+                          price_kop=group["price_good_kop"], effective_from=effective_from, user_id=user_id)
+            if group["price_defect_kop"] is not None:
+                add_price(connection, product_id=product_id, client_id=client_id, quality=INV_Q_DEFECT,
+                          price_kop=group["price_defect_kop"], effective_from=effective_from, user_id=user_id)
+
+        for variant in group["variants"]:
+            if variant["action"] == PRODUCT_IMPORT_ACTION_SKIP:
+                continue
+            variant_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO product_variants (id, product_id, client_id, color_id, size_id,
+                                              length, width, height, sku, sku_pending,
+                                              images_json, is_active, created_at, is_deleted)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, 0)
+                """,
+                (
+                    variant_id, product_id, client_id, variant["color_id"], variant["size_id"],
+                    float(variant["length"]), float(variant["width"]), float(variant["height"]),
+                    variant["sku"], 1 if group["sku_pending"] else 0, is_active, now,
+                ),
+            )
+            for code in variant["barcodes"]:
+                connection.execute(
+                    "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, source, created_at, created_by, is_deleted) "
+                    "VALUES (?,?,?,?,?,?,?,0)",
+                    (str(uuid4()), product_id, variant_id, code, _IMPORT_BARCODE_SOURCE, now, user_id),
+                )
+    return plan["summary"]
+
+
+def build_product_import_template_bytes(connection: Any) -> bytes:
+    """xlsx-шаблон: шапка, строка-пример, лист «Справочники» со списками этого инстанса."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Товары"
+    titles = [title for _, title, _ in _IMPORT_COLUMNS]
+    ws.append(titles)
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(fill_type="solid", start_color="305496")
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 22
+    ws.freeze_panes = "A2"
+
+    widths = [18, 34, 20, 18, 12, 11, 11, 11, 11, 16, 20, 26, 20, 18, 11]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    types_rows = connection.execute(
+        "SELECT name FROM product_types WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0 ORDER BY LOWER(name)"
+    ).fetchall()
+    colors_rows = connection.execute(
+        "SELECT name FROM colors WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0 ORDER BY LOWER(name)"
+    ).fetchall()
+    sizes_rows = connection.execute(
+        "SELECT name FROM sizes WHERE is_active = 1 AND COALESCE(is_deleted, 0) = 0 ORDER BY LOWER(name)"
+    ).fetchall()
+
+    ws.append([
+        "BASE-001",
+        "ДАННЫЕ ДЛЯ ПРИМЕРА, УДАЛИТЕ СТРОКУ",
+        str(types_rows[0]["name"]) if types_rows else "Футболка",
+        str(colors_rows[0]["name"]) if colors_rows else "Черный",
+        str(sizes_rows[0]["name"]) if sizes_rows else "44",
+        30, 20, 5, 250, 20, 12, "4600000000001;4600000000002", "12,50", "5,00", "да",
+    ])
+
+    ref = wb.create_sheet("Справочники")
+    ref.append(["Типы товара", "Цвета", "Размеры"])
+    for cell in ref[1]:
+        cell.font = Font(bold=True)
+    ref.column_dimensions["A"].width = 28
+    ref.column_dimensions["B"].width = 28
+    ref.column_dimensions["C"].width = 18
+    for idx in range(max(len(types_rows), len(colors_rows), len(sizes_rows))):
+        ref.cell(row=idx + 2, column=1, value=str(types_rows[idx]["name"]) if idx < len(types_rows) else None)
+        ref.cell(row=idx + 2, column=2, value=str(colors_rows[idx]["name"]) if idx < len(colors_rows) else None)
+        ref.cell(row=idx + 2, column=3, value=str(sizes_rows[idx]["name"]) if idx < len(sizes_rows) else None)
+
+    for col_idx, ref_col, rows_len in (("C", "A", len(types_rows)), ("D", "B", len(colors_rows)), ("E", "C", len(sizes_rows))):
+        if not rows_len:
+            continue
+        dv = DataValidation(
+            type="list",
+            formula1=f"='Справочники'!${ref_col}$2:${ref_col}${rows_len + 1}",
+            allow_blank=True,
+        )
+        ws.add_data_validation(dv)
+        dv.add(f"{col_idx}2:{col_idx}1000")
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def build_product_import_report_bytes(plan: dict) -> bytes:
+    """Отчёт проверки: исходные колонки + «Ошибки» и «Предупреждения» — правь и грузи заново."""
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Проверка"
+    headers = ["Строка", "SKU базовый", "Название товара", "Тип товара", "Цвет", "Размер",
+               "SKU варианта", "Действие", "Ошибки", "Предупреждения"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    ws.freeze_panes = "A2"
+    for idx, width in enumerate([9, 18, 34, 20, 18, 12, 22, 16, 60, 60], start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    error_fill = PatternFill(fill_type="solid", start_color="FCE4E4")
+    for row in plan["rows"]:
+        ws.append([
+            row["row_no"], row["sku"], row["name"], row["type_name"], row["color_name"],
+            row["size_name"], row["variant_sku"], PRODUCT_IMPORT_ACTION_LABELS.get(row["action"], row["action"]),
+            "; ".join(row["errors"]), "; ".join(row["warnings"]),
+        ])
+        if row["errors"]:
+            for cell in ws[ws.max_row]:
+                cell.fill = error_fill
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def purge_stale_product_import_batches(
+    connection: Any, *, older_than_hours: int = PRODUCT_IMPORT_BATCH_TTL_HOURS
+) -> None:
+    """Удалить непринятые превью загрузок. Применённые пакеты остаются как аудит."""
+    from datetime import UTC, datetime, timedelta
+
+    cutoff = (datetime.now(UTC) - timedelta(hours=older_than_hours)).isoformat()
+    connection.execute(
+        "DELETE FROM product_import_batches WHERE status = ? AND created_at < ?",
+        (PRODUCT_IMPORT_STATUS_PREVIEW, cutoff),
     )

@@ -2,13 +2,16 @@
  * Вызовы API, защищённые на бэкенде ролью admin (и DELETE receipt/shipment).
  * Импортируйте только из lazy-чанков админки / общих форм, где нужны эти методы.
  */
-import { request, requestForm } from './http'
+import { request, requestBlob, requestForm } from './http'
 import type {
   ClientStoreItem,
   DictionaryItem,
   DictionaryListQueryParams,
   DictionaryListResponse,
   ProductFileItem,
+  ProductImportAction,
+  ProductImportCommitResponse,
+  ProductImportPreviewResponse,
   ProductItem,
   ProductListQueryParams,
   ProductListResponse,
@@ -446,3 +449,39 @@ export function uploadProductDictionaryImage(file: File) {
   })
 }
 
+// --- Массовая загрузка товаров из Excel ---
+
+export const PRODUCT_IMPORT_ACTION_LABELS: Record<ProductImportAction, string> = {
+  create: 'Новый товар',
+  append: 'Новый вариант',
+  skip: 'Уже есть',
+  error: 'Ошибка',
+}
+
+export function getProductImportTemplate(signal?: AbortSignal) {
+  return requestBlob('/products/bulk-import/template', { signal })
+}
+
+export function previewProductImport(clientId: string, file: File) {
+  const form = new FormData()
+  form.append('client_id', clientId)
+  form.append('file', file)
+  return requestForm<ProductImportPreviewResponse>('/products/bulk-import/preview', {
+    method: 'POST',
+    body: form,
+  })
+}
+
+export function commitProductImport(importId: string, partial = false) {
+  const sp = new URLSearchParams()
+  if (partial) sp.set('partial', 'true')
+  const q = sp.toString()
+  return request<ProductImportCommitResponse>(
+    `/products/bulk-import/${importId}/commit${q ? `?${q}` : ''}`,
+    { method: 'POST' },
+  )
+}
+
+export function getProductImportReport(importId: string, signal?: AbortSignal) {
+  return requestBlob(`/products/bulk-import/${importId}/report`, { signal })
+}

@@ -213,3 +213,45 @@ class ProductUploadImageResponse(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ProductImportRowItem(BaseModel):
+    row_no: int
+    sku: str = ""
+    name: str = ""
+    type_name: str = ""
+    color_name: str = ""
+    size_name: str = ""
+    variant_sku: str = ""
+    action: str
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ProductImportSummary(BaseModel):
+    rows_total: int = 0
+    rows_ok: int = 0
+    rows_with_errors: int = 0
+    rows_with_warnings: int = 0
+    products_new: int = 0
+    products_existing: int = 0
+    variants_new: int = 0
+    variants_skipped: int = 0
+    barcodes_new: int = 0
+    import_ready: bool = False
+    can_import_partial: bool = False
+
+
+class ProductImportPreviewResponse(BaseModel):
+    import_id: str
+    client_id: str
+    client_name: str | None = None
+    file_name: str
+    status_label: str
+    summary: ProductImportSummary
+    rows: list[ProductImportRowItem] = Field(default_factory=list)
+
+
+class ProductImportCommitResponse(BaseModel):
+    message: str
+    summary: ProductImportSummary
