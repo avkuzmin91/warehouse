@@ -3,6 +3,7 @@ import {
   closeShipmentBox,
   finishPutaway,
   placeShipmentBox,
+  releaseShipmentBox,
   reopenShipmentBox,
   SHIPMENT_BOX_STATUS_LABELS,
 } from '../../../../../api/shipmentsApi'
@@ -46,11 +47,13 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
   const [busy, setBusy] = useState<string | null>(null)
 
   const boxes = doc.boxes ?? []
-  const pending = boxes.filter((b) => b.status !== 'placed')
+  // Пустой открытый короб задачу не держит: при закрытии он освобождается сам.
+  const pending = boxes.filter((b) => b.status === 'closed' || (b.status === 'open' && b.items_qty > 0))
   const defectPending = doc.lines.reduce((s, l) => s + l.packed_pending_defect, 0)
   // Не упакованный остаток на столе: при закрытии задачи он вернётся на хранение.
   const poolLeft = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
   const placedTotal = doc.lines.reduce((s, l) => s + l.placed_qty, 0)
+  const looseTotal = doc.lines.reduce((s, l) => s + l.placed_loose_qty, 0)
   const boxedTotal = doc.lines.reduce((s, l) => s + l.boxed_qty, 0)
   const zoneOpts = cellOptions.map((z) => ({ value: z.id, label: z.name }))
 
@@ -84,13 +87,16 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
     <PhaseBlock
       icon="box"
       title="Короба"
-      role="warehouse"
+      role="shift_lead"
       state={readOnly ? 'done' : 'active'}
       hint={readOnly ? 'товар разложен по ячейкам' : 'сборка и размещение идут на ТСД: скан короба → скан товара → скан ячейки'}
     >
       <div style={{ display: 'flex', gap: 16, padding: '4px 0 10px', fontSize: 13 }}>
         <span className="t-sub">В коробах на столе: <b className="num">{boxedTotal}</b></span>
         <span className="t-sub">Разложено по ячейкам: <b className="num">{placedTotal}</b></span>
+        {looseTotal > 0 && (
+          <span className="t-sub">Из них без короба: <b className="num">{looseTotal}</b></span>
+        )}
         {defectPending > 0 && <span style={{ color: 'var(--c-warning)' }}>Брак: <b className="num">{defectPending}</b></span>}
       </div>
 
@@ -113,13 +119,24 @@ export function BoxesPanel({ docId, doc, cellOptions, canEdit, readOnly = false,
                 )}
                 <span style={{ flex: 1 }} />
                 {!readOnly && canEdit && b.status === 'open' && (
-                  <button
-                    className="btn sm"
-                    disabled={busy != null || b.items_qty === 0}
-                    onClick={() => { void run(`close-${b.id}`, () => closeShipmentBox(docId, b.id)) }}
-                  >
-                    Закрыть короб
-                  </button>
+                  b.items_qty === 0 ? (
+                    <button
+                      className="btn sm ghost"
+                      disabled={busy != null}
+                      title="Этикетку взяли по ошибке: короб вернётся в свободный пул"
+                      onClick={() => { void run(`release-${b.id}`, () => releaseShipmentBox(docId, b.id)) }}
+                    >
+                      Освободить короб
+                    </button>
+                  ) : (
+                    <button
+                      className="btn sm"
+                      disabled={busy != null}
+                      onClick={() => { void run(`close-${b.id}`, () => closeShipmentBox(docId, b.id)) }}
+                    >
+                      Закрыть короб
+                    </button>
+                  )
                 )}
                 {!readOnly && canEdit && b.status === 'closed' && (
                   <>

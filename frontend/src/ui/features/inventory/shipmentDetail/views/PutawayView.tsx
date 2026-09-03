@@ -58,7 +58,7 @@ export function PutawayView({
         />
 
         {isPacking ? (
-          <PhaseBlock icon="box" title="Короба" role="warehouse" state="locked"
+          <PhaseBlock icon="box" title="Короба" role="shift_lead" state="locked"
             hint="Сборка коробов — после передачи товара на стол">
             <LockedGrid labels={['Собрано в короба', 'Разложено по ячейкам']} />
           </PhaseBlock>

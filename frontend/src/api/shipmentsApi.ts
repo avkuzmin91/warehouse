@@ -137,6 +137,7 @@ export type ShipmentLine = {
   /** Задача размещения: лежит в коробах на столе / уже уехало в ячейки. */
   boxed_qty:          number
   placed_qty:         number
+  placed_loose_qty:   number
   available_for_pack: number
   storage_zone_id:   string | null
   storage_zone_name: string | null
@@ -771,9 +772,9 @@ export function takeShipmentBox(docId: string, code: string) {
   })
 }
 
-/** Скан товара на ТСД: единица упаковывается и ложится в короб (только по ШК). */
+/** Скан товара на ТСД: единица упаковывается и ложится в короб (только по ШК, годный). */
 export function addShipmentBoxItem(
-  docId: string, boxId: string, payload: { barcode: string; qty?: number; quality?: 'good' | 'defect' },
+  docId: string, boxId: string, payload: { barcode: string; qty?: number },
 ) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/items`, {
     method: 'POST',
@@ -797,11 +798,63 @@ export function reopenShipmentBox(docId: string, boxId: string) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/reopen`, { method: 'POST' })
 }
 
+/** Пустой короб взяли по ошибке: снять с задачи, этикетка снова свободна. */
+export function releaseShipmentBox(docId: string, boxId: string) {
+  return request<{ message: string }>(`/shipments/${docId}/boxes/${boxId}/release`, { method: 'POST' })
+}
+
 /** Скан ячейки: короб уехал на стеллаж, товар становится доступен. */
 export function placeShipmentBox(docId: string, boxId: string, zoneId: string) {
   return request<ShipmentBox>(`/shipments/${docId}/boxes/${boxId}/place`, {
     method: 'POST',
     body: JSON.stringify({ zone_id: zoneId }),
+  })
+}
+
+/** Итог поштучной операции ТСД в задаче размещения. */
+export type PutawayItemResult = {
+  line_id:      string
+  product_name: string | null
+  product_sku:  string | null
+  color_name:   string | null
+  size_name:    string | null
+  qty:          number
+  zone_name:    string | null
+  defect_total: number
+}
+
+/** Скан найденного брака: фиксируется мимо коробов, уедет в ячейку брака. */
+export function addPutawayDefect(docId: string, payload: { barcode: string; qty?: number }) {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/defect`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Отмена ошибочного скана брака: товар возвращается на стол упаковки. */
+export function undoPutawayDefect(docId: string, lineId: string, qty: number) {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/defect/undo`, {
+    method: 'POST',
+    body: JSON.stringify({ line_id: lineId, qty }),
+  })
+}
+
+/** Крупногабарит: скан товара и ячейки — единица уезжает на стеллаж без короба. */
+export function placePutawayItem(
+  docId: string,
+  payload: { barcode: string; qty?: number; quality?: 'good' | 'defect'; zone_id: string },
+) {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/place-item`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Отмена прямого размещения: товар уезжает из ячейки обратно на стол упаковки. */
+export function undoPlacedPutawayItem(docId: string, lineId: string, qty: number) {
+  return request<PutawayItemResult>(`/shipments/${docId}/putaway/place-item/undo`, {
+    method: 'POST',
+    body: JSON.stringify({ line_id: lineId, qty }),
   })
 }
 

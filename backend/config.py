@@ -439,6 +439,7 @@ CONTAINER_OP_CLOSE       = "close"
 CONTAINER_OP_REOPEN      = "reopen"
 CONTAINER_OP_PLACE       = "place"
 CONTAINER_OP_MOVE        = "move"         # перенос размещённого короба в другую ячейку
+CONTAINER_OP_RELEASE     = "release"      # пустой короб снят с задачи, снова свободен
 
 CONTAINER_OP_LABELS: dict[str, str] = {
     CONTAINER_OP_CREATE:      "Заведён",
@@ -449,6 +450,7 @@ CONTAINER_OP_LABELS: dict[str, str] = {
     CONTAINER_OP_REOPEN:      "Открыт заново",
     CONTAINER_OP_PLACE:       "Размещён",
     CONTAINER_OP_MOVE:        "Перемещён",
+    CONTAINER_OP_RELEASE:     "Освобождён",
 }
 
 # Сколько коробов создаётся одним запросом печати этикеток.
@@ -479,9 +481,13 @@ SHIPMENT_OP_PACK_DATE_MOVE  = "pack_date_move"
 SHIPMENT_OP_MOVE_RETURN     = "move_return"
 SHIPMENT_OP_RELOCATE        = "relocate"
 # Задача «Размещение по ячейкам»: жизненный цикл короба внутри задачи.
-SHIPMENT_OP_BOX_TAKE  = "box_take"
-SHIPMENT_OP_BOX_CLOSE = "box_close"
-SHIPMENT_OP_BOX_PLACE = "box_place"
+SHIPMENT_OP_BOX_TAKE    = "box_take"
+SHIPMENT_OP_BOX_CLOSE   = "box_close"
+SHIPMENT_OP_BOX_PLACE   = "box_place"
+# Пустой короб снят с задачи (ошибочно взятая этикетка не должна блокировать финиш).
+SHIPMENT_OP_BOX_RELEASE = "box_release"
+# Крупногабарит: единица размещена в ячейку напрямую, мимо короба.
+SHIPMENT_OP_ITEM_PLACE  = "item_place"
 SHIPMENT_OP_RETURN_TO_PACKING = "return_to_packing"
 # Менеджер запустил переупаковку (ошибка постановки задачи) / платная переупаковка
 # выставлена клиенту автосозданной записью «Доп. работы» при выходе в «Упаковано».

@@ -55,10 +55,10 @@ function fmt(s: string): string {
 
 // Задача размещения: короба собираются на столе и уезжают в ячейки — отгрузки нет.
 const SH_META_PUTAWAY: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle?: string }>> = {
-  draft:      { role: 'manager',   icon: 'edit',     sub: 'состав и план размещения' },
-  packing:    { role: 'warehouse', icon: 'forklift', sub: 'передача товара на стол' },
-  on_packing: { role: 'warehouse', icon: 'box',      sub: 'сборка коробов и раскладка по ячейкам', doneTitle: 'Разложено' },
-  placed:     { role: null,        icon: 'check',    sub: 'товар разложен по ячейкам' },
+  draft:      { role: 'manager',    icon: 'edit',     sub: 'состав и план размещения' },
+  packing:    { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на стол' },
+  on_packing: { role: 'shift_lead', icon: 'box',      sub: 'сборка коробов и раскладка по ячейкам', doneTitle: 'Разложено' },
+  placed:     { role: null,         icon: 'check',    sub: 'товар разложен по ячейкам' },
 }
 
 // Брак-отгрузка минует упаковку: укороченный маршрут со своими подсказками.

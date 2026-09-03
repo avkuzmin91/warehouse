@@ -6,6 +6,7 @@ import {
   closeShipmentBox,
   getShipmentBoxes,
   placeShipmentBox,
+  releaseShipmentBox,
   reopenShipmentBox,
   undoShipmentBoxItem,
   SHIPMENT_BOX_STATUS_LABELS,
@@ -22,9 +23,10 @@ import { variantTitle } from '../utils/format'
 /** Короб задачи «Упаковка с ТСД»: скан товара внутрь, закрытие и постановка в ячейку.
  *
  * Каждый скан — это и есть запись упаковки (объём, дата, заработок), поэтому
- * упаковка идёт поштучно в ходе раскладки. Найденный брак пикается в режиме
- * «Брак»: он фиксируется как брак упаковки и в короб не кладётся. Товар
- * опознаётся только по ШК — скан неизвестного кода отклоняется.
+ * упаковка идёт поштучно в ходе раскладки. Короб принимает только годный: брак
+ * пикается на экране задачи и уезжает в ячейку брака. Товар опознаётся только по
+ * ШК — скан неизвестного кода отклоняется. Пустой короб можно освободить: взятая
+ * по ошибке этикетка иначе держала бы всю задачу.
  */
 export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; boxId: string }) {
   const { back } = useNav()
@@ -32,8 +34,6 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  // Режим брака: та же кнопка скана, но единица идёт в брак упаковки мимо короба.
-  const [defect, setDefect] = useState(false)
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -52,20 +52,23 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
     return () => ac.abort()
   }, [load])
 
+  // Авто-перевзвод: сканер переоткрывается сам после каждой принятой единицы, пока
+  // кладовщик не отменит. Одно открытие сканера = ровно одна единица, поэтому
+  // дедупликация повторного чтения того же ШК не нужна. Любая ошибка рвёт серию —
+  // иначе человек продолжит пикать, не увидев отказа.
   async function onScanItem() {
     if (busy) return
     setBusy(true)
     setError('')
     try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const next = await addShipmentBoxItem(
-        shipmentId, boxId,
-        { barcode: code, qty: 1, quality: defect ? 'defect' : 'good' },
-        newRequestId(),
-      )
-      scanSuccessFeedback()
-      setBox(next)
+      for (;;) {
+        const code = await scanSource.scan()
+        if (!code) return
+        const next = await addShipmentBoxItem(shipmentId, boxId, { barcode: code, qty: 1 }, newRequestId())
+        scanSuccessFeedback()
+        setBox(next)
+        if (next.status !== 'open') return
+      }
     } catch (err) {
       scanNotFoundFeedback()
       setError(err instanceof Error ? err.message : 'Товар не принят')
@@ -95,6 +98,18 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось закрыть короб')
     } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onRelease() {
+    setBusy(true)
+    setError('')
+    try {
+      await releaseShipmentBox(shipmentId, boxId, newRequestId())
+      back()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось освободить короб')
       setBusy(false)
     }
   }
@@ -169,16 +184,17 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
             {status === 'open' && (
               <>
                 <button
-                  className={defect ? 'btn danger' : 'btn'}
+                  className="btn"
                   style={{ width: '100%' }}
                   disabled={busy}
                   onClick={() => { void onScanItem() }}
                 >
-                  <Icon name="qr" size={18} /> {defect ? 'Скан брака' : 'Скан товара в короб'}
+                  <Icon name="qr" size={18} /> Скан товара в короб
                 </button>
-                <button className="btn ghost" style={{ width: '100%' }} onClick={() => setDefect((v) => !v)}>
-                  {defect ? 'Вернуться к годному' : 'Нашёл брак — пикать в брак'}
-                </button>
+                <div className="line-sub" style={{ textAlign: 'center' }}>
+                  Сканер не закрывается — пикайте подряд. «Отмена» в сканере завершает серию.
+                  Брак в короб не кладётся — пикайте его на экране задачи.
+                </div>
               </>
             )}
 
@@ -191,6 +207,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                 <div className="line-sub">
                   Короб пуст — пикайте штрих-коды товара. Каждый скан вносит упаковку и кладёт
                   единицу в этот короб; пикать можно только то, что передано на стол упаковки.
+                  Взяли этикетку по ошибке — освободите короб.
                 </div>
               </div>
             ) : (
@@ -220,9 +237,15 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                 </div>
               )}
               {status === 'open' && (
-                <button className="btn" disabled={busy || total === 0} onClick={() => { void onClose() }}>
-                  <Icon name="check" size={18} /> Закрыть короб
-                </button>
+                total === 0 ? (
+                  <button className="btn ghost" disabled={busy} onClick={() => { void onRelease() }}>
+                    <Icon name="refresh" size={18} /> Освободить короб
+                  </button>
+                ) : (
+                  <button className="btn" disabled={busy} onClick={() => { void onClose() }}>
+                    <Icon name="check" size={18} /> Закрыть короб
+                  </button>
+                )
               )}
               {status === 'closed' && (
                 <>

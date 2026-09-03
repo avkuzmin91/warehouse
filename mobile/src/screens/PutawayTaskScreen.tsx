@@ -2,14 +2,19 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
 import {
+  addPutawayDefect,
   finishPutaway,
   getShipment,
+  placePutawayItem,
   takeShipmentBox,
+  undoPlacedPutawayItem,
+  undoPutawayDefect,
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
   type ShipmentDetail,
 } from '../api/shipmentsApi'
 import { getLocationByCode } from '../api/locationsApi'
+import { getProductByBarcode } from '../api/productsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
@@ -30,6 +35,10 @@ const BOX_TONE: Record<ShipmentBox['status'], string> = {
  * скан и есть запись упаковки (объём, дата, заработок). Заполненный короб
  * закрывается и ставится в ячейку сканом её QR. Задача закрывается, когда все
  * короба разложены по ячейкам.
+ *
+ * Мимо коробов идут две вещи: найденный брак (в короб он не кладётся и уезжает в
+ * ячейку брака при закрытии) и крупногабарит, который в короб не влезает — он
+ * пикается сразу в ячейку.
  */
 export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const { back, openPutawayBox } = useNav()
@@ -40,6 +49,9 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const [confirmFinish, setConfirmFinish] = useState(false)
   const [defectZoneId, setDefectZoneId] = useState<string | null>(null)
   const [defectZoneName, setDefectZoneName] = useState<string | null>(null)
+  const [notice, setNotice] = useState('')
+  // Размещение без короба идёт в два скана: сначала товар, потом ячейка.
+  const [loose, setLoose] = useState<{ barcode: string; label: string } | null>(null)
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -72,7 +84,10 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const boxedTotal = lines.reduce((s, l) => s + l.boxed_qty, 0)
   const placedTotal = lines.reduce((s, l) => s + l.placed_qty, 0)
   const defectTotal = lines.reduce((s, l) => s + l.packed_pending_defect, 0)
-  const pendingBoxes = boxes.filter((b) => b.status !== 'placed')
+  const looseTotal = lines.reduce((s, l) => s + l.placed_loose_qty, 0)
+  // Пустой открытый короб задачу не держит: при закрытии он освобождается сам.
+  const pendingBoxes = boxes.filter((b) => b.status === 'closed' || (b.status === 'open' && b.items_qty > 0))
+  const asideLines = lines.filter((l) => l.packed_pending_defect > 0 || l.placed_loose_qty > 0)
   const onPacking = doc?.status === 'on_packing'
 
   async function onTakeBox() {
@@ -88,6 +103,116 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
     } catch (err) {
       scanNotFoundFeedback()
       setError(err instanceof Error ? err.message : 'Короб не принят')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onScanDefect() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const code = await scanSource.scan()
+      if (!code) return
+      const res = await addPutawayDefect(shipmentId, { barcode: code, qty: 1 }, newRequestId())
+      scanSuccessFeedback()
+      setNotice(
+        `Брак: ${variantTitle(res.product_name ?? '—', [res.color_name, res.size_name])} +${res.qty} шт. — `
+        + 'в короб не кладётся, уедет в ячейку брака',
+      )
+      await refresh()
+    } catch (err) {
+      scanNotFoundFeedback()
+      setError(err instanceof Error ? err.message : 'Брак не принят')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onScanLooseItem() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const code = await scanSource.scan()
+      if (!code) return
+      const found = await getProductByBarcode(code)
+      if (!found.found || !found.match) {
+        scanNotFoundFeedback()
+        setError(`Штрих-код «${code}» не найден`)
+        return
+      }
+      scanSuccessFeedback()
+      setLoose({
+        barcode: code,
+        label: variantTitle(found.match.product_name, [found.match.color_name, found.match.size_name]),
+      })
+    } catch (err) {
+      scanNotFoundFeedback()
+      setError(err instanceof Error ? err.message : 'Сканирование не удалось')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onScanLooseZone() {
+    if (busy || !loose) return
+    setBusy(true)
+    setError('')
+    try {
+      const code = await scanSource.scan()
+      if (!code) return
+      const res = await getLocationByCode(code)
+      if (!res.found || !res.location) {
+        scanNotFoundFeedback()
+        setError(`Ячейка по коду «${code}» не найдена`)
+        return
+      }
+      const done = await placePutawayItem(
+        shipmentId,
+        { barcode: loose.barcode, qty: 1, zone_id: res.location.id },
+        newRequestId(),
+      )
+      scanSuccessFeedback()
+      setNotice(`Размещено без короба: ${loose.label} ${done.qty} шт. → ${done.zone_name ?? '—'}`)
+      setLoose(null)
+      await refresh()
+    } catch (err) {
+      scanNotFoundFeedback()
+      setError(err instanceof Error ? err.message : 'Не удалось разместить товар')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onUndoDefect(lineId: string) {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await undoPutawayDefect(shipmentId, lineId, 1, newRequestId())
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отменить брак')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onUndoLoose(lineId: string) {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await undoPlacedPutawayItem(shipmentId, lineId, 1, newRequestId())
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отменить размещение')
     } finally {
       setBusy(false)
     }
@@ -156,6 +281,12 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                 <span className="k">Осталось на столе</span>
                 <span className="v">{poolTotal}</span>
               </div>
+              {looseTotal > 0 && (
+                <div className="kv">
+                  <span className="k">Размещено без короба</span>
+                  <span className="v">{looseTotal}</span>
+                </div>
+              )}
               {defectTotal > 0 && (
                 <div className="kv">
                   <span className="k">Брак</span>
@@ -201,6 +332,77 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
             )}
 
             <div className="sec">
+              Мимо коробов
+              {asideLines.length > 0 && <span className="sec-count">{asideLines.length}</span>}
+            </div>
+            {onPacking && (
+              <>
+                <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanDefect() }}>
+                  <Icon name="qr" size={18} /> Нашёл брак — скан товара
+                </button>
+                {loose ? (
+                  <>
+                    <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanLooseZone() }}>
+                      <Icon name="qr" size={18} /> Скан ячейки для «{loose.label}»
+                    </button>
+                    <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => setLoose(null)}>
+                      Отменить размещение
+                    </button>
+                  </>
+                ) : (
+                  <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanLooseItem() }}>
+                    <Icon name="qr" size={18} /> Не влезает в короб — скан товара
+                  </button>
+                )}
+                <div className="line-sub" style={{ textAlign: 'center' }}>
+                  Брак в короб не кладётся: он уедет в ячейку брака при закрытии задачи.
+                  Крупногабарит пикайте сразу в ячейку — товар и следом её QR.
+                </div>
+                {notice && (
+                  <div className="line-sub" style={{ textAlign: 'center', color: 'var(--c-success)' }}>{notice}</div>
+                )}
+              </>
+            )}
+            {asideLines.map((l) => (
+              <div key={`aside-${l.id}`} className="line">
+                <div className="line-name">{variantTitle(l.product_name, [l.color_name, l.size_name])}</div>
+                <div className="line-sub mono">{l.product_sku}</div>
+                {l.packed_pending_defect > 0 && (
+                  <>
+                    <div className="line-sub">
+                      Брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_pending_defect}</b> шт. — ждёт ячейку брака
+                    </div>
+                    {onPacking && (
+                      <button
+                        className="btn ghost sm"
+                        style={{ width: '100%', marginTop: 4 }}
+                        disabled={busy}
+                        onClick={() => { void onUndoDefect(l.id) }}
+                      >
+                        <Icon name="refresh" size={14} /> Отменить брак 1 шт.
+                      </button>
+                    )}
+                  </>
+                )}
+                {l.placed_loose_qty > 0 && (
+                  <>
+                    <div className="line-sub">Размещено без короба <b>{l.placed_loose_qty}</b> шт.</div>
+                    {onPacking && (
+                      <button
+                        className="btn ghost sm"
+                        style={{ width: '100%', marginTop: 4 }}
+                        disabled={busy}
+                        onClick={() => { void onUndoLoose(l.id) }}
+                      >
+                        <Icon name="refresh" size={14} /> Отменить размещение 1 шт.
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ))}
+
+            <div className="sec">
               Состав задания
               <span className="sec-count">{lines.length}</span>
             </div>
@@ -213,7 +415,9 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   {l.packed_defect > 0 && <> · брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_defect}</b></>}
                 </div>
                 <div className="line-sub">
-                  В коробах {l.boxed_qty} · размещено {l.placed_qty} · на столе {l.available_for_pack}
+                  В коробах {l.boxed_qty} · размещено {l.placed_qty}
+                  {l.placed_loose_qty > 0 && ` (из них без короба ${l.placed_loose_qty})`}
+                  {' '}· на столе {l.available_for_pack}
                 </div>
               </div>
             ))}

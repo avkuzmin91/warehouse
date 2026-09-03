@@ -59,6 +59,10 @@ from modules.shipments.schemas import (
     ShipmentBoxPlacePayload,
     ShipmentBoxTakePayload,
     ShipmentFinishPutawayPayload,
+    ShipmentPutawayDefectPayload,
+    ShipmentPutawayItemResult,
+    ShipmentPutawayPlacePayload,
+    ShipmentPutawayUndoPayload,
     LineFileFromProduct,
     ShipmentLineFileBindBarcode,
     ShipmentDetailResponse,
@@ -92,10 +96,12 @@ from modules.shipments.schemas import (
     ShipmentReturnToPackingPayload,
 )
 from modules.shipments.service import (
+    _PACKED_NET_SQL,
     _check_duplicate_lines,
     _check_lines_covered_by_stock,
     _doc_packed_qty,
     add_box_item,
+    add_putaway_defect,
     advance_shipment,
     close_box,
     finish_putaway,
@@ -108,6 +114,7 @@ from modules.shipments.service import (
     line_boxed_qty,
     line_on_packing_qty,
     line_packed_breakdown,
+    line_placed_loose_qty,
     line_placed_qty,
     list_packing_entries,
     list_task_boxes,
@@ -120,8 +127,10 @@ from modules.shipments.service import (
     normalize_task_kind,
     packing_day_detail,
     place_box,
+    place_loose_item,
     packing_productivity,
     record_packing,
+    release_box,
     relocate_packed,
     return_defect_to_storage,
     return_line_from_packing,
@@ -132,6 +141,8 @@ from modules.shipments.service import (
     start_repack,
     take_box,
     undo_box_item,
+    undo_placed_item,
+    undo_putaway_defect,
 )
 from modules.products.service import assign_product_sku_if_missing
 from modules.push.service import notify_packing_correction
@@ -460,7 +471,7 @@ def list_shipments(
                         -- брак возвращается на хранение и в факт выполнения плана не входит.
                         COALESCE((
                             SELECT SUM(CASE
-                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') THEN zr.qty
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
                                 WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                                 ELSE 0 END)
                             FROM zone_relocations zr
@@ -611,7 +622,7 @@ def list_shipment_lines(
                 for a in conn.execute(
                     f"""SELECT zr.shipment_line_id AS line_id,
                             SUM(CASE
-                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') THEN zr.qty
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
                                 WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                                 ELSE 0 END) AS packed_good
                         FROM zone_relocations zr
@@ -684,10 +695,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         ).fetchall()
         packed_rows = conn.execute(
             f"""SELECT shipment_line_id,
-                  COALESCE(SUM(CASE WHEN to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}')   AND to_quality='{INV_Q_GOOD}'   AND COALESCE(from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') THEN qty
-                                    WHEN from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND from_quality='{INV_Q_GOOD}' AND to_op='{INV_OP_PACKING}'               THEN -qty ELSE 0 END), 0) AS good,
-                  COALESCE(SUM(CASE WHEN to_quality='{INV_Q_DEFECT}'   AND COALESCE(from_quality,'')<>'{INV_Q_DEFECT}' THEN qty
-                                    WHEN from_quality='{INV_Q_DEFECT}' AND COALESCE(to_quality,'')<>'{INV_Q_DEFECT}'   THEN -qty ELSE 0 END), 0) AS defect,
+                  {_PACKED_NET_SQL.format(p='')},
                   -- «Ещё не размещено» = чистый остаток корзины packed (ждёт раскладки):
                   -- размещение good (packed→ready) и defect (packed→storage) его уменьшает.
                   -- Плюс/минус отдельными суммами: ручное перемещение packed→packed по
@@ -755,6 +763,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         is_putaway = normalize_task_kind(row.get("task_kind")) == SHIPMENT_TASK_PUTAWAY
         boxed_by_line = {str(l["id"]): line_boxed_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
         placed_by_line = {str(l["id"]): line_placed_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
+        loose_by_line = {str(l["id"]): line_placed_loose_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
         boxes = [ShipmentBoxItem(**b) for b in list_task_boxes(conn, doc_id)] if is_putaway else []
 
         # Статус сохранённых кодов файла считается при каждом чтении: «непривязанный»
@@ -806,6 +815,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             packed_pending_defect=pending_by_line.get(str(l["id"]), (0, 0))[1],
             boxed_qty=boxed_by_line.get(str(l["id"]), 0),
             placed_qty=placed_by_line.get(str(l["id"]), 0),
+            placed_loose_qty=loose_by_line.get(str(l["id"]), 0),
             available_for_pack=available_for_pack.get(str(l["id"]), 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
@@ -1810,8 +1820,7 @@ def add_shipment_box_item(
         if not proceed:
             return stored
         box = add_box_item(
-            conn, doc_id, box_id,
-            barcode=body.barcode, qty=body.qty, quality=body.quality, user_id=uid,
+            conn, doc_id, box_id, barcode=body.barcode, qty=body.qty, user_id=uid,
         )
         finish_idempotent(conn, x_request_id, box)
         conn.commit()
@@ -1883,6 +1892,104 @@ def place_shipment_box(
         finish_idempotent(conn, x_request_id, box)
         conn.commit()
     return box
+
+
+@router.post("/shipments/{doc_id}/boxes/{box_id}/release")
+def release_shipment_box(
+    doc_id: str,
+    box_id: str,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Освободить пустой короб: этикетку взяли по ошибке, короб возвращается в пул."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_box_release")
+        if not proceed:
+            return stored
+        result = release_box(conn, doc_id, box_id, uid)
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/{doc_id}/putaway/defect", response_model=ShipmentPutawayItemResult)
+def add_putaway_defect_endpoint(
+    doc_id: str,
+    body: ShipmentPutawayDefectPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Скан найденного брака: он фиксируется мимо коробов и ждёт ячейку брака."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_putaway_defect")
+        if not proceed:
+            return stored
+        result = add_putaway_defect(conn, doc_id, barcode=body.barcode, qty=body.qty, user_id=uid)
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/{doc_id}/putaway/defect/undo", response_model=ShipmentPutawayItemResult)
+def undo_putaway_defect_endpoint(
+    doc_id: str,
+    body: ShipmentPutawayUndoPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Отмена ошибочного скана брака: товар возвращается на стол упаковки."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_putaway_defect_undo")
+        if not proceed:
+            return stored
+        result = undo_putaway_defect(conn, doc_id, body.line_id, body.qty, uid)
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/{doc_id}/putaway/place-item", response_model=ShipmentPutawayItemResult)
+def place_putaway_item(
+    doc_id: str,
+    body: ShipmentPutawayPlacePayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Крупногабарит: скан товара и скан ячейки — единица уезжает на стеллаж без короба."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_putaway_place_item")
+        if not proceed:
+            return stored
+        result = place_loose_item(
+            conn, doc_id,
+            barcode=body.barcode, qty=body.qty, quality=body.quality, zone_id=body.zone_id, user_id=uid,
+        )
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/{doc_id}/putaway/place-item/undo", response_model=ShipmentPutawayItemResult)
+def undo_putaway_item(
+    doc_id: str,
+    body: ShipmentPutawayUndoPayload,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_putaway),
+):
+    """Отмена прямого размещения: товар уезжает из ячейки обратно на стол упаковки."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_putaway_place_undo")
+        if not proceed:
+            return stored
+        result = undo_placed_item(conn, doc_id, body.line_id, body.qty, uid)
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/finish-putaway")

@@ -53,7 +53,7 @@ def _packed_on(connection, day: date) -> dict:
              JOIN shipment_lines l ON l.doc_id = d.id AND COALESCE(l.is_deleted, 0) = 0
              WHERE COALESCE(d.is_deleted, 0) = 0 AND d.status <> ? AND d.ship_date = ?) AS plan,
           (SELECT COALESCE(SUM(CASE
-                     WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}')   AND zr.to_quality='{INV_Q_GOOD}'   AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
+                     WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}')   AND zr.to_quality='{INV_Q_GOOD}'   AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
                      WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}' THEN -zr.qty
                      ELSE 0 END), 0)
              FROM zone_relocations zr
@@ -225,7 +225,7 @@ def operational_plan(connection, *, receipts_limit: int, shipments_limit: int, t
                COALESCE(SUM(l.qty) FILTER (WHERE COALESCE(l.is_deleted, 0) = 0), 0) AS total_qty,
                COALESCE((
                    SELECT SUM(CASE
-                       WHEN zr.to_op='{INV_OP_PACKED}' AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') THEN zr.qty
+                       WHEN zr.to_op='{INV_OP_PACKED}' AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
                        WHEN zr.from_op='{INV_OP_PACKED}' AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                        ELSE 0 END)
                    + SUM(CASE
