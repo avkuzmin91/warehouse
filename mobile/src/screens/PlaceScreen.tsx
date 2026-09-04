@@ -9,6 +9,7 @@ import {
   isContainerCode,
   placeContainers,
   type ContainerItem,
+  type ContainerPendingBox,
   type ContainerPendingPlacement,
   type ContainerPlaceItemScan,
   type ContainerPlaceSource,
@@ -18,6 +19,7 @@ import { getLocationByCode, isLocationCode } from '../api/locationsApi'
 import { getProductByBarcode } from '../api/productsApi'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
+import { PendingPlacementSheet, waiting } from '../components/PendingPlacementSheet'
 import { scanSource } from '../scan/ScanSource'
 import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 import { variantTitle } from '../utils/format'
@@ -158,11 +160,10 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
   const [notice, setNotice] = useState('')
   // Смена источника при набранной пачке: список очищается, поэтому спрашиваем.
   const [resetAsk, setResetAsk] = useState<null | 'collected' | EndpointKind>(null)
-  // Сверка ячейки на сводке: необязательный скан места, где должен стоять короб.
-  const [cellChecked, setCellChecked] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   // Очередь развозки общая на склад: по ней видно, осталось ли что-то у стола.
   const [pending, setPending] = useState<ContainerPendingPlacement | null>(null)
+  const [showPending, setShowPending] = useState(false)
 
   const loadPending = useCallback((signal?: AbortSignal) => {
     getPendingPlacement(signal)
@@ -214,12 +215,15 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
   const itemQty = items.reduce((s, i) => s + i.qty, 0)
   const total = boxQty + itemQty
   const empty = boxes.length === 0 && items.length === 0
+  // Сколько коробов из очереди у стола уже в пачке: по этому видно, пуст ли стол.
+  const takenPendingIds = pending
+    ? boxes.filter((b) => pending.boxes.some((p) => p.id === b.id)).map((b) => b.id)
+    : []
 
   function clearAll() {
     setBoxes([])
     setItems([])
     setTarget(null)
-    setCellChecked(null)
   }
 
   function applySource(next: PlaceSource) {
@@ -458,6 +462,18 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
     setBoxes((prev) => prev.filter((x) => x.id !== id))
   }
 
+  /** Тап по коробу в очереди = его скан: объект уникальный, пересчитывать нечего.
+   *
+   * Товар без короба так брать нельзя — его количество это число сканов, готовое
+   * `qty` из списка сломало бы поштучный пересчёт.
+   */
+  function takePendingBox(b: ContainerPendingBox) {
+    if (busy || source.kind !== 'collected') return
+    if (boxes.some((x) => x.id === b.id)) return
+    scanSuccessFeedback()
+    setBoxes((prev) => [{ id: b.id, doc_number: b.doc_number, items_qty: b.items_qty, moving: false }, ...prev])
+  }
+
   async function submit() {
     if (busy || empty || !target) return
     setBusy(true)
@@ -545,40 +561,15 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
     }
   }
 
-  /** Сверка ячейки на сводке — только для короба-приёмника: откуда взяли, уже проверено на скане. */
-  const cellCheckBox = target?.kind === 'container' ? target : null
-
-  async function checkCell() {
-    if (busy || !cellCheckBox) return
-    setBusy(true)
-    setError('')
-    try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const found = await resolveEndpoint(code, 'target', 'location')
-      if (typeof found === 'string' || found.kind !== 'location') {
-        scanNotFoundFeedback()
-        setError(typeof found === 'string' ? found : 'Отсканируйте ячейку')
-        return
-      }
-      if (found.id !== cellCheckBox.zone_id) {
-        scanNotFoundFeedback()
-        setError(`Короб ${cellCheckBox.doc_number} числится в ячейке ${cellCheckBox.zone_name ?? '—'}, а отсканирована ${found.code}`)
-        return
-      }
-      scanSuccessFeedback()
-      setCellChecked(found.code)
-    } catch (err) {
-      scanNotFoundFeedback()
-      setError(err instanceof Error ? err.message : 'Сканирование не удалось')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   const showQuality = source.kind !== 'container'
   const sourceValue = sourceLabel(source)
   const objectsValue = empty ? null : `${total} шт.`
+
+  const pendingOldest = waiting(pending?.since)
+  const pendingNote = [
+    takenPendingIds.length > 0 && pending ? `взято ${takenPendingIds.length} из ${pending.boxes.length} коробов` : null,
+    pendingOldest ? `самый старый ждёт ${pendingOldest.label}` : null,
+  ].filter(Boolean).join(' · ')
 
   if (target) {
     return (
@@ -633,23 +624,11 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
                 <Icon name="qr" size={16} /> Кладу в короб на этой полке — скан QR короба
               </button>
             )}
-            {cellCheckBox && (
-              cellChecked ? (
-                <div className="alert ok">
-                  <Icon name="check" size={15} />
-                  Ячейка сверена: {cellChecked}
-                </div>
-              ) : (
-                <button className="btn ghost" disabled={busy} onClick={() => { void checkCell() }}>
-                  <Icon name="qr" size={16} /> Сверить ячейку короба {cellCheckBox.doc_number} — не обязательно
-                </button>
-              )
-            )}
             <button className="btn primary" disabled={busy} onClick={() => { void submit() }}>
               {busy ? <span className="spin spin-sm" /> : <Icon name="check" size={18} />}
               {' '}Подтвердить перемещение · {total} шт.
             </button>
-            <button className="btn ghost" disabled={busy} onClick={() => { setTarget(null); setCellChecked(null) }}>
+            <button className="btn ghost" disabled={busy} onClick={() => setTarget(null)}>
               Назад — изменить «Куда»
             </button>
           </div>
@@ -725,12 +704,36 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
               </button>
             </div>
           )}
-          {source.kind === 'collected' && pending && (pending.boxes.length > 0 || pending.aside_qty > 0) && (
-            <div className="line-sub">
-              У стола ждут развозки: коробов {pending.boxes.length}
-              {pending.aside_qty > 0 ? `, без короба ${pending.aside_qty} шт.` : ''}
-            </div>
-          )}
+          {/* Очередь у стола видна при любом источнике: забыть её легче, чем перепутать «Откуда». */}
+          {pending && (pending.boxes.length > 0 || pending.aside_qty > 0) ? (
+            <button
+              className="combo-opt"
+              style={{
+                marginTop: 10,
+                border: `1px solid ${source.kind === 'collected' ? 'var(--c-accent)' : 'var(--c-border)'}`,
+                opacity: busy ? 0.55 : undefined,
+              }}
+              disabled={busy}
+              onClick={() => setShowPending(true)}
+            >
+              <Icon name="archive" size={17} style={{ flex: '0 0 auto', color: 'var(--c-accent)' }} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="line-name">
+                  У стола: коробов {pending.boxes.length}
+                  {pending.aside_qty > 0 ? ` · без короба ${pending.aside_qty} шт.` : ''}
+                </div>
+                <div
+                  className="line-sub"
+                  style={{ marginTop: 2, color: pendingOldest?.stale ? 'var(--c-warning)' : undefined }}
+                >
+                  {pendingNote || 'нажмите — посмотреть, что именно ждёт'}
+                </div>
+              </div>
+              <Icon name="chev" size={16} style={{ flex: '0 0 auto', color: 'var(--c-text-muted)' }} />
+            </button>
+          ) : pending && source.kind === 'collected' ? (
+            <div className="line-sub">У стола пусто — развозить нечего</div>
+          ) : null}
           {source.kind === 'container' && (
             <div className="line-sub">Стоит в {source.zone_name ?? '—'} · из короба берут только товар</div>
           )}
@@ -824,6 +827,16 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
           </div>
         )}
       </div>
+
+      {showPending && pending && (
+        <PendingPlacementSheet
+          data={pending}
+          takenIds={takenPendingIds}
+          canTake={source.kind === 'collected'}
+          onTake={takePendingBox}
+          onClose={() => setShowPending(false)}
+        />
+      )}
     </div>
   )
 }

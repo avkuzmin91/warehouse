@@ -19,6 +19,7 @@ if not os.environ.get("DATABASE_URL"):
 
 from fastapi.testclient import TestClient
 
+from config import INV_OP_STORAGE
 from app import app
 from dbconn import get_connection
 from modules.auth.service import get_current_user
@@ -26,6 +27,7 @@ from tests.conftest import cleanup_client, make_client_id, seed_storage_good
 
 _ADMIN = {"id": "t-admin", "email": "a@t.com", "role": "admin", "created_at": "2020-01-01T00:00:00", "client_id": None}
 _WAREHOUSE = {"id": "t-wh", "email": "w@t.com", "role": "warehouse_manager", "created_at": "2020-01-01T00:00:00", "client_id": None}
+_SHIFT = {"id": "t-shift", "email": "s@t.com", "role": "shift_supervisor", "created_at": "2020-01-01T00:00:00", "client_id": None}
 
 
 @pytest.fixture
@@ -1115,3 +1117,84 @@ def test_boxes_filter_by_place(api, client_id, product, zones):
     in_cell = api.get(f"/containers?zone_id={zones['cell_id']}")
     assert [c["id"] for c in in_cell.json()["items"]] == [box_id]
     assert api.get(f"/containers?zone_id={zones['special_id']}").json()["items"] == []
+def test_free_boxes_can_be_deleted_after_a_typo(api):
+    """Ошиблись количеством при заведении пачки — свободные короба убираются из реестра."""
+    _as(_ADMIN)
+    made = api.post("/containers", json={"count": 2}).json()["items"]
+    ids = [c["id"] for c in made]
+
+    r = api.post("/containers/delete", json={"ids": ids})
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == 2 and r.json()["skipped"] == 0
+
+    listed = api.get("/containers?status=new&limit=200").json()["items"]
+    assert not [c for c in listed if c["id"] in ids]
+    # Номера сожжены вместе с этикеткой: следующий короб не переиспользует их.
+    again = api.post("/containers", json={"count": 1}).json()["items"][0]
+    assert again["doc_number"] not in [c["doc_number"] for c in made]
+    api.post("/containers/delete", json={"ids": [again["id"]]})
+
+
+def test_delete_refuses_box_already_in_work(api, client_id, product, zones):
+    """Короб, который уже взяли в задачу, не удаляется молча — его номер возвращают."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
+    code = _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
+
+    _as(_ADMIN)
+    r = api.post("/containers/delete", json={"ids": [box_id]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["deleted"] == 0 and body["skipped"] == 1 and body["skipped_numbers"] == [code]
+    assert api.get(f"/containers/{box_id}").status_code == 200
+
+
+def test_delete_refuses_box_with_goods_inside(api, client_id, product, zones):
+    """Короб с товаром не удаляется ни на каком статусе — ни закрытый у стола, ни размещённый."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
+    code = _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
+
+    _as(_ADMIN)
+    closed = api.post("/containers/delete", json={"ids": [box_id]}).json()
+    assert closed["deleted"] == 0 and closed["skipped_numbers"] == [code]
+
+    _place(api, zone_id=zones["cell_id"], box_ids=[box_id])
+    placed = api.post("/containers/delete", json={"ids": [box_id]}).json()
+    assert placed["deleted"] == 0 and placed["skipped_numbers"] == [code]
+
+    # Товар на месте: отказ не должен ничего сдвинуть в остатке.
+    detail = api.get(f"/containers/{box_id}").json()
+    assert detail["doc"]["items_qty"] == 2
+    assert _bucket(client_id, product["product_id"], INV_OP_STORAGE) == 2
+
+
+def test_free_labels_sink_below_boxes_in_work(api, client_id, product, zones):
+    """Пачка чистых этикеток не должна накрывать первую страницу списка."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    _as(_ADMIN)
+    fresh = api.post("/containers", json={"count": 1}).json()["items"][0]["id"]
+
+    order = [c["id"] for c in api.get("/containers?limit=200").json()["items"]]
+    assert order.index(box_id) < order.index(fresh)
+    api.post("/containers/delete", json={"ids": [fresh]})
+
+
+def test_shift_supervisor_prints_labels_but_does_not_create_boxes(api):
+    """Перепечатка рваной этикетки — работа смены; заведение пачки — нет."""
+    _as(_ADMIN)
+    box = api.post("/containers", json={"count": 1}).json()["items"][0]
+
+    _as(_SHIFT)
+    labels = api.get(f"/containers/labels?ids={box['id']}")
+    assert labels.status_code == 200, labels.text
+    assert labels.json()["items"][0]["doc_number"] == box["doc_number"]
+    assert api.post("/containers", json={"count": 1}).status_code == 403
+    assert api.post("/containers/delete", json={"ids": [box["id"]]}).status_code == 403
+
+    _as(_ADMIN)
+    api.post("/containers/delete", json={"ids": [box["id"]]})

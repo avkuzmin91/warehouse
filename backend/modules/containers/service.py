@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from config import (
     CONTAINER_BATCH_MAX,
     CONTAINER_OP_CREATE,
+    CONTAINER_OP_DELETE,
     CONTAINER_OP_ITEM_ADD,
     CONTAINER_OP_ITEM_REMOVE,
     CONTAINER_OP_MOVE,
@@ -27,6 +28,7 @@ from utils import next_doc_number as _next_doc_number, now_iso as _now, qr_svg
 
 from .schemas import (
     ContainerContentLine,
+    ContainerDeleteResult,
     ContainerHoldingRow,
     ContainerHoldingsResponse,
     ContainerItem,
@@ -108,6 +110,55 @@ def create_containers(connection, count: int, user_id: str) -> list[ContainerIte
             ContainerItem(id=cid, doc_number=number, status=CONTAINER_STATUS_NEW, created_at=now)
         )
     return created
+
+
+def delete_unused_containers(connection, ids: list[str], user_id: str) -> ContainerDeleteResult:
+    """Удаляет свободные короба ошибочной пачки. Без commit.
+
+    Удалять можно только тару, которую ещё не пустили в дело: статус «свободен» и
+    ни одной записи в журнале перемещений по оси короба. Короб в работе не удаляется
+    молча — его номер возвращается в `skipped_numbers`, чтобы человек увидел, что не вышло.
+    """
+    wanted = [str(i).strip() for i in (ids or []) if str(i).strip()]
+    if not wanted:
+        raise HTTPException(status_code=400, detail="Выберите короба для удаления")
+
+    rows = connection.execute(
+        "SELECT id, doc_number, status FROM containers "
+        "WHERE id = ANY(?) AND COALESCE(is_deleted, 0) = 0",
+        (wanted,),
+    ).fetchall()
+    used_rows = connection.execute(
+        "SELECT DISTINCT from_container_id AS cid FROM zone_relocations WHERE from_container_id = ANY(?) "
+        "UNION SELECT DISTINCT to_container_id FROM zone_relocations WHERE to_container_id = ANY(?)",
+        (wanted, wanted),
+    ).fetchall()
+    used = {str(r["cid"]) for r in used_rows if r["cid"]}
+
+    now = _now()
+    deleted = 0
+    skipped_numbers: list[str] = []
+    for row in rows:
+        cid = str(row["id"])
+        if str(row["status"]) != CONTAINER_STATUS_NEW or cid in used:
+            skipped_numbers.append(str(row["doc_number"]))
+            continue
+        connection.execute(
+            "UPDATE containers SET is_deleted = 1, updated_at = ? WHERE id = ?",
+            (now, cid),
+        )
+        log_container_op(
+            connection, container_id=cid, op_type=CONTAINER_OP_DELETE,
+            comment="Короб удалён из реестра: этикетка не пущена в дело", user_id=user_id,
+        )
+        deleted += 1
+
+    missing = len(wanted) - len(rows)
+    return ContainerDeleteResult(
+        deleted=deleted,
+        skipped=len(skipped_numbers) + max(missing, 0),
+        skipped_numbers=skipped_numbers,
+    )
 
 
 def log_container_op(
@@ -297,8 +348,10 @@ def list_containers(
     offset = (page - 1) * limit
     rows = connection.execute(
         f"SELECT {_SELECT_COLS} {_FROM_SQL} WHERE {where} "
-        "ORDER BY c.created_at DESC, c.doc_number DESC LIMIT ? OFFSET ?",
-        [*params, limit, offset],
+        # Свободные этикетки уходят вниз: пачка из 200 новых коробов иначе накрывает
+        # первую страницу и прячет то, с чем реально работают.
+        "ORDER BY (c.status = ?) ASC, c.created_at DESC, c.doc_number DESC LIMIT ? OFFSET ?",
+        [*params, CONTAINER_STATUS_NEW, limit, offset],
     ).fetchall()
     qty_by_id = containers_items_qty(connection, [str(r["id"]) for r in rows])
     return ContainerListResponse(

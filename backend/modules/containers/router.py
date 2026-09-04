@@ -14,6 +14,8 @@ from modules.auth.service import (
 from .schemas import (
     ContainerBatchCreate,
     ContainerBatchResult,
+    ContainerDeleteRequest,
+    ContainerDeleteResult,
     ContainerDetailResponse,
     ContainerHoldingsResponse,
     ContainerItem,
@@ -32,6 +34,7 @@ from .service import (
     container_labels,
     containers_holdings,
     create_containers,
+    delete_unused_containers,
     list_container_ops,
     list_containers,
     lookup_container,
@@ -83,9 +86,29 @@ def create_containers_endpoint(
     return result
 
 
+@router.post("/containers/delete", response_model=ContainerDeleteResult)
+def delete_containers_endpoint(
+    payload: ContainerDeleteRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(get_current_manager),
+):
+    """Удалить ошибочно заведённые короба: только свободные, ещё не пущенные в дело."""
+    uid = str(user["id"])
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "containers_delete")
+        if not proceed:
+            return stored
+        result = delete_unused_containers(conn, payload.ids, uid)
+        finish_idempotent(conn, x_request_id, result.model_dump())
+        conn.commit()
+    return result
+
+
 @router.get("/containers/labels", response_model=ContainerLabelsResponse)
 def container_labels_endpoint(
-    user=Depends(get_current_manager),
+    # Перепечатка этикетки ничего не заводит, а рвётся она посреди смены — доступна
+    # всем, кто видит короб, включая начальника смены.
+    user=Depends(get_current_shipment_viewer),
     ids: str = Query(..., description="Список id коробов через запятую"),
 ):
     _ = user

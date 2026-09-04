@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   getContainer,
+  getContainerLabels,
   placeContainers,
   CONTAINER_STATUS_LABELS,
   containerStatusTone,
 } from '../../../api/containersApi'
 import type { ContainerDetailResponse } from '../../../api/containersApi'
 import { BoxTransferDrawer, type BoxTransferMode } from './BoxTransferDrawer'
+import { printBoxLabels, POPUP_BLOCKED_HINT } from './boxLabels'
 import { getLocations } from '../../../api/locationsApi'
 import type { LocationItem } from '../../../api/locationsApi'
 import { useLookups } from '../../../hooks/useLookups'
@@ -93,6 +95,21 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
     }
   }
 
+  // Этикетка рвётся и затирается прямо на складе: перепечатка нужна из карточки того
+  // короба, что держат в руках, а не через выборку в списке.
+  async function handlePrintLabel() {
+    if (!box) return
+    setBusy(true)
+    try {
+      const res = await getContainerLabels([box.id])
+      if (!printBoxLabels(res.items)) toast(POPUP_BLOCKED_HINT, 'error')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось получить этикетку', 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   if (loading) {
     return <DetailPage title="Короб" backTo="/inventory/boxes"><Card>Загрузка…</Card></DetailPage>
   }
@@ -111,6 +128,11 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
       title={box.doc_number}
       subtitle={box.doc_number_task ? `Собран в задаче ${box.doc_number_task}` : 'Короб'}
       backTo="/inventory/boxes"
+      actions={
+        <button className="btn" disabled={busy} onClick={() => { void handlePrintLabel() }}>
+          <Icon name="print" size={14} />Печать этикетки
+        </button>
+      }
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

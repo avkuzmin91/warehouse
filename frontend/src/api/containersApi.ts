@@ -203,6 +203,21 @@ export function createContainers(count: number) {
   })
 }
 
+/** Результат удаления пачки: что удалось убрать, а что уже в работе. */
+export type ContainerDeleteResult = {
+  deleted: number
+  skipped: number
+  skipped_numbers: string[]
+}
+
+/** Удалить ошибочно заведённые короба — только свободные, не пущенные в дело. */
+export function deleteContainers(ids: string[]) {
+  return request<ContainerDeleteResult>('/containers/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  })
+}
+
 export function getContainerLabels(ids: string[], signal?: AbortSignal) {
   const sp = new URLSearchParams({ ids: ids.join(',') })
   return request<{ items: ContainerLabel[] }>(`/containers/labels?${sp.toString()}`, { signal })

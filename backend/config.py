@@ -451,6 +451,7 @@ CONTAINER_OP_REOPEN      = "reopen"
 CONTAINER_OP_PLACE       = "place"
 CONTAINER_OP_MOVE        = "move"         # перенос размещённого короба в другую ячейку
 CONTAINER_OP_RELEASE     = "release"      # пустой короб снят с задачи, снова свободен
+CONTAINER_OP_DELETE      = "delete"       # свободный короб удалён (ошибочная пачка этикеток)
 
 CONTAINER_OP_LABELS: dict[str, str] = {
     CONTAINER_OP_CREATE:      "Заведён",
@@ -462,6 +463,7 @@ CONTAINER_OP_LABELS: dict[str, str] = {
     CONTAINER_OP_PLACE:       "Размещён",
     CONTAINER_OP_MOVE:        "Перемещён",
     CONTAINER_OP_RELEASE:     "Освобождён",
+    CONTAINER_OP_DELETE:      "Удалён",
 }
 
 # Сколько коробов создаётся одним запросом печати этикеток.

@@ -283,14 +283,13 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                   {boxQuality ? (
                     <button
                       className={boxQuality === 'defect' ? 'btn danger' : 'btn'}
-                      style={{ marginTop: 8 }}
                       disabled={busy}
                       onClick={() => { void onScanItem(boxQuality) }}
                     >
                       <Icon name="qr" size={18} /> Скан товара{boxQuality === 'defect' ? ' (брак)' : ''}
                     </button>
                   ) : (
-                    <div className="line-row" style={{ marginTop: 8 }}>
+                    <div className="line-row">
                       <button
                         className="btn"
                         style={{ flex: 1 }}
@@ -322,7 +321,6 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                   </button>
                   <button
                     className="btn"
-                    style={{ marginTop: 8 }}
                     disabled={busy}
                     onClick={() => { void onNextBox() }}
                   >

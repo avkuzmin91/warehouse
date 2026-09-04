@@ -492,7 +492,7 @@ export const inventoryRoutes = [
 ]
 ```
 
-URL-конвенции inventory: `/inventory/receipts`, `/inventory/balances` — **без** суффикса `-v2`. Короба (печать этикеток пачкой) — `/inventory/boxes`. Список задач упаковки живёт на `/inventory/packing` (+ `/inventory/packing/productivity`); `/inventory/shipments` — редирект туда, карточки задач — на `/inventory/shipments/new` и `/inventory/shipments/:docId`. Области роутов: `admin`, `auth`, `cabinet`, `finance`, `inventory`, `logistics`, `marketplaces`, `timesheet`.
+URL-конвенции inventory: `/inventory/receipts`, `/inventory/balances` — **без** суффикса `-v2`. Короба разведены по роли: **реестр тары** (статусы, поиск по номеру/месту/клиенту/товару, заведение пачки, печать и удаление свободных) — панель «Короба» в справочниках (`/dictionaries?type=boxes`), **экран работы** «Развозка по местам» — `/inventory/boxes` (только очередь развозки, **без пункта в сайдбаре**: вход — карточка «Развезти по местам» в «Моих задачах» и командная палитра); карточка короба — `/inventory/boxes/:boxId`, на неё ведут ссылки из остатков (`BoxChip`, «Где лежит») и из реестра; заведение пачки чистых этикеток и удаление свободных коробов — панель «Короба» в справочниках (`/dictionaries?type=boxes`), рядом с местами хранения: редкое необратимое действие не стоит в шапке ежедневного списка. Список задач упаковки живёт на `/inventory/packing` (+ `/inventory/packing/productivity`); `/inventory/shipments` — редирект туда, карточки задач — на `/inventory/shipments/new` и `/inventory/shipments/:docId`. Области роутов: `admin`, `auth`, `cabinet`, `finance`, `inventory`, `logistics`, `marketplaces`, `timesheet`.
 
 ---
 

@@ -57,6 +57,14 @@ export function isDispatchPreparer(user: User | null | undefined): boolean {
     || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
 }
 
+// Запас тары: заведение и удаление свободных коробов (панель «Короба» в справочниках).
+// Тот же состав, что у backend-гейта manager_staff, — начальник смены короба только
+// печатает и развозит, но пачку этикеток не заводит.
+export function canManageBoxSupply(user: User | null | undefined): boolean {
+  return user?.role === 'admin' || user?.role === 'manager'
+    || user?.role === 'warehouse_manager' || user?.role === 'warehouse_head'
+}
+
 export function canCreateDocuments(user: User | null | undefined): boolean {
   return user?.role === 'admin' || user?.role === 'manager'
 }

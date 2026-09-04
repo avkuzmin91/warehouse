@@ -8,6 +8,7 @@ export type DictionaryTypeId =
   | 'clients'
   | 'suppliers'
   | 'locations'
+  | 'boxes'
   | 'warehouses'
   | 'own-warehouses'
   | 'reasons'
@@ -44,6 +45,7 @@ export const DICTIONARY_TYPES: DictionaryType[] = [
   { id: 'colors',        name: 'Цвета',         icon: 'palette',  kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Цвет' },
   { id: 'clients',       name: 'Клиенты',       icon: 'users',    kind: 'rich',   group: 'main',   createLabel: 'Новый клиент' },
   { id: 'locations',     name: 'Места хранения', icon: 'grid',     kind: 'rich',   group: 'main',   createLabel: 'Сгенерировать ячейки' },
+  { id: 'boxes',         name: 'Короба',        icon: 'archive',  kind: 'rich',   group: 'main',   createLabel: 'Завести короба' },
   { id: 'warehouses',       name: 'Точки логистики',  icon: 'map',      kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Точка логистики' },
   { id: 'own-warehouses',   name: 'Наши склады',      icon: 'building', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Склад', adminOnly: true },
   { id: 'carriers',      name: 'Перевозчики',   icon: 'truckOut', kind: 'simple', group: 'main',   createLabel: 'Создать запись', sheetKind: 'Перевозчик' },

@@ -22,6 +22,8 @@ const ALL_CMDS: CmdItem[] = [
   { section: 'Навигация', icon: 'truckOut', label: 'Отгрузки', sub: 'Рейсы и отгрузки клиентам', to: '/inventory/dispatches' },
   { section: 'Навигация', icon: 'forklift', label: 'Упаковка', sub: 'Задачи упаковки и производительность', to: '/inventory/packing' },
   { section: 'Навигация', icon: 'boxes', label: 'Остатки', sub: 'Что и где лежит', to: '/inventory/balances' },
+  { section: 'Навигация', icon: 'archive', label: 'Развозка по местам', sub: 'Что стоит у стола и ждёт мест', to: '/inventory/boxes' },
+  { section: 'Навигация', icon: 'archive', label: 'Короба', sub: 'Реестр тары: статусы, поиск, этикетки', to: '/dictionaries?type=boxes' },
   { section: 'Навигация', icon: 'book', label: 'Справочники', sub: 'Товары, цвета, размеры, клиенты', to: '/dictionaries' },
   { section: 'Навигация', icon: 'users', label: 'Пользователи и роли', sub: 'Управление доступом', to: '/dictionaries/users', usersAdminOnly: true },
   { section: 'Действия', icon: 'plus', label: 'Новое поступление', sub: 'Создать черновик документа', to: '/inventory/receipts/new', createOnly: true },

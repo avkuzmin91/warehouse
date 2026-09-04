@@ -82,6 +82,19 @@ class ContainerBatchResult(BaseModel):
     items: list[ContainerItem]
 
 
+class ContainerDeleteRequest(BaseModel):
+    """Удаление ошибочно заведённой пачки: только свободные, ни разу не пущенные в дело."""
+
+    ids: list[str] = Field(min_length=1)
+
+
+class ContainerDeleteResult(BaseModel):
+    deleted: int = 0
+    skipped: int = 0
+    # Номера коробов, которые удалить нельзя (уже в работе) — их называют пользователю.
+    skipped_numbers: list[str] = []
+
+
 class ContainerLabel(BaseModel):
     id: str
     doc_number: str

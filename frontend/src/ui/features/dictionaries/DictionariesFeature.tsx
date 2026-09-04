@@ -9,6 +9,7 @@ import { ProductsDict } from './ProductsDict'
 import { SimpleDict } from './SimpleDict'
 import { ClientsDict } from './ClientsDict'
 import { LocationsDict } from './LocationsDict'
+import { BoxRegistryFeature } from '../inventory/BoxRegistryFeature'
 import { SimpleDictSheet } from './SimpleDictSheet'
 import { ClientSheet } from './ClientSheet'
 import { PackingPricesFeature } from '../finance/pricing/PackingPricesFeature'
@@ -122,6 +123,7 @@ export function DictionariesFeature() {
     active === 'products' ? 'Новый товар' :
     active === 'clients' ? 'Новый клиент' :
     active === 'locations' ? undefined : // у панели «Места хранения» собственные действия
+    active === 'boxes' ? undefined :     // у панели «Короба» собственные действия
     dictDef?.group === 'pricing' ? undefined : // тарифы заводятся из строки, шторкой
     dictDef?.kind === 'empty' ? undefined :
     'Создать запись'
@@ -183,6 +185,8 @@ export function DictionariesFeature() {
             <LocationsDict refreshKey={refreshKey} />
           )}
 
+          {active === 'boxes' && <BoxRegistryFeature />}
+
           {!activeForbidden && dictDef?.group === 'pricing' && (
             <div className="dict-embed">
               {active === 'packing-pricing' && <PackingPricesFeature />}
@@ -207,7 +211,7 @@ export function DictionariesFeature() {
             ))
           )}
 
-          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && active !== 'locations' && dictDef?.group !== 'pricing' && (
+          {!isSimpleDictionaryType(active) && active !== 'products' && active !== 'clients' && active !== 'locations' && active !== 'boxes' && dictDef?.group !== 'pricing' && (
             <div style={{ padding: 40 }}>
               <EmptyState
                 title="Данные появятся при подключении API"
