@@ -45,10 +45,10 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
   const awaitingPlacement = boxes.filter((b) => b.status === 'closed')
   // Не упакованный остаток на столе: при завершении сборки он вернётся на хранение.
   const poolLeft = doc.lines.reduce((s, l) => s + l.available_for_pack, 0)
+  const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
   const placedTotal = doc.lines.reduce((s, l) => s + l.placed_qty, 0)
   const boxedTotal = doc.lines.reduce((s, l) => s + l.boxed_qty, 0)
   const asideTotal = doc.lines.reduce((s, l) => s + l.aside_qty, 0)
-  const defectTotal = doc.lines.reduce((s, l) => s + l.boxed_defect_qty, 0)
   const asideLines = doc.lines.filter((l) => l.aside_qty > 0)
 
   async function run(key: string, fn: () => Promise<unknown>) {
@@ -64,11 +64,21 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
   }
 
   async function handleFinish() {
-    const ok = await confirm({
-      title: 'Сборка завершена?',
-      body: boxedTotal > 0
-        ? `Собрано ${boxedTotal} шт. Задача закроется: короба и товар мимо коробов уйдут в очередь развозки — их развезёт кладовщик, когда повезёт ходку к стеллажам.`
+    const collected = boxedTotal + placedTotal
+    const body = [
+      collected > 0
+        ? `Собрано ${collected} шт из ${planTotal} шт. Задача закроется: короба и товар мимо коробов уйдут в очередь развозки — их развезёт кладовщик, когда повезёт ходку к стеллажам.`
         : 'Собранного товара нет — задача закроется сразу.',
+      // Недобор — самое дорогое последствие кнопки, поэтому он в подтверждении, а не
+      // только подписью под ней.
+      poolLeft > 0
+        ? `На упаковке остаётся ${poolLeft} шт — они вернутся на хранение и в этой задаче размещены не будут.`
+        : '',
+    ].filter(Boolean).join(' ')
+    const ok = await confirm({
+      title: 'Завершить сборку?',
+      body,
+      danger: poolLeft > 0,
       confirmLabel: 'Завершить сборку',
     })
     if (!ok) return
@@ -85,17 +95,8 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
         ? 'сборка завершена — развозка идёт в очереди коробов, задача её не ждёт'
         : 'сборка идёт на ТСД: скан короба → скан товара → закрыть короб'}
     >
-      <div style={{ display: 'flex', gap: 16, padding: '4px 0 10px', fontSize: 13, flexWrap: 'wrap' }}>
-        <span className="t-sub">Ждёт размещения: <b className="num">{boxedTotal}</b></span>
-        {asideTotal > 0 && (
-          <span className="t-sub">Из них мимо коробов: <b className="num">{asideTotal}</b></span>
-        )}
-        <span className="t-sub">Размещено по местам: <b className="num">{placedTotal}</b></span>
-        {defectTotal > 0 && (
-          <span style={{ color: 'var(--c-warning)' }}>Брак: <b className="num">{defectTotal}</b></span>
-        )}
-      </div>
-
+      {/* Сводка по числам — в панели «Итог сборки» справа: две копии одних и тех же
+          цифр рядом читаются как расхождение. Здесь — только сами короба. */}
       {boxes.length === 0 ? (
         <div className="t-sub" style={{ padding: '10px 0' }}>
           Короба ещё не собраны. На ТСД: скан этикетки короба → скан товара (каждый скан
@@ -169,25 +170,37 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
       )}
 
       {!collected && canEdit && (
-        <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            className="btn primary"
-            disabled={busy != null || unclosed.length > 0}
-            title={unclosed.length > 0 ? 'Сначала закройте набранные короба' : undefined}
-            onClick={() => { void handleFinish() }}
-          >
-            <Icon name="check" size={14} />Сборка завершена
-          </button>
-          {unclosed.length > 0 && (
-            <span className="t-sub" style={{ fontSize: 12 }}>
-              Не закрыто коробов: {unclosed.length}
-            </span>
-          )}
+        <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {/* Недобор стоит дороже всего: остаток из зоны упаковки уедет обратно на
+              хранение и размещён не будет — предупреждение, а не мелкая подпись. */}
           {unclosed.length === 0 && poolLeft > 0 && (
-            <span className="t-sub" style={{ fontSize: 12 }}>
-              На столе ещё {poolLeft} шт — при завершении вернутся на хранение
-            </span>
+            <div style={{
+              display: 'flex', gap: 8, alignItems: 'flex-start', padding: '8px 10px',
+              borderRadius: 'var(--r-md)', border: '1px solid var(--c-warning)',
+              background: 'var(--c-bg-sunken)', fontSize: 12.5,
+            }}>
+              <Icon name="alert" size={14} style={{ color: 'var(--c-warning)', flexShrink: 0, marginTop: 1 }} />
+              <span>
+                На упаковке ещё <b className="num">{poolLeft}</b> шт из плана {planTotal} шт.
+                При завершении они вернутся на хранение и размещены не будут.
+              </span>
+            </div>
           )}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              className="btn primary"
+              disabled={busy != null || unclosed.length > 0}
+              title={unclosed.length > 0 ? 'Сначала закройте набранные короба' : undefined}
+              onClick={() => { void handleFinish() }}
+            >
+              <Icon name="check" size={14} />Завершить сборку
+            </button>
+            {unclosed.length > 0 && (
+              <span className="t-sub" style={{ fontSize: 12 }}>
+                Не закрыто коробов: {unclosed.length}
+              </span>
+            )}
+          </div>
         </div>
       )}
 

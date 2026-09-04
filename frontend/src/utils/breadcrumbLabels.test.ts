@@ -32,7 +32,7 @@ describe('buildBreadcrumbsFromPathname', () => {
     expect(buildBreadcrumbsFromPathname('/inventory/shipments/xyz')).toEqual([
       { label: 'Склад', to: '/inventory' },
       { label: 'Упаковка', to: '/inventory/packing' },
-      { label: 'Карточка задачи упаковки', to: null },
+      { label: 'Карточка задачи склада', to: null },
     ])
   })
 

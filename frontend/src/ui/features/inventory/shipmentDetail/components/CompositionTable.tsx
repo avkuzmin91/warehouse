@@ -66,6 +66,8 @@ type CompositionTableProps = {
   lines:           EditableShipmentLine[]
   // Брак-отгрузка: показываем местоположение-источник строки (брак списывается с него).
   showZone?:       boolean
+  // Задача размещения: план — план размещения, а не упаковки.
+  putaway?:        boolean
   canEditPlan:     boolean
   // Магазин строки может быть редактируемым отдельно от плана (корректировка «На упаковке»).
   canEditStore?:   boolean
@@ -95,7 +97,7 @@ type CompositionTableProps = {
 
 /** Состав упаковки — только план: товар · магазин · план · файлы. Владелец — Менеджер. */
 export function CompositionTable({
-  lines, showZone = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
+  lines, showZone = false, putaway = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku,
   getAvail, availLoading,
@@ -111,7 +113,7 @@ export function CompositionTable({
           <th>Товар · вариант</th>
           {showZone && <th style={{ width: 170 }}>Местоположение</th>}
           <th style={{ width: 180 }}>Магазин</th>
-          <th style={{ width: 160, textAlign: 'right' }}>План упаковки</th>
+          <th style={{ width: 160, textAlign: 'right' }}>{putaway ? 'План размещения' : 'План упаковки'}</th>
           <th style={{ width: 124, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
               <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы

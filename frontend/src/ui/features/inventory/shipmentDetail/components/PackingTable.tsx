@@ -7,6 +7,8 @@ import type { EditableShipmentLine } from '../shared/types'
 type PackingTableProps = {
   // transfer — передача (Кладовщик, packing); packing — годный/брак (Нач. смены, on_packing); result — итог (read-only).
   mode:          'transfer' | 'packing' | 'result'
+  // Задача размещения: колонка «Собрано» (скан на ТСД) и гейт подвоза сверх плана.
+  putaway?:      boolean
   lines:         EditableShipmentLine[]
   canMove:       boolean
   canPack:       boolean
@@ -22,16 +24,23 @@ type PackingTableProps = {
 }
 
 /** Упаковка: план-цель + на упаковке + (годный/брак) + действия передачи/упаковки. */
+// Собрано по строке = всё, что снято сканом из зоны упаковки (годное и брак). Считаем по
+// факту упаковки, а не по корзине `boxed`: после развозки корзина пустеет, собранное — нет.
+function collectedOf(line: EditableShipmentLine): number {
+  return line.packed_good + line.packed_defect
+}
+
 export function PackingTable({
-  mode, lines, canMove, canPack, canReturn, canPlace, acting, savingLine,
+  mode, putaway = false, lines, canMove, canPack, canReturn, canPlace, acting, savingLine,
   onOpenMove, onReturn, onOpenPacking, onOpenPlace,
 }: PackingTableProps) {
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
   const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
   const packedTotal = lines.reduce((s, l) => s + l.packed_good + l.packed_defect, 0)
+  const collectedTotal = lines.reduce((s, l) => s + collectedOf(l), 0)
   const isResult = mode === 'result'
   const showGoodDefect = mode === 'packing' || mode === 'result'
-  const colCount = isResult ? 3 : showGoodDefect ? 5 : 4
+  const colCount = (isResult ? 3 : showGoodDefect ? 5 : 4) + (putaway && !isResult ? 1 : 0)
 
   return (
     <Table>
@@ -40,6 +49,7 @@ export function PackingTable({
           <th>Товар · вариант</th>
           <th style={{ width: 100, textAlign: 'right' }}>План</th>
           {!isResult && <th style={{ width: 110, textAlign: 'right' }}>На упаковке</th>}
+          {putaway && !isResult && <th style={{ width: 110, textAlign: 'right' }}>Собрано</th>}
           {showGoodDefect && <th style={{ width: 120, textAlign: 'right' }}>Годный / Брак</th>}
           {!isResult && <th style={{ width: 340, whiteSpace: 'nowrap' }}>{mode === 'packing' ? 'Действия упаковки' : 'Передача'}</th>}
         </tr>
@@ -47,6 +57,10 @@ export function PackingTable({
       <tbody>
         {lines.map((line) => {
           const busy = acting || savingLine === line.id
+          const collected = collectedOf(line)
+          // Позиция закрыта, когда собранное плюс лежащее на упаковке покрывает план:
+          // подвозить ещё нечего, иначе со склада уедет товар сверх задания.
+          const putawayDone = putaway && line.qty - collected - line.available_for_pack <= 0
           return (
             <tr key={line.id}>
               <Td>
@@ -58,6 +72,17 @@ export function PackingTable({
                   <span className="num" style={{ color: line.available_for_pack > 0 ? 'var(--c-text)' : 'var(--c-text-faint)' }}>
                     {line.available_for_pack}
                   </span>
+                </Td>
+              )}
+              {putaway && !isResult && (
+                <Td className="num">
+                  <span className="num" style={{
+                    fontWeight: collected > 0 ? 600 : 400,
+                    color: collected > 0 ? 'var(--c-text)' : 'var(--c-text-faint)',
+                  }}>{collected}</span>
+                  {line.packed_defect > 0 && (
+                    <span style={{ color: 'var(--c-danger)', fontSize: 11.5 }}> · брак {line.packed_defect}</span>
+                  )}
                 </Td>
               )}
               {showGoodDefect && (
@@ -83,8 +108,10 @@ export function PackingTable({
                     {canMove && (
                       <button
                         className="btn ghost sm"
-                        disabled={busy}
-                        title={mode === 'packing' ? 'Передать ещё товар на упаковку' : 'Передать товар в зону упаковки'}
+                        disabled={busy || putawayDone}
+                        title={putawayDone
+                          ? 'Позиция закрыта: план покрыт собранным и тем, что уже на упаковке'
+                          : mode === 'packing' ? 'Передать ещё товар на упаковку' : 'Передать товар в зону упаковки'}
                         onClick={() => onOpenMove(line)}
                       >
                         <Icon name="forklift" size={12} />{mode === 'packing' ? 'Передать ещё' : 'Передать'}
@@ -116,6 +143,11 @@ export function PackingTable({
               {!isResult && (
                 <span style={{ color: 'var(--c-text-subtle)' }}>
                   На упаковке <b className="num" style={{ color: 'var(--c-text)' }}>{poolTotal}</b>
+                </span>
+              )}
+              {putaway && !isResult && (
+                <span style={{ color: 'var(--c-text-subtle)' }}>
+                  Собрано <b className="num" style={{ color: 'var(--c-text)' }}>{collectedTotal}</b>
                 </span>
               )}
               {showGoodDefect && (

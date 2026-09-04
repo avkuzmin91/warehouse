@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
+import { useHardwareBack } from '../nav/backHandlers'
 import {
   getContainerByCode,
   getPendingPlacement,
@@ -24,25 +25,37 @@ const QUALITY_NEXT: Record<ItemQuality, ItemQuality> = { auto: 'good', good: 'de
 const QUALITY_LABEL: Record<ItemQuality, string> = { auto: 'качество: авто', good: 'годный', defect: 'брак' }
 const QUALITY_TONE: Record<ItemQuality, string> = { auto: '', good: 'success', defect: 'danger' }
 
-type Source = { id: string; code: string }
+type Zone = { id: string; code: string }
 type BufferBox = { id: string; doc_number: string; items_qty: number; moving: boolean }
 type BufferItem = { key: string; barcode: string; label: string; qty: number; quality: ItemQuality }
+
+function withItem(list: BufferItem[], barcode: string, label: string): BufferItem[] {
+  const idx = list.findIndex((i) => i.barcode === barcode)
+  if (idx < 0) return [{ key: `${barcode}-${Date.now()}`, barcode, label, qty: 1, quality: 'auto' }, ...list]
+  const next = [...list]
+  next[idx] = { ...next[idx], qty: next[idx].qty + 1 }
+  return next
+}
 
 /** «Перенос»: пачка коробов и товара уезжает в одно место хранения.
  *
  * Физика такая: кладовщик берёт стопку коробов (или товар с полки), везёт к стеллажу
- * и там пикает объекты, потом место. Поэтому экран — буфер «взял → положил»:
- * сканируешь подряд что взял, последним сканом указываешь место, всё уезжает одним
- * запросом.
+ * и там пикает объекты, потом место. Поэтому серия сканов не прерывается: скан места
+ * сам по себе и есть команда «положил» — руки к телефону возвращаются один раз за
+ * ходку, а не на каждый объект.
  *
- * Режим не выбирается руками, он выводится из отсканированного: закрытый короб
- * размещается, размещённый — переезжает, товар едет из корзины «ждёт размещения»,
- * а если её нет — переносится с полки. Скан QR места до товара задаёт источник:
- * иначе товар, лежащий сразу в нескольких местах, пришлось бы угадывать.
+ * Роль отсканированного места выводится из буфера, отдельного режима нет: пустые руки
+ * плюс место = «беру отсюда» (положить нечего), полные плюс место = «кладу сюда».
+ * Источник нужен только россыпи с полки — короб и собранное у стола система находит сама.
+ *
+ * Скан места назначения не отправляет пачку сразу, а показывает подтверждение: это
+ * единственная защита от чужой этикетки на стеллаже, и там же правятся количество и
+ * качество россыпи (при открытом сканере в список не попасть).
  */
-export function PlaceScreen({ source: initialSource }: { source?: Source }) {
+export function PlaceScreen({ source: initialSource }: { source?: Zone }) {
   const { back } = useNav()
-  const [source, setSource] = useState<Source | null>(initialSource ?? null)
+  const [source, setSource] = useState<Zone | null>(initialSource ?? null)
+  const [dest, setDest] = useState<Zone | null>(null)
   const [boxes, setBoxes] = useState<BufferBox[]>([])
   const [items, setItems] = useState<BufferItem[]>([])
   const [busy, setBusy] = useState(false)
@@ -62,26 +75,32 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
     return () => ac.abort()
   }, [loadPending])
 
+  // Подтверждение перехватывает аппаратную «Назад»: она отменяет отправку, а не уводит
+  // с экрана, иначе набранная пачка теряется одним случайным нажатием.
+  useHardwareBack(() => { if (!busy) setDest(null) }, dest !== null)
+
   const boxQty = boxes.reduce((s, b) => s + b.items_qty, 0)
   const itemQty = items.reduce((s, i) => s + i.qty, 0)
   const total = boxQty + itemQty
   const empty = boxes.length === 0 && items.length === 0
-
-  function addItem(barcode: string, label: string) {
-    setItems((prev) => {
-      const idx = prev.findIndex((i) => i.barcode === barcode)
-      if (idx < 0) return [{ key: `${barcode}-${Date.now()}`, barcode, label, qty: 1, quality: 'auto' }, ...prev]
-      const next = [...prev]
-      next[idx] = { ...next[idx], qty: next[idx].qty + 1 }
-      return next
-    })
-  }
 
   function setItemQty(key: string, raw: string) {
     const digits = raw.replace(/\D/g, '')
     setItems((prev) => prev.map((x) => (
       x.key === key ? { ...x, qty: digits === '' ? 0 : Math.max(0, parseInt(digits, 10)) } : x
     )))
+  }
+
+  function dropBox(id: string) {
+    const next = boxes.filter((x) => x.id !== id)
+    setBoxes(next)
+    if (next.length === 0 && items.length === 0) setDest(null)
+  }
+
+  function dropItem(key: string) {
+    const next = items.filter((x) => x.key !== key)
+    setItems(next)
+    if (next.length === 0 && boxes.length === 0) setDest(null)
   }
 
   // Сканер не закрывается между сканами: человек стоит со стопкой и щёлкает подряд.
@@ -92,10 +111,12 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
     setBusy(true)
     setError('')
     setNotice('')
-    // Состояние внутри серии читается из локального снимка: setBoxes в этом
-    // замыкании не виден, поэтому по самому `boxes` повторный скан того же короба
-    // не отсеивался бы и пачка уезжала с дублем.
-    let inHand = boxes
+    // Состояние внутри серии читается из локального снимка: setBoxes/setItems в этом
+    // замыкании не видны, поэтому по самому `boxes` повторный скан того же короба не
+    // отсеивался бы, а по `items` пустота буфера читалась бы неверно — и место
+    // назначения приняли бы за источник.
+    let boxBuf = boxes
+    let itemBuf = items
     try {
       for (;;) {
         const code = await scanSource.scan()
@@ -113,17 +134,17 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
             setError(`Короб ${box.doc_number} ещё не закрыт — закройте его в задаче сборки`)
             return
           }
-          if (inHand.some((b) => b.id === box.id)) {
+          if (boxBuf.some((b) => b.id === box.id)) {
             scanNotFoundFeedback()
             setNotice(`Короб ${box.doc_number} уже в списке`)
             continue
           }
           scanSuccessFeedback()
-          inHand = [
+          boxBuf = [
             { id: box.id, doc_number: box.doc_number, items_qty: box.items_qty, moving: box.status === 'placed' },
-            ...inHand,
+            ...boxBuf,
           ]
-          setBoxes(inHand)
+          setBoxes(boxBuf)
           continue
         }
         if (isLocationCode(code)) {
@@ -134,9 +155,14 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
             return
           }
           scanSuccessFeedback()
-          setSource({ id: loc.location.id, code: loc.location.code })
-          setNotice(`Беру из места ${loc.location.code}`)
-          continue
+          const zone = { id: loc.location.id, code: loc.location.code }
+          if (boxBuf.length === 0 && itemBuf.length === 0) {
+            setSource(zone)
+            setNotice(`Беру из места ${zone.code}`)
+            continue
+          }
+          setDest(zone)
+          return
         }
         const found = await getProductByBarcode(code)
         if (!found.found || !found.match) {
@@ -145,7 +171,12 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
           return
         }
         scanSuccessFeedback()
-        addItem(code, variantTitle(found.match.product_name, [found.match.color_name, found.match.size_name]))
+        itemBuf = withItem(
+          itemBuf,
+          code,
+          variantTitle(found.match.product_name, [found.match.color_name, found.match.size_name]),
+        )
+        setItems(itemBuf)
       }
     } catch (err) {
       scanNotFoundFeedback()
@@ -155,8 +186,44 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
     }
   }
 
-  async function onScanZone() {
-    if (busy || empty) return
+  /** Разовый скан места: запасной вход, если серия оборвалась, и явное «беру отсюда» с набранной пачкой. */
+  async function scanZone(role: 'from' | 'to') {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      const code = await scanSource.scan()
+      if (!code) return
+      if (!isLocationCode(code)) {
+        scanNotFoundFeedback()
+        setError(`Код «${code}» — не место хранения`)
+        return
+      }
+      const loc = await getLocationByCode(code)
+      if (!loc.found || !loc.location) {
+        scanNotFoundFeedback()
+        setError(`Место по коду «${code}» не найдено`)
+        return
+      }
+      scanSuccessFeedback()
+      const zone = { id: loc.location.id, code: loc.location.code }
+      if (role === 'from') {
+        setSource(zone)
+        setNotice(`Беру из места ${zone.code}`)
+        return
+      }
+      setDest(zone)
+    } catch (err) {
+      scanNotFoundFeedback()
+      setError(err instanceof Error ? err.message : 'Сканирование не удалось')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function submit() {
+    if (busy || empty || !dest) return
     if (items.some((i) => i.qty <= 0)) {
       setError('Укажите количество в каждой строке')
       return
@@ -165,14 +232,6 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
     setError('')
     setNotice('')
     try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const loc = await getLocationByCode(code)
-      if (!loc.found || !loc.location) {
-        scanNotFoundFeedback()
-        setError(`Место по коду «${code}» не найдено`)
-        return
-      }
       const scans: ContainerPlaceItemScan[] = items.map((i) => ({
         barcode: i.barcode,
         qty: i.qty,
@@ -180,13 +239,14 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
         ...(source ? { from_zone_id: source.id } : {}),
       }))
       const res = await placeContainers(
-        { zone_id: loc.location.id, box_ids: boxes.map((b) => b.id), items: scans },
+        { zone_id: dest.id, box_ids: boxes.map((b) => b.id), items: scans },
         newRequestId(),
       )
       scanSuccessFeedback()
       setBoxes([])
       setItems([])
       setSource(null)
+      setDest(null)
       setNotice(`${res.placed_qty} шт. → ${res.zone_name}`)
       loadPending()
     } catch (err) {
@@ -201,26 +261,37 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
     <div className="screen">
       <AppBar
         title="Перенос"
-        sub={empty ? 'короба и товар → место хранения' : `в руках: ${total} шт.`}
+        sub={dest ? `кладу в ${dest.code}` : empty ? 'короба и товар → место хранения' : `в руках: ${total} шт.`}
         onBack={back}
       />
 
       <div className="scroll pad-nav">
-        <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScan() }}>
-          <Icon name="qr" size={18} /> Сканировать короба, товар и место
-        </button>
-        <div className="line-sub" style={{ textAlign: 'center' }}>
-          Сканер не закрывается — пикайте подряд. Закрытый короб встанет на место, уже
-          размещённый переедет. Товар с полки берите после скана места, откуда берёте.
-        </div>
-
-        {pending && (pending.boxes.length > 0 || pending.aside_qty > 0) && (
-          <div className="line">
-            <div className="line-name">
-              У стола ждут развозки: коробов {pending.boxes.length}
-              {pending.aside_qty > 0 ? `, мимо коробов ${pending.aside_qty} шт.` : ''}
+        {!dest && (
+          <>
+            <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScan() }}>
+              <Icon name="qr" size={18} /> {empty ? 'Сканировать' : 'Сканировать дальше'}
+            </button>
+            <div className="line-sub" style={{ textAlign: 'center' }}>
+              Сканер не закрывается — пикайте подряд, последним место: его скан и означает
+              «положил». Пустой список плюс место — наоборот, «беру отсюда».
             </div>
-            <div className="line-sub">Очередь общая — в ней объекты всех задач сборки</div>
+
+            {pending && (pending.boxes.length > 0 || pending.aside_qty > 0) && (
+              <div className="line">
+                <div className="line-name">
+                  У стола ждут развозки: коробов {pending.boxes.length}
+                  {pending.aside_qty > 0 ? `, мимо коробов ${pending.aside_qty} шт.` : ''}
+                </div>
+                <div className="line-sub">Очередь общая — в ней объекты всех задач сборки</div>
+              </div>
+            )}
+          </>
+        )}
+
+        {dest && (
+          <div className="line">
+            <div className="line-name">Кладу в: {dest.code}</div>
+            <div className="line-sub">Проверьте состав и подтвердите — пачка уедет одним движением</div>
           </div>
         )}
 
@@ -231,9 +302,11 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
                 <div className="line-name">Беру из: {source.code}</div>
                 <div className="line-sub">Товар в списке спишется из этого места</div>
               </div>
-              <button className="btn ghost sm" disabled={busy} onClick={() => setSource(null)}>
-                <Icon name="x" size={14} /> Сбросить
-              </button>
+              {!dest && (
+                <button className="btn ghost sm" disabled={busy} onClick={() => setSource(null)}>
+                  <Icon name="x" size={14} /> Сбросить
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -261,7 +334,7 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
                   className="btn ghost sm"
                   style={{ width: '100%', marginTop: 4 }}
                   disabled={busy}
-                  onClick={() => setBoxes((prev) => prev.filter((x) => x.id !== b.id))}
+                  onClick={() => dropBox(b.id)}
                 >
                   <Icon name="x" size={14} /> Убрать из списка
                 </button>
@@ -294,7 +367,7 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
                     className="btn ghost sm"
                     style={{ flex: 1 }}
                     disabled={busy}
-                    onClick={() => setItems((prev) => prev.filter((x) => x.key !== i.key))}
+                    onClick={() => dropItem(i.key)}
                   >
                     <Icon name="x" size={14} /> Убрать
                   </button>
@@ -311,14 +384,49 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
               {error}
             </div>
           )}
-          {!empty && (
-            <button className="btn ghost" disabled={busy} onClick={() => { setBoxes([]); setItems([]) }}>
-              Очистить список
-            </button>
+          {dest ? (
+            <>
+              <button className="btn ghost" disabled={busy} onClick={() => setDest(null)}>
+                Отмена — вернуться к сканированию
+              </button>
+              <button className="btn primary" disabled={busy || empty} onClick={() => { void submit() }}>
+                {busy ? <span className="spin spin-sm" /> : <Icon name="check" size={18} />}
+                {' '}Разместить {total} шт. → {dest.code}
+              </button>
+            </>
+          ) : (
+            <>
+              {!empty && (
+                <div className="line-row" style={{ marginTop: 0 }}>
+                  <button
+                    className="btn ghost"
+                    style={{ flex: 1 }}
+                    disabled={busy}
+                    onClick={() => { setBoxes([]); setItems([]) }}
+                  >
+                    Очистить список
+                  </button>
+                  {!source && (
+                    <button
+                      className="btn ghost"
+                      style={{ flex: 1 }}
+                      disabled={busy}
+                      onClick={() => { void scanZone('from') }}
+                    >
+                      <Icon name="qr" size={16} /> Беру из места
+                    </button>
+                  )}
+                </div>
+              )}
+              <button
+                className="btn primary"
+                disabled={busy || empty}
+                onClick={() => { void scanZone('to') }}
+              >
+                <Icon name="qr" size={18} /> Куда — скан места ({total} шт.)
+              </button>
+            </>
           )}
-          <button className="btn primary" disabled={busy || empty} onClick={() => { void onScanZone() }}>
-            <Icon name="qr" size={18} /> Куда — скан места ({total} шт.)
-          </button>
         </div>
       </div>
     </div>

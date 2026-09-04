@@ -37,9 +37,9 @@ export type PackingPhaseData = {
 
 export function PackingPhase({
   phase, lines, canMove, canPack, canReturn, canPlace, acting, savingLine,
-  repackActive, repackKind, repackReason,
+  repackActive, repackKind, repackReason, putaway = false,
   onOpenMove, onOpenMassMove, onReturn, onOpenPacking, onOpenPlace,
-}: PackingPhaseData & { phase: PackPhase }) {
+}: PackingPhaseData & { phase: PackPhase; putaway?: boolean }) {
   return (
     <PhaseBlock
       icon="box"
@@ -88,6 +88,7 @@ export function PackingPhase({
         )}
         <PackingTable
           mode={phase.mode}
+          putaway={putaway}
           lines={lines}
           canMove={canMove}
           canPack={canPack}

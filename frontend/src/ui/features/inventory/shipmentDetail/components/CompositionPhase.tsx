@@ -11,6 +11,8 @@ export type CompositionPhaseProps = {
   clientId: string | null
   state: 'active' | 'done'
   hint?: string
+  // Задача размещения: тот же состав, но лексика «размещения», а не «упаковки».
+  putaway?: boolean
   canEditPlan: boolean
   // Корректировка «На упаковке»: магазин строки правится отдельно от плана.
   canEditStore?: boolean
@@ -39,7 +41,7 @@ export type CompositionPhaseProps = {
 }
 
 export function CompositionPhase({
-  lines, clientId, state, hint, canEditPlan, canEditStore, canDelete, canAttachFiles,
+  lines, clientId, state, hint, putaway, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onAdd, onPreviewFile, onQty, onStore, onDelete,
   onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku, onPullStoreBarcodes,
@@ -48,7 +50,7 @@ export function CompositionPhase({
   return (
     <PhaseBlock
       icon="boxes"
-      title="Состав упаковки"
+      title={putaway ? 'Состав размещения' : 'Состав упаковки'}
       role="manager"
       state={state}
       hint={hint}
@@ -78,6 +80,7 @@ export function CompositionPhase({
         <CompositionTable
           lines={lines}
           showZone={false}
+          putaway={putaway}
           canEditPlan={canEditPlan}
           canEditStore={canEditStore}
           canDelete={canDelete}

@@ -18,6 +18,9 @@ type Props = {
   lines: ShipmentLine[]
   // transfer — первичная передача «В плане»; replenish — подвоз «На упаковке».
   mode: 'transfer' | 'replenish'
+  // Задача размещения: брак — не недобор (он тоже уезжает в место хранения),
+  // поэтому потребность считается иначе.
+  putaway?: boolean
   // Точечная передача из строки таблицы: отмечается только эта позиция.
   focusLineId?: string | null
   getZoneOptions: (line: ShipmentLine) => MoveZoneOption[]
@@ -29,16 +32,18 @@ function lineLabel(line: ShipmentLine): string {
   return [line.product_sku, line.color_name, line.size_name].filter(Boolean).join(' · ') || line.product_name
 }
 
-export function MassMoveToPackingDrawer({ docId, docNumber, lines, mode, focusLineId, getZoneOptions, onClose, onDone }: Props) {
+export function MassMoveToPackingDrawer({ docId, docNumber, lines, mode, putaway = false, focusLineId, getZoneOptions, onClose, onDone }: Props) {
   const toast = useToast()
   const [saving, setSaving] = useState(false)
   const [showReasons, setShowReasons] = useState(false)
 
-  // replenish: сколько годного ещё не хватает до плана при текущем столе; transfer: сколько ещё не передано.
+  // replenish: сколько ещё не хватает до плана при текущем пуле; transfer: сколько ещё не передано.
+  // В упаковке брак не закрывает план (клиенту едет годное), в размещении — закрывает:
+  // брак уезжает в место хранения так же, как годное, и подвозить взамен нечего.
   function needOf(line: ShipmentLine): number {
-    return mode === 'replenish'
-      ? Math.max(0, line.qty - line.packed_good - line.available_for_pack)
-      : Math.max(0, line.qty - line.available_for_pack)
+    if (mode !== 'replenish') return Math.max(0, line.qty - line.available_for_pack)
+    const done = putaway ? line.packed_good + line.packed_defect : line.packed_good
+    return Math.max(0, line.qty - done - line.available_for_pack)
   }
 
   const visibleLines = useMemo(
@@ -200,7 +205,7 @@ export function MassMoveToPackingDrawer({ docId, docNumber, lines, mode, focusLi
     >
       {visibleLines.length === 0 ? (
         <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--c-text-subtle)', fontSize: 13 }}>
-          Все позиции уже переданы на упаковку.
+          {putaway ? 'План закрыт: собранное и товар на упаковке покрывают все позиции.' : 'Все позиции уже переданы на упаковку.'}
         </div>
       ) : (
         <>

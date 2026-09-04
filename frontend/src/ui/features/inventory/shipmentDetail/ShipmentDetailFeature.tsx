@@ -44,6 +44,7 @@ import type { BarcodeReviewItem } from './components/BarcodeReviewModal'
 import { ProductLabelPickerModal } from './components/ProductLabelPickerModal'
 import { StoreBarcodesDrawer } from './components/StoreBarcodesDrawer'
 import { lineAvailable } from './shared/opLabels'
+import { putawayStatusLabel } from './shared/shipProcess'
 import { MassMoveToPackingDrawer } from './components/MassMoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MassMoveToPackingDrawer'
 import { PackingDrawer } from './components/PackingDrawer'
@@ -948,9 +949,10 @@ export function ShipmentDetailFeature() {
     <div className="page">
       <ShipHeader
         status={status!}
+        statusLabel={isPutaway ? putawayStatusLabel(status!) : undefined}
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
-        subtitle={`${isPutaway ? 'Упаковка с ТСД' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
+        subtitle={`${isPutaway ? 'Размещение по ячейкам · сборка на ТСД' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
         initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         repackKind={doc.repack_kind}
         repackReason={doc.repack_reason}
@@ -1170,6 +1172,7 @@ export function ShipmentDetailFeature() {
 
       {moveDrawer && (
         <MassMoveToPackingDrawer
+          putaway={isPutaway}
           docId={docId!}
           docNumber={doc.doc_number}
           lines={doc.lines}

@@ -55,17 +55,24 @@ function fmt(s: string): string {
   return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
-// Задача размещения: короба собираются на столе и уезжают в ячейки — отгрузки нет.
-const SH_META_PUTAWAY: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle?: string }>> = {
+// Задача размещения: короба собираются в зоне упаковки и уезжают в ячейки — отгрузки нет.
+// Свои заголовки шагов: общие лейблы отгрузки («На упаковке», «Передан на упаковку»)
+// в задаче размещения читаются как чужой процесс.
+const SH_META_PUTAWAY: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; title?: string; doneTitle?: string }>> = {
   draft:      { role: 'manager',    icon: 'edit',     sub: 'состав и план размещения' },
-  packing:    { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на стол' },
-  on_packing: { role: 'shift_lead', icon: 'box',      sub: 'сборка коробов на столе', doneTitle: 'Собрано' },
+  packing:    { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на упаковку' },
+  on_packing: { role: 'shift_lead', icon: 'box',      sub: 'сборка коробов сканом на ТСД', title: 'Сборка коробов', doneTitle: 'Собрано' },
   collected:  { role: null,         icon: 'check',    sub: 'собрано; развозку ведёт очередь коробов' },
+}
+
+/** Лейбл статуса в лексике задачи размещения (бейдж шапки). */
+export function putawayStatusLabel(status: ShipmentStatus): string {
+  return SH_META_PUTAWAY[status]?.title ?? SHIPMENT_STATUS_LABELS[status]
 }
 
 // Брак-отгрузка минует упаковку: укороченный маршрут со своими подсказками.
 const DEFECT_STATUS_ORDER: ShipmentStatus[] = ['draft', 'relocating', 'packed']
-const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; doneTitle?: string }>> = {
+const SH_META_DEFECT: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; title?: string; doneTitle?: string }>> = {
   draft:         { role: 'manager',   icon: 'edit',     sub: 'состав и план брака' },
   relocating:    { role: 'warehouse', icon: 'archive',  sub: 'подготовка брака в зону отгрузки', doneTitle: 'Подготовлен' },
   packed:        { role: null,        icon: 'check',    sub: 'брак подготовлен' },
@@ -105,7 +112,7 @@ export function buildShipSteps(
     const doneTitle = override?.doneTitle ?? SHIPMENT_STEP_DONE_LABELS[s]
     return {
       key: s,
-      title: state === 'done' ? doneTitle : SHIPMENT_STATUS_LABELS[s],
+      title: state === 'done' ? doneTitle : (override?.title ?? SHIPMENT_STATUS_LABELS[s]),
       role: m.role,
       icon: m.icon,
       state,

@@ -8,8 +8,10 @@ import type { ShipmentCargoType, ShipmentRepackKind, ShipmentStatus } from '../.
 
 /** Шапка карточки отгрузки в стиле рейсов: бейдж статуса, приоритет,
  *  «сейчас у: роль», номер (mono) и контекстные действия справа. */
-export function ShipHeader({ status, cargoType, title, subtitle, initiator, priority, actions, blockReasons = [], repackKind, repackReason, onBack }: {
+export function ShipHeader({ status, statusLabel, cargoType, title, subtitle, initiator, priority, actions, blockReasons = [], repackKind, repackReason, onBack }: {
   status: ShipmentStatus
+  // Задача размещения зовёт те же статусы своими словами («Сборка коробов»).
+  statusLabel?: string
   cargoType?: ShipmentCargoType
   title: string
   subtitle?: string
@@ -27,7 +29,7 @@ export function ShipHeader({ status, cargoType, title, subtitle, initiator, prio
       badges={
         <>
           <Badge tone={SHIPMENT_STATUS_TONES[status] as BadgeTone} dot>
-            {SHIPMENT_STATUS_LABELS[status]}
+            {statusLabel ?? SHIPMENT_STATUS_LABELS[status]}
           </Badge>
           {cargoType === 'defect' && <Badge tone="warning">Брак</Badge>}
           {repackKind && (

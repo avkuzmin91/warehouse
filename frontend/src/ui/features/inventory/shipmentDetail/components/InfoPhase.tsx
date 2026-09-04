@@ -15,6 +15,8 @@ export type InfoPhaseProps = {
   // «На упаковке» менеджер корректирует только ТЗ и дату (план) — реквизиты read-only.
   canCorrectOnPacking?: boolean
   canEditActualShipDate: boolean
+  // Задача размещения: те же поля, но лексика «размещения», а не «упаковки».
+  putaway?: boolean
   saved: boolean
   shipDate: string
   actualShipDate: string
@@ -26,9 +28,11 @@ export type InfoPhaseProps = {
 
 export function InfoPhase({
   doc, isDraft, isDefectCargo, canEditInfo, canCorrectOnPacking,
-  canEditActualShipDate, saved, shipDate, actualShipDate, comment, onShipDate, onActualShipDate, onComment,
+  canEditActualShipDate, putaway, saved, shipDate, actualShipDate, comment, onShipDate, onActualShipDate, onComment,
 }: InfoPhaseProps) {
   const editable = canEditInfo || canCorrectOnPacking
+  const planLabel = putaway ? 'Дата размещения (план)' : 'Дата упаковки (план)'
+  const factLabel = putaway ? 'Дата размещения (факт)' : 'Дата упаковки (факт)'
   return (
     <PhaseBlock
       icon="file"
@@ -71,15 +75,15 @@ export function InfoPhase({
                 </div>
               </div>
             </Field>
-            <Field label="Дата упаковки (план)" required style={{ marginBottom: 0 }}>
+            <Field label={planLabel} required style={{ marginBottom: 0 }}>
               <DatePicker value={shipDate} onChange={onShipDate} />
             </Field>
             {canEditActualShipDate ? (
-              <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
+              <Field label={factLabel} style={{ marginBottom: 0 }}>
                 <DatePicker value={actualShipDate} onChange={onActualShipDate} />
               </Field>
             ) : (
-              <Field label="Дата упаковки (факт)" style={{ marginBottom: 0 }}>
+              <Field label={factLabel} style={{ marginBottom: 0 }}>
                 <Input value={fmtDateLong(doc.actual_ship_date)} readOnly style={{ cursor: 'default' }} />
               </Field>
             )}
@@ -98,8 +102,8 @@ export function InfoPhase({
         <>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <ReadOnlyField label="Клиент" value={doc.client_name} />
-            <ReadOnlyField label="Дата упаковки (план)" value={fmtDateLong(doc.ship_date)} />
-            <ReadOnlyField label="Дата упаковки (факт)" value={fmtDateLong(doc.actual_ship_date)} />
+            <ReadOnlyField label={planLabel} value={fmtDateLong(doc.ship_date)} />
+            <ReadOnlyField label={factLabel} value={fmtDateLong(doc.actual_ship_date)} />
             <div style={{ gridColumn: '1 / -1' }}>
               <ReadOnlyField label="Техническое задание" value={doc.comment} multiline />
             </div>

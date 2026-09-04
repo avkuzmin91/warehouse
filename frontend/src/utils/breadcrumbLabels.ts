@@ -35,8 +35,10 @@ const ROUTES: Array<[pattern: string, crumbs: CrumbDef[]]> = [
   ['/inventory/boxes/:boxId', [INVENTORY, { label: 'Короба', to: '/inventory/boxes' }, { label: 'Карточка короба' }]],
   ['/inventory/packing', [INVENTORY, { label: 'Упаковка' }]],
   ['/inventory/packing/productivity', [INVENTORY, PACKING, { label: 'Производительность' }]],
-  ['/inventory/shipments/new', [INVENTORY, PACKING, { label: 'Новая задача упаковки' }]],
-  ['/inventory/shipments/:docId', [INVENTORY, PACKING, { label: 'Карточка задачи упаковки' }]],
+  // Под /inventory/shipments живут две задачи — упаковка и размещение по ячейкам,
+  // поэтому последняя крошка нейтральна: тип задачи виден в её шапке.
+  ['/inventory/shipments/new', [INVENTORY, PACKING, { label: 'Новая задача склада' }]],
+  ['/inventory/shipments/:docId', [INVENTORY, PACKING, { label: 'Карточка задачи склада' }]],
   ['/inventory/dispatches', [INVENTORY, { label: 'Отгрузки' }]],
   ['/inventory/dispatches/new', [INVENTORY, { label: 'Отгрузки', to: '/inventory/dispatches' }, { label: 'Новая отгрузка' }]],
   ['/inventory/dispatches/:docId', [INVENTORY, { label: 'Отгрузки', to: '/inventory/dispatches' }, { label: 'Карточка отгрузки' }]],
