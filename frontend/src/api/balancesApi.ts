@@ -203,6 +203,8 @@ export type BalanceZoneItem = {
   color_name:    string | null
   size_id:       string | null
   size_name:     string | null
+  /** Порядок размера из справочника — для сеток цвет×размер. */
+  size_sort_order?: number | null
   qty:           number
 }
 

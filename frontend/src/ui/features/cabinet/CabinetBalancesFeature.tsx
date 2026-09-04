@@ -21,7 +21,7 @@ import { KPI } from '../../primitives/KPI'
 import { SkeletonRows } from '../../primitives/Skeleton'
 import { BucketCell } from '../shared/BucketCell'
 import { ProductLink } from '../shared/ProductLink'
-import { SizeMatrix } from '../shared/SizeMatrix'
+import { SizeMatrix, balanceGroupCells } from '../shared/SizeMatrix'
 import { useToast } from '../../feedback/Toast'
 
 const PAGE_SIZE = 25
@@ -329,7 +329,7 @@ export function CabinetBalancesFeature() {
                       ? [
                           <tr key={`${key}-matrix`}>
                             <td colSpan={7} style={{ background: 'var(--c-bg-sunken)', padding: '10px 16px 12px 40px' }}>
-                              <SizeMatrix group={g} />
+                              <SizeMatrix cells={balanceGroupCells(g)} />
                             </td>
                           </tr>,
                         ]

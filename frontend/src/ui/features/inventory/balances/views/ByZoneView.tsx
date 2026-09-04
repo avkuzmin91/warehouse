@@ -7,6 +7,7 @@ import {
   createZoneRelocationsBulk,
   createQualityChange,
   createWriteOff,
+  balanceVariantLabel,
   INV_OP_LABELS,
   INV_QUALITY_LABELS,
   WRITEOFF_REASON_LABELS,
@@ -35,12 +36,18 @@ import { EmptyState } from '../../../../primitives/EmptyState'
 import { NumberStep } from '../../shared/NumberStep'
 import { BoxChip, LooseChip } from '../../shared/BoxChip'
 import { ProductLink } from '../../../shared/ProductLink'
+import { BucketCell } from '../../../shared/BucketCell'
+import { SizeMatrix } from '../../../shared/SizeMatrix'
+import { foldCiSearch } from '../../../../../utils/foldCiSearch'
+import { groupZoneRowsByProduct, hasSizeMatrix, isFlatZoneGroup, zoneMatrixCells } from './zoneGrouping'
+import type { ZoneProductGroup, ZoneRow } from './zoneGrouping'
 
 type LocationGroup = {
   locationId: string | null
   locationName: string
   items: BalanceZoneItem[]
   totalQty: number
+  products: ZoneProductGroup[]
 }
 
 /** Место в разрезе тары: короба стеллажа отдельно, россыпь — последней секцией. */
@@ -98,6 +105,12 @@ export function ByZoneView() {
   const [holdings, setHoldings] = useState<ContainerHoldingRow[]>([])
   // Места, развёрнутые по коробам: так сверяют стеллаж — сначала короба, потом россыпь.
   const [boxView, setBoxView] = useState<Set<string>>(new Set())
+  // Товарные группы внутри места, развёрнутые до вариантов. Свёрнуто по умолчанию:
+  // одежда даёт цвет×размер×статус×качество — сотни строк на одном стеллаже.
+  const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set())
+  // Развёрнутая группа по умолчанию показывает матрицу цвет×размер; здесь ключи
+  // групп, переключённых обратно на список — действия живут только в нём.
+  const [listKeys, setListKeys] = useState<Set<string>>(new Set())
 
   // Перемещение между местоположениями: любой нетерминальный статус — товар можно
   // временно переставить, даже когда он на упаковке или готов к отгрузке.
@@ -151,8 +164,8 @@ export function ByZoneView() {
   function setBulkQty(key: string, qty: number) {
     setSelected((prev) => (prev[key] ? { ...prev, [key]: { ...prev[key], qty } } : prev))
   }
-  function toggleBulkGroup(group: LocationGroup) {
-    const rows = group.items.filter(bulkSelectable)
+  function toggleBulkRows(items: BalanceZoneItem[]) {
+    const rows = items.filter(bulkSelectable)
     const allIn = rows.length > 0 && rows.every((i) => selected[bulkKey(i)])
     setSelected((prev) => {
       const next = { ...prev }
@@ -456,13 +469,18 @@ export function ByZoneView() {
           locationName: item.location_name ?? 'Без места',
           items: [],
           totalQty: 0,
+          products: [],
         }
         map.set(key, group)
       }
       group.items.push(item)
       group.totalQty += item.qty
     }
-    return [...map.values()]
+    const list = [...map.values()]
+    for (const g of list) {
+      g.products = groupZoneRowsByProduct(g.items.map((item) => ({ item, qty: item.qty })))
+    }
+    return list
   }, [items, tare, boxedFor, looseQty])
 
   useEffect(() => {
@@ -507,6 +525,299 @@ export function ByZoneView() {
   const changeQuality = (v: string) => setQualityFilter(v)
   const toggleOp = (op: InvOpStatus) => setOpFilter(opFilter === op ? '' : op)
   const resetFilters = () => setMany({ client: null, op: null, quality: null, place: null, search: null, tare: null })
+
+  // ── товарные группы внутри места ───────────────────────────────────────────
+  const toggleProduct = (key: string) => {
+    setExpandedProducts((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const toggleMatrix = (key: string) => {
+    setListKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // Ключи разворота зависят от режима карточки: в «Коробах» группы живут внутри
+  // секции короба, поэтому «развернуть всё» собирает их по тому же правилу.
+  const expandableKeys = useMemo(() => {
+    const keys: string[] = []
+    for (const group of groups) {
+      const locKey = group.locationId ?? '__none__'
+      const sec = boxSections(group)
+      if (boxView.has(locKey) && sec.boxes.length > 0) {
+        for (const box of sec.boxes) {
+          for (const pg of groupZoneRowsByProduct(box.rows)) {
+            if (!isFlatZoneGroup(pg)) keys.push(`${locKey}|box:${box.containerId}|${pg.key}`)
+          }
+        }
+        for (const pg of groupZoneRowsByProduct(sec.loose)) {
+          if (!isFlatZoneGroup(pg)) keys.push(`${locKey}|loose|${pg.key}`)
+        }
+      } else {
+        for (const pg of group.products) {
+          if (!isFlatZoneGroup(pg)) keys.push(`${locKey}|${pg.key}`)
+        }
+      }
+    }
+    return keys
+  }, [groups, boxView, boxSections])
+
+  const allExpanded = expandableKeys.length > 0 && expandableKeys.every((k) => expandedProducts.has(k))
+  const toggleAllProducts = () => {
+    setExpandedProducts((prev) => {
+      if (allExpanded) {
+        const next = new Set(prev)
+        for (const k of expandableKeys) next.delete(k)
+        return next
+      }
+      return new Set([...prev, ...expandableKeys])
+    })
+  }
+
+  // Поиск, совпавший по цвету/размеру (а не по товару), раскрывает группу сам —
+  // иначе найденный вариант остаётся спрятан под свёрнутым артикулом.
+  useEffect(() => {
+    const q = foldCiSearch(search.trim())
+    if (!q) return
+    const keys = expandableKeys.filter((k) => {
+      const pgKey = k.slice(k.lastIndexOf('|') + 1)
+      return groups.some((group) => group.products.some((pg) =>
+        pg.key === pgKey
+        && !foldCiSearch(`${pg.productName} ${pg.productSku}`).includes(q)
+        && pg.rows.some((r) => foldCiSearch(`${r.item.color_name ?? ''} ${r.item.size_name ?? ''}`).includes(q))))
+    })
+    if (keys.length) setExpandedProducts((prev) => new Set([...prev, ...keys]))
+  }, [groups, expandableKeys, search])
+
+  function groupSubLabel(pg: ZoneProductGroup): string {
+    return [
+      pg.productSku || null,
+      pg.colorsCount > 0 ? `${pg.colorsCount} цв.` : null,
+      pg.sizesCount > 0 ? `${pg.sizesCount} разм.` : null,
+      `${pg.rows.length} поз.`,
+    ].filter(Boolean).join(' · ')
+  }
+
+  /** Качество группы: бейдж только у однородной. Смешанное качество несёт
+   * количество («20 + 22 брак») — так же, как в разрезе «По товарам». */
+  function groupQualityBadge(pg: ZoneProductGroup) {
+    if (pg.qualities.length > 1) return null
+    return <Badge tone={QUALITY_TONE[pg.qualities[0]]}>{INV_QUALITY_LABELS[pg.qualities[0]]}</Badge>
+  }
+
+  /** Количество группы: у однородной — просто число (качество несёт бейдж),
+   * у смешанной — «годный + n брак» вместо бейджа. */
+  function groupQty(pg: ZoneProductGroup) {
+    if (pg.qualities.length > 1) {
+      return <BucketCell good={pg.goodQty} defect={pg.defectQty} accent="var(--c-text)" />
+    }
+    return <>{pg.totalQty.toLocaleString('ru-RU')}</>
+  }
+
+  function matrixRow(pg: ZoneProductGroup, rowKey: string, colSpan: number) {
+    return (
+      <tr key={rowKey}>
+        <td colSpan={colSpan} style={{ background: 'var(--c-bg-sunken)', padding: '10px 16px 12px 40px' }}>
+          <SizeMatrix cells={zoneMatrixCells(pg)} />
+        </td>
+      </tr>
+    )
+  }
+
+  /** Строка варианта в режиме «Позиции»: все ручные операции с остатком — здесь. */
+  function positionRow(item: BalanceZoneItem, rowKey: string, nested: boolean) {
+    const key = bulkKey(item)
+    const entry = bulkSelectable(item) ? selected[key] : undefined
+    const boxed = boxedFor(item)
+    const free = item.qty - boxed.reduce((sum, h) => sum + h.qty, 0)
+    return (
+      <tr key={rowKey} style={nested ? { background: 'var(--c-bg-sunken)' } : undefined}>
+        <Td>
+          {bulkSelectable(item) && (
+            <span
+              className={`t-checkbox ${entry ? 'checked' : ''}`}
+              style={{ cursor: 'pointer' }}
+              title="Отметить для массового перемещения"
+              onClick={() => toggleBulk(item)}
+            >
+              {entry && <Icon name="check" size={10} />}
+            </span>
+          )}
+        </Td>
+        <Td style={nested ? { paddingLeft: 40 } : undefined}>
+          {nested ? (
+            <span style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{balanceVariantLabel(item)}</span>
+          ) : (
+            <>
+              <div style={{ fontWeight: 500 }}>
+                <ProductLink productId={item.product_id}>{item.product_name}</ProductLink>
+              </div>
+              <div className="t-sub mono">
+                {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
+              </div>
+            </>
+          )}
+          {boxed.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+              {boxed.map((h) => <BoxChip key={h.container_id} holding={h} />)}
+              {free > 0 && <LooseChip qty={free} />}
+            </div>
+          )}
+        </Td>
+        {nested ? <Td /> : (
+          <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{item.client_name ?? '—'}</Td>
+        )}
+        <Td>
+          <Badge tone={OP_TONE[item.op_status]}>{INV_OP_LABELS[item.op_status]}</Badge>
+        </Td>
+        <Td>
+          <Badge tone={QUALITY_TONE[item.quality]}>{INV_QUALITY_LABELS[item.quality]}</Badge>
+        </Td>
+        <Td className="num" style={{ fontWeight: 600 }}>
+          {entry ? (
+            <input
+              className="input sm num"
+              inputMode="numeric"
+              value={entry.qty === 0 ? '' : String(entry.qty)}
+              onChange={(e) => {
+                const raw = e.target.value.replace(/\D/g, '')
+                setBulkQty(key, raw === '' ? 0 : Math.max(0, parseInt(raw, 10)))
+              }}
+              style={{
+                width: 76, textAlign: 'right',
+                borderColor: entry.qty <= 0 || entry.qty > item.qty ? 'var(--c-warning)' : undefined,
+                color: entry.qty <= 0 || entry.qty > item.qty ? 'var(--c-warning)' : undefined,
+              }}
+              title={`Остаток ${item.qty.toLocaleString('ru-RU')} шт`}
+            />
+          ) : (
+            item.qty.toLocaleString('ru-RU')
+          )}
+        </Td>
+        <Td>
+          <div style={{ display: 'flex', gap: 2 }}>
+            <button
+              className="btn ghost icon sm"
+              disabled={boxed.length > 0 && free <= 0}
+              title={boxed.length > 0 && free <= 0
+                ? `Товар лежит в коробе ${boxed.map((h) => h.doc_number).join(', ')} — двигайте короб целиком`
+                : 'Переместить в другое местоположение'}
+              onClick={() => openReloc(item)}
+            >
+              <Icon name="arrowRight" size={14} />
+            </button>
+            {item.location_id && (item.op_status === 'storage' || item.quality === 'good') && (
+              <button
+                className="btn ghost icon sm"
+                title={item.quality === 'defect' ? 'Перевести в годный' : 'Перевести в брак'}
+                onClick={() => openQual(item)}
+              >
+                <Icon name="refresh" size={14} />
+              </button>
+            )}
+            {item.location_id && (
+              <button
+                className="btn ghost icon sm"
+                title="Списать с остатков"
+                onClick={() => openWoff(item)}
+              >
+                <Icon name="trash" size={14} />
+              </button>
+            )}
+          </div>
+        </Td>
+      </tr>
+    )
+  }
+
+  /** Строка варианта в режиме «Короба»: только сверка, без действий. */
+  function boxItemRow(row: ZoneRow, rowKey: string, nested: boolean) {
+    const item = row.item
+    return (
+      <tr key={rowKey} style={nested ? { background: 'var(--c-bg-sunken)' } : undefined}>
+        <Td style={nested ? { paddingLeft: 40 } : undefined}>
+          {nested ? (
+            <span style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{balanceVariantLabel(item)}</span>
+          ) : (
+            <>
+              <div style={{ fontWeight: 500 }}>
+                <ProductLink productId={item.product_id}>{item.product_name}</ProductLink>
+              </div>
+              <div className="t-sub mono">
+                {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
+              </div>
+            </>
+          )}
+        </Td>
+        {nested ? <Td /> : (
+          <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{item.client_name ?? '—'}</Td>
+        )}
+        <Td>
+          <Badge tone={QUALITY_TONE[item.quality]}>{INV_QUALITY_LABELS[item.quality]}</Badge>
+        </Td>
+        <Td className="num" style={{ fontWeight: 600 }}>{row.qty.toLocaleString('ru-RU')}</Td>
+      </tr>
+    )
+  }
+
+  function boxProductRows(rows: ZoneRow[], keyPrefix: string) {
+    return groupZoneRowsByProduct(rows).map((pg) => {
+      const pKey = `${keyPrefix}|${pg.key}`
+      if (isFlatZoneGroup(pg)) return boxItemRow(pg.rows[0], pKey, false)
+      const isOpen = expandedProducts.has(pKey)
+      const showMatrix = isOpen && hasSizeMatrix(pg) && !listKeys.has(pKey)
+      return (
+        <Fragment key={pKey}>
+          <tr onClick={() => toggleProduct(pKey)} style={{ cursor: 'pointer' }}>
+            <Td>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                <Icon
+                  name="chev"
+                  size={14}
+                  style={{
+                    color: 'var(--c-text-subtle)', flexShrink: 0, marginTop: 3,
+                    transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 120ms',
+                  }}
+                />
+                <div>
+                  <div style={{ fontWeight: 500 }}>
+                    <ProductLink productId={pg.productId}>{pg.productName}</ProductLink>
+                  </div>
+                  <div className="t-sub mono">{groupSubLabel(pg)}</div>
+                </div>
+              </div>
+            </Td>
+            <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{pg.clientName ?? '—'}</Td>
+            <Td>{groupQualityBadge(pg)}</Td>
+            <Td className="num" style={{ fontWeight: 600 }}>
+              <div className="row gap-8" style={{ justifyContent: 'flex-end', alignItems: 'center' }}>
+                {isOpen && hasSizeMatrix(pg) && (
+                  <button
+                    className="btn ghost icon sm"
+                    title={showMatrix ? 'Показать списком' : 'Матрица цвет × размер'}
+                    onClick={(e) => { e.stopPropagation(); toggleMatrix(pKey) }}
+                  >
+                    <Icon name={showMatrix ? 'list' : 'grid'} size={13} />
+                  </button>
+                )}
+                {groupQty(pg)}
+              </div>
+            </Td>
+          </tr>
+          {isOpen && showMatrix && matrixRow(pg, `${pKey}-matrix`, 4)}
+          {isOpen && !showMatrix && pg.rows.map((r, i) => boxItemRow(r, `${pKey}-v-${i}`, true))}
+        </Fragment>
+      )
+    })
+  }
 
   return (
     <>
@@ -592,6 +903,12 @@ export function ByZoneView() {
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
+          {expandableKeys.length > 0 && (
+            <button className="btn ghost sm" onClick={toggleAllProducts}>
+              <Icon name={allExpanded ? 'minus' : 'plus'} size={12} />
+              {allExpanded ? 'Свернуть все' : 'Развернуть все'}
+            </button>
+          )}
           <button
             className="btn ghost sm icon"
             title="Обновить"
@@ -669,7 +986,7 @@ export function ByZoneView() {
                       className={`t-checkbox ${allIn ? 'checked' : ''}`}
                       style={{ flexShrink: 0, cursor: 'pointer', marginRight: 2 }}
                       title={allIn ? 'Снять отметки с ячейки' : 'Отметить всю ячейку'}
-                      onClick={() => toggleBulkGroup(group)}
+                      onClick={() => toggleBulkRows(group.items)}
                     >
                       {allIn && <Icon name="check" size={10} />}
                     </span>
@@ -677,7 +994,8 @@ export function ByZoneView() {
                 })()}
                 <Icon name="boxes" size={15} className="ic-accent" />
                 <span className="card-head-title">{group.locationName}</span>
-                <Badge tone="accent" style={{ marginLeft: 6 }}>{group.items.length}</Badge>
+                <Badge tone="accent" style={{ marginLeft: 6 }}>товаров: {new Set(group.products.map((p) => p.productId)).size}</Badge>
+                <span className="t-sub">{group.items.length} поз.</span>
                 {sec.boxes.length > 0 && (
                   <>
                     <Badge tone="info">коробов: {sec.boxes.length}</Badge>
@@ -730,23 +1048,7 @@ export function ByZoneView() {
                           </div>
                         </Td>
                       </tr>
-                      {box.rows.map((r, i) => (
-                        <tr key={`${box.containerId}-${r.item.product_id}-${r.item.color_id}-${r.item.size_id}-${r.item.quality}-${i}`}>
-                          <Td>
-                            <div style={{ fontWeight: 500 }}>
-                              <ProductLink productId={r.item.product_id}>{r.item.product_name}</ProductLink>
-                            </div>
-                            <div className="t-sub mono">
-                              {[r.item.product_sku, r.item.color_name, r.item.size_name].filter(Boolean).join(' · ')}
-                            </div>
-                          </Td>
-                          <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{r.item.client_name ?? '—'}</Td>
-                          <Td>
-                            <Badge tone={QUALITY_TONE[r.item.quality]}>{INV_QUALITY_LABELS[r.item.quality]}</Badge>
-                          </Td>
-                          <Td className="num" style={{ fontWeight: 600 }}>{r.qty.toLocaleString('ru-RU')}</Td>
-                        </tr>
-                      ))}
+                      {boxProductRows(box.rows, `${groupKey}|box:${box.containerId}`)}
                     </Fragment>
                   ))}
                   {sec.loose.length > 0 && (
@@ -761,23 +1063,7 @@ export function ByZoneView() {
                           </div>
                         </Td>
                       </tr>
-                      {sec.loose.map((r, i) => (
-                        <tr key={`loose-${r.item.product_id}-${r.item.color_id}-${r.item.size_id}-${r.item.op_status}-${r.item.quality}-${i}`}>
-                          <Td>
-                            <div style={{ fontWeight: 500 }}>
-                              <ProductLink productId={r.item.product_id}>{r.item.product_name}</ProductLink>
-                            </div>
-                            <div className="t-sub mono">
-                              {[r.item.product_sku, r.item.color_name, r.item.size_name].filter(Boolean).join(' · ')}
-                            </div>
-                          </Td>
-                          <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{r.item.client_name ?? '—'}</Td>
-                          <Td>
-                            <Badge tone={QUALITY_TONE[r.item.quality]}>{INV_QUALITY_LABELS[r.item.quality]}</Badge>
-                          </Td>
-                          <Td className="num" style={{ fontWeight: 600 }}>{r.qty.toLocaleString('ru-RU')}</Td>
-                        </tr>
-                      ))}
+                      {boxProductRows(sec.loose, `${groupKey}|loose`)}
                     </Fragment>
                   )}
                 </tbody>
@@ -796,107 +1082,70 @@ export function ByZoneView() {
                   </tr>
                 </thead>
                 <tbody>
-                  {group.items.map((item, i) => {
-                    const key = bulkKey(item)
-                    const entry = bulkSelectable(item) ? selected[key] : undefined
+                  {group.products.map((pg) => {
+                    const pKey = `${groupKey}|${pg.key}`
+                    if (isFlatZoneGroup(pg)) return positionRow(pg.rows[0].item, pKey, false)
+                    const isOpen = expandedProducts.has(pKey)
+                    const showMatrix = isOpen && hasSizeMatrix(pg) && !listKeys.has(pKey)
+                    const selectable = pg.rows.map((r) => r.item).filter(bulkSelectable)
+                    const allIn = selectable.length > 0 && selectable.every((i) => selected[bulkKey(i)])
+                    const someIn = selectable.some((i) => selected[bulkKey(i)])
                     return (
-                    <tr key={`${item.product_id}-${item.color_id}-${item.size_id}-${item.op_status}-${item.quality}-${i}`}>
-                      <Td>
-                        {bulkSelectable(item) && (
-                          <span
-                            className={`t-checkbox ${entry ? 'checked' : ''}`}
-                            style={{ cursor: 'pointer' }}
-                            title="Отметить для массового перемещения"
-                            onClick={() => toggleBulk(item)}
-                          >
-                            {entry && <Icon name="check" size={10} />}
-                          </span>
-                        )}
-                      </Td>
-                      <Td>
-                        <div style={{ fontWeight: 500 }}>
-                          <ProductLink productId={item.product_id}>{item.product_name}</ProductLink>
-                        </div>
-                        <div className="t-sub mono">
-                          {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
-                        </div>
-                        {boxedFor(item).length > 0 && (
-                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
-                            {boxedFor(item).map((h) => <BoxChip key={h.container_id} holding={h} />)}
-                            {looseQty(item) > 0 && <LooseChip qty={looseQty(item)} />}
+                    <Fragment key={pKey}>
+                      <tr onClick={() => toggleProduct(pKey)} style={{ cursor: 'pointer' }}>
+                        <Td>
+                          {selectable.length > 0 && (
+                            <span
+                              className={`t-checkbox ${allIn || someIn ? 'checked' : ''}`}
+                              style={{ cursor: 'pointer' }}
+                              title={allIn ? 'Снять отметки с товара' : 'Отметить весь товар'}
+                              onClick={(e) => { e.stopPropagation(); toggleBulkRows(selectable) }}
+                            >
+                              {(allIn || someIn) && <Icon name={allIn ? 'check' : 'minus'} size={10} />}
+                            </span>
+                          )}
+                        </Td>
+                        <Td>
+                          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                            <Icon
+                              name="chev"
+                              size={14}
+                              style={{
+                                color: 'var(--c-text-subtle)', flexShrink: 0, marginTop: 3,
+                                transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 120ms',
+                              }}
+                            />
+                            <div>
+                              <div style={{ fontWeight: 500 }}>
+                                <ProductLink productId={pg.productId}>{pg.productName}</ProductLink>
+                              </div>
+                              <div className="t-sub mono">{groupSubLabel(pg)}</div>
+                            </div>
                           </div>
-                        )}
-                      </Td>
-                      <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>
-                        {item.client_name ?? '—'}
-                      </Td>
-                      <Td>
-                        <Badge tone={OP_TONE[item.op_status]}>{INV_OP_LABELS[item.op_status]}</Badge>
-                      </Td>
-                      <Td>
-                        <Badge tone={QUALITY_TONE[item.quality]}>{INV_QUALITY_LABELS[item.quality]}</Badge>
-                      </Td>
-                      <Td className="num" style={{ fontWeight: 600 }}>
-                        {entry ? (
-                          <input
-                            className="input sm num"
-                            inputMode="numeric"
-                            value={entry.qty === 0 ? '' : String(entry.qty)}
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/\D/g, '')
-                              setBulkQty(key, raw === '' ? 0 : Math.max(0, parseInt(raw, 10)))
-                            }}
-                            style={{
-                              width: 76, textAlign: 'right',
-                              borderColor: entry.qty <= 0 || entry.qty > item.qty ? 'var(--c-warning)' : undefined,
-                              color: entry.qty <= 0 || entry.qty > item.qty ? 'var(--c-warning)' : undefined,
-                            }}
-                            title={`Остаток ${item.qty.toLocaleString('ru-RU')} шт`}
-                          />
-                        ) : (
-                          item.qty.toLocaleString('ru-RU')
-                        )}
-                      </Td>
-                      <Td>
-                        <div style={{ display: 'flex', gap: 2 }}>
-                          {(() => {
-                            const boxed = boxedFor(item)
-                            const inBoxes = boxed.reduce((sum, h) => sum + h.qty, 0)
-                            const free = item.qty - inBoxes
-                            return (
-                              <button
-                                className="btn ghost icon sm"
-                                disabled={boxed.length > 0 && free <= 0}
-                                title={boxed.length > 0 && free <= 0
-                                  ? `Товар лежит в коробе ${boxed.map((h) => h.doc_number).join(', ')} — двигайте короб целиком`
-                                  : 'Переместить в другое местоположение'}
-                                onClick={() => openReloc(item)}
-                              >
-                                <Icon name="arrowRight" size={14} />
-                              </button>
-                            )
-                          })()}
-                          {item.location_id && (item.op_status === 'storage' || item.quality === 'good') && (
+                        </Td>
+                        <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{pg.clientName ?? '—'}</Td>
+                        <Td>
+                          <Badge tone={OP_TONE[pg.op]}>{INV_OP_LABELS[pg.op]}</Badge>
+                        </Td>
+                        <Td>{groupQualityBadge(pg)}</Td>
+                        <Td className="num" style={{ fontWeight: 600 }}>
+                          {groupQty(pg)}
+                        </Td>
+                        <Td>
+                          {isOpen && hasSizeMatrix(pg) && (
                             <button
                               className="btn ghost icon sm"
-                              title={item.quality === 'defect' ? 'Перевести в годный' : 'Перевести в брак'}
-                              onClick={() => openQual(item)}
+                              title={showMatrix ? 'Показать списком' : 'Матрица цвет × размер'}
+                              onClick={(e) => { e.stopPropagation(); toggleMatrix(pKey) }}
                             >
-                              <Icon name="refresh" size={14} />
+                              <Icon name={showMatrix ? 'list' : 'grid'} size={13} />
                             </button>
                           )}
-                          {item.location_id && (
-                            <button
-                              className="btn ghost icon sm"
-                              title="Списать с остатков"
-                              onClick={() => openWoff(item)}
-                            >
-                              <Icon name="trash" size={14} />
-                            </button>
-                          )}
-                        </div>
-                      </Td>
-                    </tr>
+                        </Td>
+                      </tr>
+                      {isOpen && showMatrix && matrixRow(pg, `${pKey}-matrix`, 7)}
+                      {isOpen && !showMatrix && pg.rows.map((r, i) => positionRow(r.item, `${pKey}-v-${i}`, true))}
+                    </Fragment>
                     )
                   })}
                 </tbody>
