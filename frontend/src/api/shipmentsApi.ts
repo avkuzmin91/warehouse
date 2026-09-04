@@ -2,7 +2,7 @@ import { request, requestForm } from './http'
 import { moscowTodayYmd } from '../utils/format'
 import type { DuplicateCheckResponse } from './domainTypes'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'collected' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Черновик',
@@ -10,7 +10,6 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing:        'На упаковке',
   relocating:        'Перемещение',
   packed:            'Упакован',
-  collected:         'Собрано',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -21,7 +20,6 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   on_packing:        'Упакован',
   relocating:        'Передан кладовщику',
   packed:            'Упакован',
-  collected:         'Собрано в короба',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -32,7 +30,6 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   on_packing:        'info',
   relocating:        'info',
   packed:            'success',
-  collected:         'success',
   completed_no_goods: 'warning',
   cancelled:         'danger',
 }
@@ -62,7 +59,7 @@ export function shipmentPriorityTone(rank: number | null): 'danger' | 'warning' 
 
 export type ShipmentCargoType = 'good' | 'defect'
 
-/** Тип задачи склада: упаковка под отгрузку или размещение по ячейкам. */
+/** Тип задачи склада: упаковка под отгрузку (числом) или упаковка с ТСД (сканом в короба). */
 export type ShipmentTaskKind = 'packing' | 'putaway'
 
 export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
@@ -70,8 +67,8 @@ export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
   putaway: 'Упаковка с ТСД',
 }
 
-/** Маршрут задачи размещения: заканчивается сборкой — развозку ведёт процесс коробов. */
-export const SHIPMENT_PUTAWAY_STATUS_ORDER: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'collected']
+/** Маршрут задачи с ТСД: заканчивается сборкой коробов — развозку ведёт процесс коробов. */
+export const SHIPMENT_PUTAWAY_STATUS_ORDER: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'packed']
 
 export type ShipmentOpType =
   | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
@@ -801,7 +798,7 @@ export function bindShipmentLineFileBarcode(docId: string, lineId: string, fileI
   })
 }
 
-// --- Задача «Размещение по ячейкам»: короба ---
+// --- Задача «Упаковка с ТСД»: короба ---
 
 export type ShipmentBoxContentLine = {
   /** Строка задания, к которой отнесён товар в коробе — по ней его и изымают. */

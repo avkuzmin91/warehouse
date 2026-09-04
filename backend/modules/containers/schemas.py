@@ -8,7 +8,7 @@ from config import INV_Q_GOOD
 
 
 class ContainerItem(BaseModel):
-    """Короб: тара задачи «Размещение по ячейкам»."""
+    """Короб: тара задачи «Упаковка с ТСД»."""
 
     id: str
     doc_number: str          # человекочитаемый номер «BOX-000123» (он же на этикетке)
@@ -196,7 +196,7 @@ class ContainerPendingBox(BaseModel):
 
 
 class ContainerPendingAsideItem(BaseModel):
-    """Собранное мимо короба (габарит, брак): короба у него нет, только корзина boxed."""
+    """Упакованное без короба (габарит, брак): короба у него нет, только корзина packed."""
 
     product_id: str
     product_name: str | None = None

@@ -20,11 +20,11 @@ const CHIP: CSSProperties = {
 
 /** Короб в строке остатка: уточнение адреса «место · короб», а не отдельный статус.
  *
- * Короб из корзины «Ждёт размещения» помечен отдельно: он стоит у стола, и место
- * в строке остатка у него — зона упаковки, а не полка.
+ * Ещё не развезённый короб (корзина «Упаковано») помечен отдельно: он стоит у стола,
+ * и место в строке остатка у него — зона упаковки, а не полка.
  */
 export function BoxChip({ holding }: { holding: ContainerHoldingRow }) {
-  const pending = holding.op_status === 'boxed'
+  const pending = holding.op_status === 'packed'
   return (
     <Link
       to={`/inventory/boxes/${holding.container_id}`}

@@ -14,7 +14,7 @@ export const OP_LABELS: Record<string, string> = {
   cancel: 'Аннулирован',
   pack: 'Упаковка',
   pack_correction: 'Коррекция упаковки',
-  collected: 'Сборка завершена',
+  collected: 'Упаковка завершена',
   box_take: 'Короб взят в работу',
   box_close: 'Короб закрыт',
   box_place: 'Короб размещён',

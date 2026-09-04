@@ -24,8 +24,6 @@ class BalanceItem(BaseModel):
     packing_defect: int
     packed_good: int
     packed_defect: int
-    # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
-    boxed_good: int = 0
     # Собрано под FBS-поставку: обещано площадке, к отгрузке и упаковке НЕ доступно.
     picked_good: int = 0
     ready_good: int
@@ -59,8 +57,6 @@ class BalanceGroupItem(BaseModel):
     packing_defect: int
     packed_good: int
     packed_defect: int
-    # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
-    boxed_good: int = 0
     # Собрано под FBS-поставку: обещано площадке, к отгрузке и упаковке НЕ доступно.
     picked_good: int = 0
     ready_good: int
@@ -127,8 +123,6 @@ class BalanceSummaryResponse(BaseModel):
     packing_defect: int
     packed_good: int
     packed_defect: int
-    # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
-    boxed_good: int = 0
     # Собрано под FBS-поставку: обещано площадке, к отгрузке и упаковке НЕ доступно.
     picked_good: int = 0
     ready_good: int
@@ -139,7 +133,7 @@ class BalanceSummaryResponse(BaseModel):
 class BalanceZoneItem(BaseModel):
     location_id: str | None
     location_name: str | None
-    op_status: str  # 'storage' | 'packing' | 'packed' | 'boxed' | 'picked' | 'ready'
+    op_status: str  # 'storage' | 'packing' | 'packed' | 'picked' | 'ready'
     quality: str    # 'good' | 'defect'
     product_id: str
     product_name: str

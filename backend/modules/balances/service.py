@@ -9,7 +9,6 @@ from config import (
     DISPATCH_STATUS_AWAITING_TRIP,
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
-    INV_OP_BOXED,
     INV_OP_PICKED,
     INV_OP_INTAKE,
     INV_OP_SHIPPED,
@@ -82,9 +81,6 @@ _BUCKETS: list[tuple[str, str]] = [
     (INV_OP_PACKING, INV_Q_DEFECT),
     (INV_OP_PACKED, INV_Q_GOOD),
     (INV_OP_PACKED, INV_Q_DEFECT),
-    # Брака в коробе не бывает: в короб кладут только годный (брак с упаковки
-    # уходит на хранение), поэтому корзина boxed — только good.
-    (INV_OP_BOXED, INV_Q_GOOD),
     # Собранное под FBS-поставку — только годный: в лист подбора попадает
     # исключительно storage/good.
     (INV_OP_PICKED, INV_Q_GOOD),

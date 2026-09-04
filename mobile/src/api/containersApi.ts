@@ -1,7 +1,7 @@
 import { request, requestIdHeaders } from './http'
 
 // --- Types ---
-/** Короб: тара задачи «Размещение по ячейкам». */
+/** Короб: тара задачи «Упаковка с ТСД». */
 export type ContainerStatus = 'new' | 'open' | 'closed' | 'placed'
 
 export type ContainerItem = {
@@ -89,7 +89,7 @@ export type ContainerPlaceItemScan = {
   from_zone_id?: string | null
 }
 
-/** «Откуда» одной ходки: зона упаковки (корзина «ждёт размещения»), место или размещённый короб.
+/** «Откуда» одной ходки: зона упаковки (упакованное у стола), место или размещённый короб.
  *
  * Относится ко всей пачке и имеет приоритет над from_zone_id строк. Названный
  * источник ещё и сверяется с учётом: короб, который числится в другом месте, — ошибка.
@@ -141,7 +141,7 @@ export type ContainerPendingBox = {
   closed_at: string | null
 }
 
-/** Собранное мимо короба (габарит, брак): короба у него нет, только корзина boxed. */
+/** Упакованное без короба (габарит, брак): короба у него нет, только корзина packed. */
 export type ContainerPendingAsideItem = {
   product_id: string
   product_name: string | null
@@ -173,8 +173,8 @@ export type ContainerHoldingRow = {
   size_id: string | null
   client_id: string | null
   quality: 'good' | 'defect'
-  /** Корзина остатка: storage — на месте хранения, boxed — у стола, ждёт развозки. */
-  op_status: 'storage' | 'boxed'
+  /** Корзина остатка: packed — короб у стола, ждёт развозки; ready — развезён в зону отгрузки; storage — на хранении. */
+  op_status: 'storage' | 'packed' | 'ready'
   container_id: string
   doc_number: string
   status: ContainerStatus

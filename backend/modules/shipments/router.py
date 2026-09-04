@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Uplo
 
 from idempotency import begin_idempotent, finish_idempotent
 from config import (
-    INV_OP_BOXED,
     INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
@@ -478,8 +477,8 @@ def list_shipments(
                         -- брак возвращается на хранение и в факт выполнения плана не входит.
                         COALESCE((
                             SELECT SUM(CASE
-                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
-                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
+                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                                 ELSE 0 END)
                             FROM zone_relocations zr
                             JOIN shipment_lines sl2 ON sl2.id = zr.shipment_line_id
@@ -629,8 +628,8 @@ def list_shipment_lines(
                 for a in conn.execute(
                     f"""SELECT zr.shipment_line_id AS line_id,
                             SUM(CASE
-                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
-                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_BOXED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
+                                WHEN zr.to_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.to_quality='{INV_Q_GOOD}' AND COALESCE(zr.from_op,'') NOT IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.reverses_id IS NULL THEN zr.qty
+                                WHEN zr.from_op IN ('{INV_OP_PACKED}','{INV_OP_READY}') AND zr.from_quality='{INV_Q_GOOD}' AND zr.to_op='{INV_OP_PACKING}'   THEN -zr.qty
                                 ELSE 0 END) AS packed_good
                         FROM zone_relocations zr
                         WHERE zr.shipment_line_id IN ({ph})

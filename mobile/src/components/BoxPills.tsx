@@ -22,10 +22,10 @@ export function BoxPills({
         <button
           key={h.container_id}
           type="button"
-          className={`pill ${h.op_status === 'boxed' ? 'info' : 'accent'}`}
+          className={`pill ${h.op_status === 'packed' ? 'info' : 'accent'}`}
           style={{ fontFamily: 'inherit', cursor: onOpen ? 'pointer' : 'default' }}
           onClick={onOpen ? () => onOpen(h.container_id) : undefined}
-          title={h.op_status === 'boxed' ? 'Короб у стола — ждёт развозки' : 'Открыть короб'}
+          title={h.op_status === 'packed' ? 'Короб у стола — ждёт развозки' : 'Открыть короб'}
         >
           <Icon name="box" size={13} />
           <span className="mono">{h.doc_number}</span> · {h.qty}

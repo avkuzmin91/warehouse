@@ -18,10 +18,12 @@ from config import (
     CONTAINER_STATUS_NEW,
     CONTAINER_STATUS_OPEN,
     CONTAINER_STATUS_PLACED,
-    INV_OP_BOXED,
+    INV_OP_PACKED,
+    INV_OP_READY,
     INV_OP_STORAGE,
     INV_Q_DEFECT,
     INV_Q_GOOD,
+    SHIPMENT_TASK_PUTAWAY,
 )
 from dbconn import barcode_variant_exists_sql, ci_like_substring_param, like_substring_param
 from utils import next_doc_number as _next_doc_number, now_iso as _now, qr_svg
@@ -555,19 +557,19 @@ def containers_holding(
     return [(str(r["doc_number"]), int(r["net"] or 0)) for r in rows]
 
 
-# ── Размещение: собранное едет из «Ждёт размещения» в место хранения ───────────
+# ── Развозка: упакованное едет со стола в зону отгрузки ─────────────────────────
 
 def _place_closed_box(connection, box, zone: tuple[str, str], user_id: str) -> int:
-    """Короб уехал на стеллаж: boxed → storage в отсканированное место. → сколько штук.
+    """Короб уехал со стола: packed → ready в отсканированное место. → сколько штук.
 
-    Это и есть момент готовности товара: пока короб стоит у стола, он не доступен ни
-    отгрузке, ни другой задаче упаковки.
+    Та же раскладка, что «Готово к рейсу» у задачи упаковки, только коробом целиком и
+    вне документа: к отгрузке товар доступен уже с упаковки, развозка лишь даёт ему место.
     """
     from modules.balances.service import insert_inventory_move
     from modules.shipments.service import log_placement_op
 
     container_id = str(box["id"])
-    stock = [r for r in container_stock_rows(connection, container_id) if r["op"] == INV_OP_BOXED]
+    stock = [r for r in container_stock_rows(connection, container_id) if r["op"] == INV_OP_PACKED]
     if not stock:
         raise HTTPException(status_code=400, detail=f"Короб {box['doc_number']} пустой — размещать нечего")
 
@@ -580,7 +582,7 @@ def _place_closed_box(connection, box, zone: tuple[str, str], user_id: str) -> i
             color_id=r["color_id"], color_name=r["color_name"],
             size_id=r["size_id"], size_name=r["size_name"],
             client_id=r["client_id"], client_name=r["client_name"],
-            from_op=INV_OP_BOXED, to_op=INV_OP_STORAGE,
+            from_op=INV_OP_PACKED, to_op=INV_OP_READY,
             from_quality=r["quality"], to_quality=r["quality"],
             from_zone_id=r["zone_id"], from_zone_name=r["zone_name"],
             to_zone_id=to_zone_id, to_zone_name=to_zone_name,
@@ -609,8 +611,15 @@ def _place_closed_box(connection, box, zone: tuple[str, str], user_id: str) -> i
     return moved
 
 
+# Упакованное без короба у стола принадлежит только задачам с ТСД: «Упаковано» обычной
+# задачи упаковки раскладывает «Готово к рейсу» внутри документа, развозке оно не видно.
+_PUTAWAY_LINE_SQL = f"""shipment_line_id IN (
+        SELECT l.id FROM shipment_lines l JOIN shipment_docs d ON d.id = l.doc_id
+        WHERE d.task_kind = '{SHIPMENT_TASK_PUTAWAY}')"""
+
+
 def _aside_sources(connection, variant: dict, quality: str | None) -> list[dict]:
-    """Собранное мимо коробов по варианту: строки задания, где нетто boxed > 0.
+    """Собранное без короба по варианту: строки задачи с ТСД, где нетто packed > 0.
 
     Россыпь опознаётся пустой осью короба. Место назначения ей выбирает кладовщик у
     стеллажа, поэтому источники берутся по всем живым задачам сразу.
@@ -622,14 +631,14 @@ def _aside_sources(connection, variant: dict, quality: str | None) -> list[dict]
                    product_name, product_sku, color_name, size_name, client_name,
                    to_quality AS quality, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
             FROM zone_relocations
-            WHERE to_op = '{INV_OP_BOXED}' AND to_container_id IS NULL
+            WHERE to_op = '{INV_OP_PACKED}' AND to_container_id IS NULL AND {_PUTAWAY_LINE_SQL}
               AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
             UNION ALL
             SELECT shipment_line_id, product_id, color_id, size_id, client_id,
                    product_name, product_sku, color_name, size_name, client_name,
                    from_quality, from_zone_id, from_zone_name, -qty
             FROM zone_relocations
-            WHERE from_op = '{INV_OP_BOXED}' AND from_container_id IS NULL
+            WHERE from_op = '{INV_OP_PACKED}' AND from_container_id IS NULL AND {_PUTAWAY_LINE_SQL}
               AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
         )
         SELECT shipment_line_id, product_id, color_id, size_id, client_id, quality, zone_id,
@@ -664,13 +673,18 @@ def _aside_sources(connection, variant: dict, quality: str | None) -> list[dict]
     if len(qualities) > 1:
         raise HTTPException(
             status_code=400,
-            detail="По этому товару размещения ждут и годный, и брак — укажите качество",
+            detail="По этому товару развозки ждут и годный, и брак — укажите качество",
         )
     return sources
 
 
+# Что лежит на полке россыпью и переезжает сканом: хранение и развезённое в зону
+# отгрузки. Процессные корзины стола (packing/packed) ТСД не трогает.
+_SHELF_OPS_SQL = ", ".join(f"'{s}'" for s in (INV_OP_STORAGE, INV_OP_READY))
+
+
 def free_storage_sources(connection, variant: dict, quality: str | None, zone_id: str | None) -> list[dict]:
-    """Свободный (вне коробов) остаток позиции на хранении: по местам и качеству.
+    """Свободный (вне коробов) остаток позиции на полке: по местам, корзине и качеству.
 
     Товар в коробе двигается только коробом целиком, поэтому в источники переноса
     попадает лишь то, у чего ось короба пуста.
@@ -684,27 +698,27 @@ def free_storage_sources(connection, variant: dict, quality: str | None, zone_id
         WITH moves AS (
             SELECT product_id, color_id, size_id, client_id,
                    product_name, product_sku, color_name, size_name, client_name,
-                   to_quality AS quality, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
+                   to_op AS op, to_quality AS quality, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
             FROM zone_relocations
-            WHERE to_op = '{INV_OP_STORAGE}' AND to_container_id IS NULL
+            WHERE to_op IN ({_SHELF_OPS_SQL}) AND to_container_id IS NULL
               AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
               {conds}
             UNION ALL
             SELECT product_id, color_id, size_id, client_id,
                    product_name, product_sku, color_name, size_name, client_name,
-                   from_quality, from_zone_id, from_zone_name, -qty
+                   from_op, from_quality, from_zone_id, from_zone_name, -qty
             FROM zone_relocations
-            WHERE from_op = '{INV_OP_STORAGE}' AND from_container_id IS NULL
+            WHERE from_op IN ({_SHELF_OPS_SQL}) AND from_container_id IS NULL
               AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
               {conds.replace('to_zone_id', 'from_zone_id')}
         )
-        SELECT product_id, color_id, size_id, client_id, quality, zone_id,
+        SELECT product_id, color_id, size_id, client_id, op, quality, zone_id,
                MIN(product_name) AS product_name, MIN(product_sku) AS product_sku,
                MIN(color_name) AS color_name, MIN(size_name) AS size_name,
                MIN(client_name) AS client_name, MIN(zone_name) AS zone_name,
                SUM(net) AS net
         FROM moves
-        GROUP BY product_id, color_id, size_id, client_id, quality, zone_id
+        GROUP BY product_id, color_id, size_id, client_id, op, quality, zone_id
         HAVING SUM(net) > 0
         ORDER BY SUM(net) DESC
         """,
@@ -716,7 +730,8 @@ def free_storage_sources(connection, variant: dict, quality: str | None, zone_id
             "color_id": r["color_id"], "color_name": r["color_name"],
             "size_id": r["size_id"], "size_name": r["size_name"],
             "client_id": r["client_id"], "client_name": r["client_name"],
-            "quality": str(r["quality"]), "zone_id": r["zone_id"], "zone_name": r["zone_name"],
+            "op": str(r["op"]), "quality": str(r["quality"]),
+            "zone_id": r["zone_id"], "zone_name": r["zone_name"],
             "net": int(r["net"] or 0),
         }
         for r in rows
@@ -754,7 +769,7 @@ def _move_from_storage(
     connection, *, sources: list[dict], qty: int, zone: tuple[str, str], user_id: str,
     to_container=None,
 ) -> dict:
-    """Перенос товара с полки: storage@источник → storage@назначение. → строка ответа.
+    """Перенос товара с полки: место → место в той же корзине. → строка ответа.
 
     Считает и пишет движения общий код ручного перемещения (`balances`): там живут
     гейт короба, проверка остатка и дробление по атрибуции к строкам документов.
@@ -787,7 +802,7 @@ def _move_from_storage(
                 color_id=src["color_id"], color_name=src["color_name"],
                 size_id=src["size_id"], size_name=src["size_name"],
                 client_id=src["client_id"], client_name=src["client_name"],
-                op=INV_OP_STORAGE, quality=src["quality"],
+                op=src["op"], quality=src["quality"],
                 from_zone_id=src["zone_id"], to_zone_id=to_zone_id,
                 qty=take, comment=comment,
             ),
@@ -815,12 +830,12 @@ def _place_aside_item(
     connection, *, variant: dict, qty: int, quality: str | None, from_zone_id: str | None,
     zone: tuple[str, str], user_id: str, collected_only: bool = False, to_container=None,
 ) -> tuple[dict, dict[str, int]]:
-    """Скан товара: собранное едет на место, лежащее на полке — переносится.
+    """Скан товара: собранное едет в зону отгрузки, лежащее на полке — переносится.
 
     Что именно взято, решает не режим экрана, а сам товар: сначала смотрим, не ждёт
-    ли он размещения (корзина boxed), иначе берём свободный остаток на хранении.
+    ли он развозки у стола (упакованное без короба), иначе берём свободный остаток на хранении.
     collected_only — источник «Зона упаковки» назван явно: на полку не заглядываем.
-    Второе значение — сколько штук ушло по каждой строке задачи размещения: перенос
+    Второе значение — сколько штук ушло по каждой строке задачи с ТСД: перенос
     с полки не относится ни к какой задаче и отдаёт пустой словарь.
     """
     from modules.balances.service import insert_inventory_move
@@ -837,7 +852,7 @@ def _place_aside_item(
         if collected_only:
             raise HTTPException(
                 status_code=400,
-                detail="Этот товар не ждёт размещения у стола — проверьте, что сканируете",
+                detail="Этот товар не ждёт развозки у стола — проверьте, что сканируете",
             )
         storage = free_storage_sources(connection, variant, q, from_zone_id)
         if not storage:
@@ -872,7 +887,7 @@ def _place_aside_item(
     if available < n:
         raise HTTPException(
             status_code=400,
-            detail=f"Размещения ждёт только {available} шт. этого товара — проверьте, что сканируете",
+            detail=f"Развозки ждёт только {available} шт. этого товара — проверьте, что сканируете",
         )
 
     to_zone_id, to_zone_name = zone
@@ -892,7 +907,7 @@ def _place_aside_item(
             color_id=src["color_id"], color_name=src["color_name"],
             size_id=src["size_id"], size_name=src["size_name"],
             client_id=src["client_id"], client_name=src["client_name"],
-            from_op=INV_OP_BOXED, to_op=INV_OP_STORAGE,
+            from_op=INV_OP_PACKED, to_op=INV_OP_READY,
             from_quality=src["quality"], to_quality=src["quality"],
             from_zone_id=src["zone_id"], from_zone_name=src["zone_name"],
             to_zone_id=to_zone_id, to_zone_name=to_zone_name,
@@ -1058,7 +1073,7 @@ def _log_aside_placement(
 
 
 def pending_placement(connection) -> ContainerPendingPlacement:
-    """Что стоит у стола и ждёт развозки: закрытые короба + собранное мимо коробов.
+    """Что стоит у стола и ждёт развозки: закрытые короба + упакованное без короба.
 
     Очередь развозки живёт здесь, а не в задачах: кладовщик везёт ходку тележки, а не
     документ. `since` — самый старый объект в очереди: по нему видно, что забыли.
@@ -1072,17 +1087,17 @@ def pending_placement(connection) -> ContainerPendingPlacement:
     qty_by_box = containers_items_qty(connection, box_ids) if box_ids else {}
 
     aside_rows = connection.execute(
-        """
+        f"""
         WITH moves AS (
             SELECT product_id, color_id, size_id, product_name, product_sku,
                    color_name, size_name, client_name,
                    to_quality AS quality, qty AS net, created_at
-            FROM zone_relocations WHERE to_op = ? AND to_container_id IS NULL
+            FROM zone_relocations WHERE to_op = ? AND to_container_id IS NULL AND {_PUTAWAY_LINE_SQL}
             UNION ALL
             SELECT product_id, color_id, size_id, product_name, product_sku,
                    color_name, size_name, client_name,
                    from_quality, -qty, created_at
-            FROM zone_relocations WHERE from_op = ? AND from_container_id IS NULL
+            FROM zone_relocations WHERE from_op = ? AND from_container_id IS NULL AND {_PUTAWAY_LINE_SQL}
         )
         SELECT product_id, color_id, size_id, quality,
                MIN(product_name) AS product_name, MIN(product_sku) AS product_sku,
@@ -1094,7 +1109,7 @@ def pending_placement(connection) -> ContainerPendingPlacement:
         HAVING SUM(net) > 0
         ORDER BY MIN(product_name)
         """,
-        (INV_OP_BOXED, INV_OP_BOXED),
+        (INV_OP_PACKED, INV_OP_PACKED),
     ).fetchall()
     aside = [
         ContainerPendingAsideItem(
@@ -1284,16 +1299,16 @@ def containers_holdings(
     """Раскладка позиций по коробам — чем строка остатка отличается от россыпи.
 
     Два режима: по местам (страница «По местам» берёт все места страницы одним
-    запросом) и по варианту (шторка «Где лежит» из «По товарам»). Корзина «Ждёт
-    размещения» идёт наравне с хранением: там короба у стола, и без пометки они
-    неотличимы от собранного мимо короба.
+    запросом) и по варианту (шторка «Где лежит» из «По товарам»). Корзины идут все,
+    где короб бывает: `packed` — короба у стола, `ready` — развезённые в зону
+    отгрузки, `storage` — переехавшие на хранение вручную.
     """
     ids = [str(z).strip() for z in (zone_ids or []) if str(z).strip()]
     pid = (product_id or "").strip()
     if not ids and not pid:
         return ContainerHoldingsResponse(items=[])
 
-    ops = [INV_OP_STORAGE, INV_OP_BOXED]
+    ops = [INV_OP_STORAGE, INV_OP_PACKED, INV_OP_READY]
 
     def side(prefix: str, sign: str) -> tuple[str, list[Any]]:
         conds = [f"{prefix}_container_id IS NOT NULL", f"{prefix}_op = ANY(?)"]

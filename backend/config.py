@@ -143,18 +143,14 @@ SHIPMENT_STATUS_ON_PACKING        = "on_packing"
 SHIPMENT_STATUS_RELOCATING        = "relocating"
 # Терминальный исход «Задачи упаковки»: после раскладки по местам товар упакован
 # и готов к отгрузке. Дальше его возит отдельный домен dispatch (привязка к рейсу
-# и списание — там), задача упаковки на этом завершается.
+# и списание — там), задача упаковки на этом завершается. Тот же терминал у задачи
+# «Упаковка с ТСД»: собранное в короба упаковано и доступно отгрузке сразу, развозку
+# коробов в зону отгрузки ведёт процесс коробов, статус документа она не двигает.
 SHIPMENT_STATUS_PACKED            = "packed"
 # Завершено без отгрузки: после упаковки годного 0 (весь товар оказался браком),
 # рейс не нужен. Терминальный исход, отдельный от `packed` — иначе попадёт в
 # кандидаты на счёт и в метрику реальных отгрузок.
 SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
-# Терминальный исход задачи «Размещение по ячейкам»: товар собран в короба (и рядом
-# с ними — габарит и брак мимо коробов) и передан на развозку. Развозка по местам —
-# самостоятельная работа кладовщика (`POST /containers/place`), она не принадлежит
-# задаче и потому её статус не двигает: одна ходка тележки закрывает объекты разных
-# задач, а очередь на развозку живёт в коробах, а не в документах.
-SHIPMENT_STATUS_COLLECTED         = "collected"
 SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
 SHIPMENT_STATUSES_ALL: list[str] = [
@@ -163,7 +159,6 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_PACKED,
-    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 ]
@@ -171,7 +166,6 @@ SHIPMENT_STATUSES_ALL: list[str] = [
 # Терминальные статусы отгрузки (документ завершён, дальше не двигается).
 SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKED,
-    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 })
@@ -182,7 +176,6 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_ON_PACKING:        "На упаковке",
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
     SHIPMENT_STATUS_PACKED:            "Упакован",
-    SHIPMENT_STATUS_COLLECTED:         "Собрано",
     SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
@@ -269,21 +262,21 @@ SHIPMENT_EDITABLE_LINE_STATUSES_DEFECT: frozenset[str] = frozenset({
 })
 
 # ── Тип задачи склада ─────────────────────────────────────────────────────────
-# packing — упаковка под отгрузку (терминал `packed`, дальше товар возит dispatch);
-# putaway — размещение по ячейкам (терминал `placed`): товар собирается в короба и
-# уезжает на стеллаж, отгрузки у задачи нет. Ветвление по образцу cargo_type.
+# packing — упаковка под отгрузку: количества вносятся числом за столом;
+# putaway — упаковка с ТСД: тот же результат (терминал `packed`, товар в пуле отгрузки),
+# но вносится поштучным сканом в короба. Ветвление по образцу cargo_type.
 SHIPMENT_TASK_PACKING = "packing"
 SHIPMENT_TASK_PUTAWAY = "putaway"
 
 SHIPMENT_TASK_KIND_LABELS: dict[str, str] = {
     SHIPMENT_TASK_PACKING: "Упаковка под отгрузку",
-    SHIPMENT_TASK_PUTAWAY: "Размещение по ячейкам",
+    SHIPMENT_TASK_PUTAWAY: "Упаковка с ТСД",
 }
 
-# on_packing → collected делает отдельный эндпоинт finish_collecting (гейт: открытых
-# коробов с товаром не осталось) — и это конец задачи: `collected` терминален.
-# Развезённое по местам дальше видно в карточке справочно (placed_qty по журналу),
-# но статус документа развозка не трогает.
+# on_packing → packed делает отдельный эндпоинт finish_collecting (гейт: открытых
+# коробов с товаром не осталось) — и это конец задачи. Развозка коробов в зону
+# отгрузки (`packed → ready@место`) дальше видна в карточке справочно (placed_qty по
+# журналу), но статус документа она не трогает.
 SHIPMENT_TRANSITIONS_PUTAWAY: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_ON_PACKING,
@@ -321,18 +314,14 @@ SHIPMENT_PRIORITY_LABELS: dict[int | None, str] = {
 INV_OP_INTAKE      = "intake"
 INV_OP_STORAGE     = "storage"
 INV_OP_PACKING     = "packing"
-# «Упаковано» — товар прошёл стол упаковки (и годный, и брак), но ещё НЕ готов к
-# отгрузке: готовность наступает явным действием склада «Готово к рейсу»
-# (finish_relocation, relocating → packed), которое и переводит годное packed → ready.
+# «Упаковано» — товар прошёл стол упаковки (и годный, и брак): в задаче упаковки —
+# числом, в задаче «Упаковка с ТСД» — сканом в короб (ось короба `*_container_id`)
+# или без короба (габарит, брак). В `ready` годное переводит раскладка: «Готово к
+# рейсу» (finish_relocation) у задачи упаковки, развозка коробов (`/containers/place`)
+# у задачи с ТСД; отгрузка при DISPATCH_ALLOW_SHIP_FROM_PACKED берёт и отсюда.
 INV_OP_PACKED      = "packed"
-# «Ждёт размещения» — задача размещения по ячейкам: товар собран у стола (в коробе
-# либо мимо короба — габарит, брак), но ещё не уехал на стеллаж. Корзина намеренно НЕ
-# входит ни в один пул доступности (ready+packed у отгрузки, storage у упаковки): по
-# FBS товар готов к отгрузке только после размещения в месте хранения
-# (boxed → storage@место). Ось короба (`*_container_id`) отличает короб от россыпи.
-INV_OP_BOXED       = "boxed"
 # «Собрано под МП» — товар снят с полки сборщиком по FBS-поставке и лежит на столе
-# сборки. Корзина, как и boxed, НЕ входит ни в один пул доступности: обещанное
+# сборки. Корзина НЕ входит ни в один пул доступности: обещанное
 # площадке не должно снова попасть в лист подбора соседней волны или в упаковку.
 # Уходит одним движением picked → shipped, когда поставка передана площадке.
 INV_OP_PICKED      = "picked"
@@ -345,7 +334,6 @@ INV_OP_LABELS: dict[str, str] = {
     INV_OP_STORAGE:     "На хранении",
     INV_OP_PACKING:     "На упаковке",
     INV_OP_PACKED:      "Упакован",
-    INV_OP_BOXED:       "Ждёт размещения",
     INV_OP_PICKED:      "Собрано под МП",
     INV_OP_READY:       "Готов к отгрузке",
     INV_OP_SHIPPED:     "Отгружен",

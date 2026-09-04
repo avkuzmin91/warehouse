@@ -1,11 +1,11 @@
-"""Интеграционные тесты задачи «Размещение по ячейкам» (task_kind=putaway).
+"""Интеграционные тесты задачи «Упаковка с ТСД» (task_kind=putaway).
 
 Процесс разделён на две фазы. Сборка (документ): передали на стол → взяли короб →
-скан товара → закрыли короб → «Сборка завершена». Развозка (без документа): скан
-коробов и россыпи → скан места хранения. Ключевой инвариант: пока товар собран, но
-не развезён (корзина boxed), он НЕ доступен ни отгрузке, ни другой задаче упаковки —
-готовность наступает только после размещения. Задача заканчивается на сборке
-(«Собрано» — терминал); развозка живёт своей очередью и статусы задач не двигает.
+скан товара → закрыли короб → «Упаковка завершена». Развозка (без документа): скан
+коробов и россыпи → скан места. Ключевой инвариант: скан в короб — это упаковка:
+товар сразу в корзине `packed` (пул отгрузки), развозка лишь переводит его в зону
+отгрузки (`ready`) в конкретном месте. Задача заканчивается на сборке («Упакован» —
+общий терминал с задачей упаковки); развозка живёт своей очередью и статусы не двигает.
 """
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ if not os.environ.get("DATABASE_URL"):
 
 from fastapi.testclient import TestClient
 
-from config import INV_OP_STORAGE
+from config import INV_OP_READY
 from app import app
 from dbconn import get_connection
 from modules.auth.service import get_current_user
@@ -174,7 +174,7 @@ def _place(api, *, zone_id: str, box_ids=None, items=None):
 
 
 def test_full_putaway_flow(api, client_id, product, zones):
-    """Сборка закрывает задачу в «Собрано», развозка едет отдельно и статус не трогает."""
+    """Сборка закрывает задачу в «Упакован», развозка едет отдельно и статус не трогает."""
     doc_id, _line_id = _create_task(api, client_id, product, qty=5)
     code = _new_box_code(api)
 
@@ -192,9 +192,8 @@ def test_full_putaway_flow(api, client_id, product, zones):
     assert put.json()["items_qty"] == 3
     assert put.json()["contents"][0]["qty"] == 3
 
-    # Товар собран в короб: упакован сканом, но к отгрузке ещё не доступен.
-    assert _bucket(client_id, product["product_id"], "boxed") == 3
-    assert _bucket(client_id, product["product_id"], "packed") == 0
+    # Товар собран в короб: упакован сканом — уже в пуле отгрузки, в зоне отгрузки ещё нет.
+    assert _bucket(client_id, product["product_id"], "packed") == 3
     assert _bucket(client_id, product["product_id"], "ready") == 0
     # Скан = запись упаковки: объём и заработок считаются по ней.
     assert api.get(f"/shipments/{doc_id}").json()["lines"][0]["packed_good"] == 3
@@ -205,8 +204,8 @@ def test_full_putaway_flow(api, client_id, product, zones):
     # Сборка завершается, не дожидаясь развозки: короб ещё стоит у стола.
     fin = api.post(f"/shipments/{doc_id}/finish-collecting")
     assert fin.status_code == 200, fin.text
-    assert fin.json()["message"] == "collected"
-    assert _bucket(client_id, product["product_id"], "boxed") == 3
+    assert fin.json()["message"] == "packed"
+    assert _bucket(client_id, product["product_id"], "packed") == 3
     # Нерешённый пул со стола вернулся на хранение — товар не завис на упаковке.
     assert _bucket(client_id, product["product_id"], "packing") == 0
 
@@ -216,19 +215,19 @@ def test_full_putaway_flow(api, client_id, product, zones):
     assert placed.json()["boxes"][0]["status"] == "placed"
     assert placed.json()["boxes"][0]["zone_id"] == zones["cell_id"]
 
-    # После размещения товар лежит на хранении в ячейке — вот теперь он доступен.
-    assert _bucket(client_id, product["product_id"], "boxed") == 0
+    # После развозки товар лежит в зоне отгрузки в конкретной ячейке.
+    assert _bucket(client_id, product["product_id"], "packed") == 0
     with get_connection() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
-            "WHERE product_id = ? AND to_op = 'storage' AND to_zone_id = ?",
+            "WHERE product_id = ? AND to_op = 'ready' AND to_zone_id = ?",
             (product["product_id"], zones["cell_id"]),
         ).fetchone()
     assert int(row["n"]) == 3
 
     # Развозка статус задачи не двигает: задача закрылась ещё на сборке.
     detail = api.get(f"/shipments/{doc_id}").json()
-    assert detail["status"] == "collected"
+    assert detail["status"] == "packed"
     assert detail["task_kind"] == "putaway"
     assert detail["lines"][0]["placed_qty"] == 3
     assert detail["lines"][0]["boxed_qty"] == 0
@@ -248,7 +247,7 @@ def test_collecting_blocked_by_open_box_with_goods(api, client_id, product, zone
     assert "закройте короба" in blocked.json()["detail"].lower()
 
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
-    assert api.post(f"/shipments/{doc_id}/finish-collecting").json()["message"] == "collected"
+    assert api.post(f"/shipments/{doc_id}/finish-collecting").json()["message"] == "packed"
 
 
 def test_placement_can_run_before_collecting_is_finished(api, client_id, product, zones):
@@ -266,7 +265,7 @@ def test_placement_can_run_before_collecting_is_finished(api, client_id, product
     assert api.get(f"/shipments/{doc_id}").json()["status"] == "on_packing"
 
     fin = api.post(f"/shipments/{doc_id}/finish-collecting")
-    assert fin.status_code == 200 and fin.json()["message"] == "collected", fin.text
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
 
 
 def test_scan_limited_by_what_is_on_the_table(api, client_id, product, zones):
@@ -302,16 +301,16 @@ def test_defect_goes_into_its_own_box(api, client_id, product, zones):
     line = api.get(f"/shipments/{doc_id}").json()["lines"][0]
     assert line["packed_good"] == 2 and line["packed_defect"] == 1
     assert line["boxed_qty"] == 3 and line["boxed_defect_qty"] == 1
-    assert _bucket(client_id, product["product_id"], "boxed", "defect") == 1
+    assert _bucket(client_id, product["product_id"], "packed", "defect") == 1
 
     api.post(f"/shipments/{doc_id}/boxes/{good_box}/close")
     api.post(f"/shipments/{doc_id}/boxes/{defect_box}/close")
     api.post(f"/shipments/{doc_id}/finish-collecting")
     assert _place(api, zone_id=zones["cell_id"], box_ids=[good_box, defect_box]).status_code == 200
 
-    # Качество при размещении сохраняется: брак лёг браком в то же место.
-    assert _bucket(client_id, product["product_id"], "storage", "defect") == 1
-    assert _bucket(client_id, product["product_id"], "storage", "good") == 2
+    # Качество при развозке сохраняется: брак лёг браком в то же место.
+    assert _bucket(client_id, product["product_id"], "ready", "defect") == 1
+    assert _bucket(client_id, product["product_id"], "ready", "good") == 2
 
 
 def test_box_cannot_mix_good_and_defect(api, client_id, product, zones):
@@ -368,10 +367,10 @@ def test_aside_item_placed_by_scan_at_the_rack(api, client_id, product, zones):
     # Это полноценная запись упаковки (объём и заработок), но товар ещё не размещён.
     assert line["packed_defect"] == 2
     assert line["aside_qty"] == 2 and line["placed_qty"] == 0
-    assert _bucket(client_id, product["product_id"], "boxed", "defect") == 2
+    assert _bucket(client_id, product["product_id"], "packed", "defect") == 2
 
     fin = api.post(f"/shipments/{doc_id}/finish-collecting")
-    assert fin.status_code == 200 and fin.json()["message"] == "collected", fin.text
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
 
     # Место для россыпи — любое активное: зона брака заведена служебным местом.
     placed = _place(
@@ -380,8 +379,8 @@ def test_aside_item_placed_by_scan_at_the_rack(api, client_id, product, zones):
     )
     assert placed.status_code == 200, placed.text
     assert placed.json()["items"][0]["quality"] == "defect"
-    assert _bucket(client_id, product["product_id"], "storage", "defect") == 2
-    assert api.get(f"/shipments/{doc_id}").json()["status"] == "collected"
+    assert _bucket(client_id, product["product_id"], "ready", "defect") == 2
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "packed"
 
 
 def test_aside_quality_must_be_explicit_when_ambiguous(api, client_id, product, zones):
@@ -403,7 +402,7 @@ def test_aside_quality_must_be_explicit_when_ambiguous(api, client_id, product, 
         items=[{"barcode": product["barcode"], "qty": 1, "quality": "good"}],
     )
     assert ok.status_code == 200, ok.text
-    assert _bucket(client_id, product["product_id"], "storage", "good") == 1
+    assert _bucket(client_id, product["product_id"], "ready", "good") == 1
 
 
 def test_place_batch_takes_boxes_and_items_at_once(api, client_id, product, zones):
@@ -427,8 +426,8 @@ def test_place_batch_takes_boxes_and_items_at_once(api, client_id, product, zone
     assert placed.status_code == 200, placed.text
     assert placed.json()["placed_qty"] == 5
     assert len(placed.json()["boxes"]) == 2
-    assert _bucket(client_id, product["product_id"], "boxed") == 0
-    assert api.get(f"/shipments/{doc_id}").json()["status"] == "collected"
+    assert _bucket(client_id, product["product_id"], "packed") == 0
+    assert api.get(f"/shipments/{doc_id}").json()["status"] == "packed"
 
 
 def test_place_ignores_box_scanned_twice(api, client_id, product, zones):
@@ -445,11 +444,11 @@ def test_place_ignores_box_scanned_twice(api, client_id, product, zones):
     assert placed.status_code == 200, placed.text
     assert placed.json()["placed_qty"] == 3
     assert len(placed.json()["boxes"]) == 1
-    assert _bucket(client_id, product["product_id"], "boxed") == 0
+    assert _bucket(client_id, product["product_id"], "packed") == 0
     with get_connection() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
-            "WHERE product_id = ? AND to_op = 'storage' AND to_zone_id = ?",
+            "WHERE product_id = ? AND to_op = 'ready' AND to_zone_id = ?",
             (product["product_id"], zones["cell_id"]),
         ).fetchone()
     assert int(row["n"]) == 3
@@ -563,7 +562,7 @@ def test_task_without_goods_closes_immediately(api, client_id, product, zones):
     doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     _as(_WAREHOUSE)
     fin = api.post(f"/shipments/{doc_id}/finish-collecting")
-    assert fin.status_code == 200 and fin.json()["message"] == "collected", fin.text
+    assert fin.status_code == 200 and fin.json()["message"] == "packed", fin.text
 
 
 def test_unknown_barcode_and_foreign_product_rejected(api, client_id, product, zones):
@@ -591,7 +590,7 @@ def test_undo_box_item_reverses_packing(api, client_id, product, zones):
     )
     assert undo.status_code == 200, undo.text
     assert undo.json()["items_qty"] == 1
-    assert _bucket(client_id, product["product_id"], "boxed") == 1
+    assert _bucket(client_id, product["product_id"], "packed") == 1
     assert _bucket(client_id, product["product_id"], "packing") == 2
     # Объём упаковки уменьшился вместе с изъятием — заработок за неотсканированное не висит.
     assert api.get(f"/shipments/{doc_id}").json()["lines"][0]["packed_good"] == 1
@@ -632,6 +631,7 @@ def test_manual_move_of_boxed_stock_rejected(api, client_id, product, zones):
         "product_name": "Putaway Product",
         "product_sku": product["sku"],
         "client_id": client_id,
+        "op": "ready",
         "quality": "good",
         "qty": 1,
         "from_zone_id": zones["cell_id"],
@@ -652,7 +652,7 @@ def test_item_can_be_removed_from_placed_box(api, client_id, product, zones):
     assert removed.status_code == 200, removed.text
     assert removed.json()["items_qty"] == 1
     # Остаток из ячейки никуда не уехал — ушла только привязка к коробу.
-    assert _bucket(client_id, product["product_id"], "storage") == 2
+    assert _bucket(client_id, product["product_id"], "ready") == 2
 
     # Изъятое перестало быть «в коробе» — обычное перемещение снова разрешено.
     move = api.post("/balances/relocations", json={
@@ -660,6 +660,7 @@ def test_item_can_be_removed_from_placed_box(api, client_id, product, zones):
         "product_name": "Putaway Product",
         "product_sku": product["sku"],
         "client_id": client_id,
+        "op": "ready",
         "quality": "good",
         "qty": 1,
         "from_zone_id": zones["cell_id"],
@@ -695,12 +696,12 @@ def test_scan_move_of_stored_goods_between_locations(api, client_id, product, zo
     assert moved.json()["items"][0]["from_collected"] is False
     assert moved.json()["placed_qty"] == 1
     # Перенос остаток не меняет — меняется только место.
-    assert _bucket(client_id, product["product_id"], "storage") == 2
+    assert _bucket(client_id, product["product_id"], "ready") == 2
 
     with get_connection() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
-            "WHERE product_id = ? AND to_op = 'storage' AND to_zone_id = ? AND from_op = 'storage'",
+            "WHERE product_id = ? AND to_op = 'ready' AND to_zone_id = ? AND from_op = 'ready'",
             (product["product_id"], zones["special_id"]),
         ).fetchone()
     assert int(row["n"]) == 1
@@ -729,6 +730,7 @@ def test_scan_move_asks_source_when_ambiguous(api, client_id, product, zones):
         "product_name": "Putaway Product",
         "product_sku": product["sku"],
         "client_id": client_id,
+        "op": "ready",
         "quality": "good",
         "qty": 1,
         "from_zone_id": zones["cell_id"],
@@ -791,7 +793,7 @@ def test_packing_task_has_no_boxes(api, client_id, product, zones):
     _as(_WAREHOUSE)
     taken = api.post(f"/shipments/{doc_id}/boxes", json={"code": code})
     assert taken.status_code == 400
-    assert "Размещение по ячейкам" in taken.json()["detail"]
+    assert "Упаковка с ТСД" in taken.json()["detail"]
 
 
 def test_pending_placement_queue_is_the_home_of_delivery(api, client_id, product, zones):
@@ -803,7 +805,7 @@ def test_pending_placement_queue_is_the_home_of_delivery(api, client_id, product
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
     api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
     api.post(f"/shipments/{doc_id}/putaway/aside", json={"barcode": product["barcode"], "qty": 1})
-    assert api.post(f"/shipments/{doc_id}/finish-collecting").json()["message"] == "collected"
+    assert api.post(f"/shipments/{doc_id}/finish-collecting").json()["message"] == "packed"
 
     queue = api.get("/containers/pending-placement")
     assert queue.status_code == 200, queue.text
@@ -846,7 +848,7 @@ def test_partial_delivery_leaves_the_rest_in_queue(api, client_id, product, zone
     ids = [b["id"] for b in queue["boxes"]]
     assert box_b in ids and box_a not in ids
     detail = api.get(f"/shipments/{doc_id}").json()
-    assert detail["status"] == "collected"
+    assert detail["status"] == "packed"
     assert detail["lines"][0]["placed_qty"] == 2
 
 
@@ -920,7 +922,7 @@ def test_source_collected_does_not_fall_through_to_shelf(api, client_id, product
         items=[{"barcode": product["barcode"], "qty": 1}],
     )
     assert r.status_code == 400, r.text
-    assert "не ждёт размещения" in r.json()["detail"]
+    assert "не ждёт развозки" in r.json()["detail"]
 
 
 def test_source_and_target_location_must_differ(api, client_id, product, zones):
@@ -948,7 +950,7 @@ def test_item_goes_from_box_to_another_location_in_one_step(api, client_id, prod
     assert r.json()["items"][0]["from_collected"] is False
     assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 1
     # Остаток не изменился, штука переехала: в служебном месте она лежит россыпью.
-    assert _bucket(client_id, product["product_id"], "storage") == 2
+    assert _bucket(client_id, product["product_id"], "ready") == 2
     with get_connection() as conn:
         row = conn.execute(
             "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
@@ -981,7 +983,7 @@ def test_item_moves_between_placed_boxes(api, client_id, product, zones):
     detail_b = api.get(f"/containers/{box_b}").json()
     assert detail_b["doc"]["items_qty"] == 3
     assert any(op["op_type"] == "item_add" and "Доложено" in (op["comment"] or "") for op in detail_b["ops"])
-    assert _bucket(client_id, product["product_id"], "storage") == 4
+    assert _bucket(client_id, product["product_id"], "ready") == 4
 
 
 def test_loose_item_from_shelf_goes_into_placed_box(api, client_id, product, zones):
@@ -997,7 +999,7 @@ def test_loose_item_from_shelf_goes_into_placed_box(api, client_id, product, zon
     assert r.status_code == 200, r.text
     assert r.json()["zone_id"] == zones["cell_id"]
     assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 2
-    assert _bucket(client_id, product["product_id"], "storage") == 2
+    assert _bucket(client_id, product["product_id"], "ready") == 2
     # Всё снова в коробе — ручное перемещение россыпи опять запрещено.
     holdings = api.get(f"/containers/holdings?zone_ids={zones['cell_id']}").json()["items"]
     mine = [h for h in holdings if h["product_id"] == product["product_id"]]
@@ -1016,8 +1018,8 @@ def test_collected_item_goes_straight_into_placed_box(api, client_id, product, z
     assert r.status_code == 200, r.text
     assert r.json()["items"][0]["from_collected"] is True
     assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 3
-    assert _bucket(client_id, product["product_id"], "boxed") == 0
-    assert _bucket(client_id, product["product_id"], "storage") == 3
+    assert _bucket(client_id, product["product_id"], "packed") == 0
+    assert _bucket(client_id, product["product_id"], "ready") == 3
 
 
 def test_box_into_box_is_rejected(api, client_id, product, zones):
@@ -1040,7 +1042,7 @@ def test_placed_box_keeps_one_quality_when_adding(api, client_id, product, zones
     r = _transfer(api, source=_COLLECTED, target=_box(good_box), items=[{"barcode": product["barcode"], "qty": 1}])
     assert r.status_code == 400, r.text
     assert "набран годным" in r.json()["detail"]
-    assert _bucket(client_id, product["product_id"], "boxed", "defect") == 1
+    assert _bucket(client_id, product["product_id"], "packed", "defect") == 1
 
 
 def test_unplaced_box_is_not_a_target(api, client_id, product, zones):
@@ -1068,7 +1070,7 @@ def test_holdings_by_variant_answers_where_stored(api, client_id, product, zones
     assert rows[0]["container_id"] == box_id
     assert rows[0]["zone_id"] == zones["cell_id"]
     assert rows[0]["zone_name"]
-    assert rows[0]["op_status"] == "storage" and rows[0]["status"] == "placed"
+    assert rows[0]["op_status"] == "ready" and rows[0]["status"] == "placed"
 
 
 def test_holdings_show_boxes_waiting_placement(api, client_id, product, zones):
@@ -1085,7 +1087,7 @@ def test_holdings_show_boxes_waiting_placement(api, client_id, product, zones):
     assert r.status_code == 200, r.text
     rows = r.json()["items"]
     assert len(rows) == 1
-    assert rows[0]["op_status"] == "boxed" and rows[0]["container_id"] == box_id
+    assert rows[0]["op_status"] == "packed" and rows[0]["container_id"] == box_id
     assert rows[0]["status"] == "closed"
 
 
@@ -1170,7 +1172,7 @@ def test_delete_refuses_box_with_goods_inside(api, client_id, product, zones):
     # Товар на месте: отказ не должен ничего сдвинуть в остатке.
     detail = api.get(f"/containers/{box_id}").json()
     assert detail["doc"]["items_qty"] == 2
-    assert _bucket(client_id, product["product_id"], INV_OP_STORAGE) == 2
+    assert _bucket(client_id, product["product_id"], INV_OP_READY) == 2
 
 
 def test_free_labels_sink_below_boxes_in_work(api, client_id, product, zones):

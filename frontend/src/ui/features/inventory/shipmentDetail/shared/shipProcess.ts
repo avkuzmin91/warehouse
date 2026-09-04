@@ -17,7 +17,6 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },
   packed:        { role: null,         icon: 'check',    sub: 'товар упакован и разложен' },
-  collected:     { role: null,         icon: 'check',    sub: 'товар собран в короба' },
   completed_no_goods: { role: null,    icon: 'check',    sub: 'завершено без отгрузки: весь товар брак' },
   cancelled:     { role: null,         icon: 'x',        sub: '' },
 }
@@ -34,9 +33,9 @@ function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, st
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
     // Раскладка/подготовка («relocate») переводит документ в «Упаковано», но это не
     // 'advance'-операция — фиксируем отметку отдельно. Конец сборки коробов
-    // («collected»), он же конец задачи размещения, тоже вне advance.
+    // («collected») ведёт задачу с ТСД в тот же «Упакован», тоже вне advance.
     if (op.op_type === 'relocate' && !ts.packed) ts.packed = op.created_at
-    if (op.op_type === 'collected' && !ts.collected) ts.collected = op.created_at
+    if (op.op_type === 'collected' && !ts.packed) ts.packed = op.created_at
     if (op.op_type !== 'advance') continue
     const comment = op.comment ?? ''
     for (const s of SHIPMENT_STATUS_ORDER) {
@@ -55,17 +54,17 @@ function fmt(s: string): string {
   return d.toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
-// Задача размещения: короба собираются в зоне упаковки и уезжают в ячейки — отгрузки нет.
-// Свои заголовки шагов: общие лейблы отгрузки («На упаковке», «Передан на упаковку»)
-// в задаче размещения читаются как чужой процесс.
+// Задача с ТСД: короба собираются сканом в зоне упаковки, развозку ведёт очередь коробов.
+// Свои заголовки шагов: общие лейблы («На упаковке», «Упакован» как итог внесения)
+// в задаче с ТСД читаются как чужой процесс.
 const SH_META_PUTAWAY: Partial<Record<ShipmentStatus, { role: ProcessRole | null; icon: IconName; sub: string; title?: string; doneTitle?: string }>> = {
-  draft:      { role: 'manager',    icon: 'edit',     sub: 'состав и план размещения' },
+  draft:      { role: 'manager',    icon: 'edit',     sub: 'состав и план упаковки' },
   packing:    { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на упаковку' },
-  on_packing: { role: 'shift_lead', icon: 'box',      sub: 'сборка коробов сканом на ТСД', title: 'Сборка коробов', doneTitle: 'Собрано' },
-  collected:  { role: null,         icon: 'check',    sub: 'собрано; развозку ведёт очередь коробов' },
+  on_packing: { role: 'shift_lead', icon: 'box',      sub: 'упаковка сканом в короба на ТСД', title: 'Сборка коробов', doneTitle: 'Собрано в короба' },
+  packed:     { role: null,         icon: 'check',    sub: 'доступен отгрузке; развозку коробов ведёт очередь' },
 }
 
-/** Лейбл статуса в лексике задачи размещения (бейдж шапки). */
+/** Лейбл статуса в лексике задачи с ТСД (бейдж шапки). */
 export function putawayStatusLabel(status: ShipmentStatus): string {
   return SH_META_PUTAWAY[status]?.title ?? SHIPMENT_STATUS_LABELS[status]
 }
