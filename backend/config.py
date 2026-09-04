@@ -334,6 +334,11 @@ INV_OP_PACKED      = "packed"
 # FBS товар готов к отгрузке только после размещения в месте хранения
 # (boxed → storage@место). Ось короба (`*_container_id`) отличает короб от россыпи.
 INV_OP_BOXED       = "boxed"
+# «Собрано под МП» — товар снят с полки сборщиком по FBS-поставке и лежит на столе
+# сборки. Корзина, как и boxed, НЕ входит ни в один пул доступности: обещанное
+# площадке не должно снова попасть в лист подбора соседней волны или в упаковку.
+# Уходит одним движением picked → shipped, когда поставка передана площадке.
+INV_OP_PICKED      = "picked"
 INV_OP_READY       = "ready"
 INV_OP_SHIPPED     = "shipped"
 INV_OP_WRITTEN_OFF = "written_off"
@@ -344,6 +349,7 @@ INV_OP_LABELS: dict[str, str] = {
     INV_OP_PACKING:     "На упаковке",
     INV_OP_PACKED:      "Упакован",
     INV_OP_BOXED:       "Ждёт размещения",
+    INV_OP_PICKED:      "Собрано под МП",
     INV_OP_READY:       "Готов к отгрузке",
     INV_OP_SHIPPED:     "Отгружен",
     INV_OP_WRITTEN_OFF: "Списан",
@@ -923,6 +929,98 @@ MP_SYNC_KIND_CHECK = "check"
 
 MP_DEADLINE_SOURCE_API = "api"
 MP_DEADLINE_SOURCE_ESTIMATED = "estimated"
+
+# Подтягивание ШК из кабинета магазина в вариант товара: исход по каждой позиции.
+MP_BARCODE_PULL_READY = "ready"            # карточка найдена, есть что записать
+MP_BARCODE_PULL_EXISTS = "exists"          # ШК магазина уже стоят у варианта
+MP_BARCODE_PULL_AMBIGUOUS = "ambiguous"    # под позицию подходит несколько карточек
+MP_BARCODE_PULL_NOT_FOUND = "not_found"    # карточки в кабинете нет
+MP_BARCODE_PULL_CONFLICT = "conflict"      # ШК уже занят другим вариантом
+MP_BARCODE_PULL_NO_STORE = "no_store"      # у позиции не указан магазин
+MP_BARCODE_PULL_NO_ACCOUNT = "no_account"  # у магазина нет кабинета маркетплейса
+MP_BARCODE_PULL_NO_VARIANT = "no_variant"  # цвето-размер строки не заведён в товаре
+
+MP_BARCODE_PULL_STATUSES: tuple[str, ...] = (
+    MP_BARCODE_PULL_READY, MP_BARCODE_PULL_EXISTS, MP_BARCODE_PULL_AMBIGUOUS,
+    MP_BARCODE_PULL_NOT_FOUND, MP_BARCODE_PULL_CONFLICT, MP_BARCODE_PULL_NO_STORE,
+    MP_BARCODE_PULL_NO_ACCOUNT, MP_BARCODE_PULL_NO_VARIANT,
+)
+
+MP_BARCODE_SOURCE_LABELS: dict[str, str] = {
+    MP_OZON: "Ozon",
+    MP_WB: "Wildberries",
+}
+
+# ── FBS-поставки (Фаза 2) ─────────────────────────────────────────────────────
+# Единица работы менеджера — поставка, а не заказ: площадка не примет отгрузку,
+# в которой заказы двух продавцов. Границу задаёт пара «кабинет + отсечка»
+# (mp_supplies.account_id + cutoff_at), поэтому смешать клиентов негде.
+MP_SUPPLY_STATUS_DRAFT     = "draft"      # «Состав» — приём открыт, менеджер правит выбор
+MP_SUPPLY_STATUS_CHECKING  = "checking"   # «Проверка» — состав утверждён, разбор блокеров
+MP_SUPPLY_STATUS_PICKING   = "picking"    # «Сборка» — задача кладовщику
+MP_SUPPLY_STATUS_HANDOVER  = "handover"   # «Передача» — собрано, ярлык/QR площадке
+MP_SUPPLY_STATUS_DONE      = "done"
+MP_SUPPLY_STATUS_CANCELLED = "cancelled"
+
+MP_SUPPLY_STATUSES: tuple[str, ...] = (
+    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_PICKING,
+    MP_SUPPLY_STATUS_HANDOVER, MP_SUPPLY_STATUS_DONE, MP_SUPPLY_STATUS_CANCELLED,
+)
+
+MP_SUPPLY_STATUS_LABELS: dict[str, str] = {
+    MP_SUPPLY_STATUS_DRAFT: "Состав",
+    MP_SUPPLY_STATUS_CHECKING: "Проверка",
+    MP_SUPPLY_STATUS_PICKING: "Сборка",
+    MP_SUPPLY_STATUS_HANDOVER: "Передача",
+    MP_SUPPLY_STATUS_DONE: "Передана",
+    MP_SUPPLY_STATUS_CANCELLED: "Аннулирована",
+}
+
+# Приём открыт — заказы синка втекают в поставку сами.
+MP_SUPPLY_INTAKE_STATUSES: frozenset[str] = frozenset({
+    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING,
+})
+
+# Активные: занимают заказ и видны на доске.
+MP_SUPPLY_ACTIVE_STATUSES: frozenset[str] = frozenset({
+    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING,
+    MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_HANDOVER,
+})
+
+MP_SUPPLY_TERMINAL_STATUSES: frozenset[str] = frozenset({
+    MP_SUPPLY_STATUS_DONE, MP_SUPPLY_STATUS_CANCELLED,
+})
+
+# Заказ в поставке: выбран менеджером / снят / ждёт решения о дозагрузке.
+MP_SUPPLY_ORDER_SELECTED   = "selected"
+MP_SUPPLY_ORDER_UNSELECTED = "unselected"
+MP_SUPPLY_ORDER_PENDING    = "pending"
+
+# Занимающие заказ состояния — их и держит частичный UNIQUE-индекс
+# «один заказ в одной активной поставке».
+MP_SUPPLY_ORDER_HOLDING: frozenset[str] = frozenset({
+    MP_SUPPLY_ORDER_SELECTED, MP_SUPPLY_ORDER_PENDING,
+})
+
+# За сколько минут до отсечки закрывается приём в поставку (умолчание кабинета).
+MP_SUPPLY_INTAKE_CLOSE_MINUTES = 30
+
+MP_SUPPLY_OP_CREATE       = "create"
+MP_SUPPLY_OP_ORDER_ADD    = "order_add"
+MP_SUPPLY_OP_ORDER_REMOVE = "order_remove"
+MP_SUPPLY_OP_ORDER_DOCK   = "order_dock"
+MP_SUPPLY_OP_STATUS       = "status"
+MP_SUPPLY_OP_INTAKE_CLOSE = "intake_close"
+MP_SUPPLY_OP_CLAIM        = "claim"
+MP_SUPPLY_OP_RELEASE      = "release"
+MP_SUPPLY_OP_PICK         = "pick"
+MP_SUPPLY_OP_PICK_UNDO    = "pick_undo"
+
+# Собирает поставку выделенный сборщик, но роль не эксклюзивная: на малом складе
+# отдельного человека нет, и очередь не должна вставать, если сборщик не в смене.
+MP_SUPPLY_PICK_ROLES: frozenset[str] = frozenset({
+    "picker", "warehouse_manager", "warehouse_head", "admin",
+})
 
 # ---------------------------------------------------------------------------
 # Расходы на материалы (хозрасходы)

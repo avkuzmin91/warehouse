@@ -4,7 +4,7 @@ import { request } from './http'
 export type TaskItem = {
   kind: string
   title: string
-  doc_type: 'trip' | 'receipt' | 'shipment' | 'dispatch'
+  doc_type: 'trip' | 'receipt' | 'shipment' | 'dispatch' | 'mp_supply'
   doc_id: string
   doc_number: string
   status: string

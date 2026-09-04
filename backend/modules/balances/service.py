@@ -10,6 +10,7 @@ from config import (
     DISPATCH_STATUS_PARTIALLY_SHIPPED,
     DISPATCH_STATUS_PREPARING,
     INV_OP_BOXED,
+    INV_OP_PICKED,
     INV_OP_INTAKE,
     INV_OP_SHIPPED,
     INV_OP_PACKED,
@@ -84,6 +85,9 @@ _BUCKETS: list[tuple[str, str]] = [
     # Брака в коробе не бывает: в короб кладут только годный (брак с упаковки
     # уходит на хранение), поэтому корзина boxed — только good.
     (INV_OP_BOXED, INV_Q_GOOD),
+    # Собранное под FBS-поставку — только годный: в лист подбора попадает
+    # исключительно storage/good.
+    (INV_OP_PICKED, INV_Q_GOOD),
     (INV_OP_READY, INV_Q_GOOD),
     (INV_OP_READY, INV_Q_DEFECT),
 ]
@@ -1626,6 +1630,7 @@ def list_zone_relocations(
     limit: int,
     client_id: str | None,
     search: str | None,
+    boxed_only: bool = False,
 ) -> "ZoneRelocationListResponse":
     from modules.balances.schemas import ZoneRelocationItem, ZoneRelocationListResponse
 
@@ -1636,8 +1641,14 @@ def list_zone_relocations(
         params.append(client_id.strip())
     if search:
         s = ci_like_substring_param(search)
-        conds.append("(fold_ci(r.product_name) LIKE ? OR fold_ci(r.product_sku) LIKE ? OR r.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?))")
-        params += [s, s, s]
+        conds.append(
+            "(fold_ci(r.product_name) LIKE ? OR fold_ci(r.product_sku) LIKE ? "
+            "OR r.product_id IN (SELECT id FROM products WHERE fold_ci(sku) LIKE ?) "
+            "OR fold_ci(cf.doc_number) LIKE ? OR fold_ci(ct.doc_number) LIKE ?)"
+        )
+        params += [s, s, s, s, s]
+    if boxed_only:
+        conds.append("(r.from_container_id IS NOT NULL OR r.to_container_id IS NOT NULL)")
     where = ("WHERE " + " AND ".join(conds)) if conds else ""
 
     offset = (page - 1) * limit
@@ -1645,11 +1656,14 @@ def list_zone_relocations(
         f"""
         SELECT r.*, COALESCE(NULLIF(TRIM(p.sku), ''), r.product_sku) AS effective_sku,
                COALESCE(NULLIF(u.display_name, ''), u.email) AS created_by_email,
+               cf.doc_number AS from_container, ct.doc_number AS to_container,
                EXISTS(SELECT 1 FROM zone_relocations x WHERE x.reverses_id = r.id) AS is_reversed,
                COUNT(*) OVER() AS _total
         FROM zone_relocations r
         LEFT JOIN products p ON p.id = r.product_id
         LEFT JOIN users u ON u.id = r.created_by
+        LEFT JOIN containers cf ON cf.id = r.from_container_id
+        LEFT JOIN containers ct ON ct.id = r.to_container_id
         {where}
         ORDER BY r.created_at DESC
         LIMIT ? OFFSET ?
@@ -1678,6 +1692,8 @@ def list_zone_relocations(
             reason=row["reason"],
             comment=row["comment"],
             reverses_id=str(row["reverses_id"]) if row["reverses_id"] else None,
+            from_container=row["from_container"],
+            to_container=row["to_container"],
             is_reversed=bool(row["is_reversed"]),
         )
         for row in rows

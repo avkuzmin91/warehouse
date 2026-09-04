@@ -32,6 +32,8 @@ export type CompositionPhaseProps = {
   onDeleteFile: (lineId: string, fileId: string) => void
   onPickLabel?: (line: ShipmentLine) => void
   onAssignSku: (line: ShipmentLine) => void
+  // Подтягивание ШК из кабинета магазина строки (менеджерское действие).
+  onPullStoreBarcodes?: () => void
   getAvail?: (line: ShipmentLine) => LineAvailability
   availLoading: boolean
 }
@@ -40,7 +42,8 @@ export function CompositionPhase({
   lines, clientId, state, hint, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onAdd, onPreviewFile, onQty, onStore, onDelete,
-  onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku, getAvail, availLoading,
+  onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku, onPullStoreBarcodes,
+  getAvail, availLoading,
 }: CompositionPhaseProps) {
   return (
     <PhaseBlock
@@ -49,10 +52,19 @@ export function CompositionPhase({
       role="manager"
       state={state}
       hint={hint}
-      right={canDelete ? (
-        <button className="btn sm primary" onClick={onAdd} disabled={acting || !clientId}>
-          <Icon name="plus" size={12} />Добавить товар
-        </button>
+      right={(canDelete || onPullStoreBarcodes) ? (
+        <div className="row gap-8">
+          {onPullStoreBarcodes && lines.length > 0 && (
+            <button className="btn sm" onClick={onPullStoreBarcodes} disabled={acting}>
+              <Icon name="barcode" size={12} />Подтянуть ШК
+            </button>
+          )}
+          {canDelete && (
+            <button className="btn sm primary" onClick={onAdd} disabled={acting || !clientId}>
+              <Icon name="plus" size={12} />Добавить товар
+            </button>
+          )}
+        </div>
       ) : undefined}
     >
       {lines.length === 0 ? (

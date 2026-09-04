@@ -101,7 +101,7 @@ export function MpAccountsFeature() {
         <thead>
           <tr>
             <th>Название</th>
-            <th style={{ width: 110 }}>Маркетплейс</th>
+            <th style={{ width: 160 }}>Маркетплейс</th>
             <th>Клиент</th>
             <th style={{ width: 90 }}>Статус</th>
             <th style={{ width: 150 }}>Последний синк</th>
@@ -125,7 +125,12 @@ export function MpAccountsFeature() {
             items.map((a) => (
               <tr key={a.id}>
                 <Td style={{ fontWeight: 600 }}>{a.name}</Td>
-                <Td><Badge tone={marketplaceTone(a.marketplace)}>{MARKETPLACE_LABELS[a.marketplace]}</Badge></Td>
+                <Td>
+                  <span className="row gap-8">
+                    <Badge tone={marketplaceTone(a.marketplace)}>{MARKETPLACE_LABELS[a.marketplace]}</Badge>
+                    {a.is_sandbox && <Badge tone="warning">тест</Badge>}
+                  </span>
+                </Td>
                 <Td>{a.client_name ?? '—'}</Td>
                 <Td>
                   <Badge tone={a.status === 'active' ? 'success' : 'warning'}>
@@ -205,7 +210,10 @@ function AccountModal({ account, onClose, onDone }: {
   const [name, setName] = useState(account?.name ?? '')
   const [ozonClientId, setOzonClientId] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const [isSandbox, setIsSandbox] = useState(account?.is_sandbox ?? false)
   const [saving, setSaving] = useState(false)
+
+  const isWb = (isEdit ? account.marketplace : marketplace) === 'wb'
 
   const canSave = isEdit
     ? Boolean(name.trim())
@@ -220,6 +228,7 @@ function AccountModal({ account, onClose, onDone }: {
           name: name.trim(),
           ozon_client_id: ozonClientId.trim() || undefined,
           api_key: apiKey.trim() || undefined,
+          is_sandbox: isWb ? isSandbox : undefined,
         })
         toast('Подключение обновлено')
       } else {
@@ -229,6 +238,7 @@ function AccountModal({ account, onClose, onDone }: {
           name: name.trim(),
           ozon_client_id: marketplace === 'ozon' ? ozonClientId.trim() : undefined,
           api_key: apiKey.trim(),
+          is_sandbox: isWb ? isSandbox : undefined,
         })
         toast('Кабинет подключён, карточки загружаются')
       }
@@ -310,6 +320,23 @@ function AccountModal({ account, onClose, onDone }: {
             autoComplete="new-password"
           />
         </div>
+        {isWb && (
+          <label className="row gap-8" style={{ alignItems: 'flex-start', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={isSandbox}
+              onChange={(e) => setIsSandbox(e.target.checked)}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              <span style={{ fontWeight: 600 }}>Тестовый контур</span>
+              <span style={{ display: 'block', fontSize: 12, color: 'var(--c-text-subtle)' }}>
+                Токен выпущен с галкой «Тестовый контур» — запросы уйдут в песочницу Wildberries.
+                Боевой токен здесь отмечать не нужно.
+              </span>
+            </span>
+          </label>
+        )}
       </div>
     </Modal>
   )

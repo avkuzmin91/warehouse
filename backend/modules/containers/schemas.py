@@ -93,15 +93,22 @@ class ContainerMoveRequest(BaseModel):
 
 
 class ContainerPlaceItemScan(BaseModel):
-    """Скан товара, собранного мимо короба (габарит, брак).
+    """Скан товара: собранного мимо короба либо взятого с полки для переноса.
 
-    quality не обязателен: если по ШК ждёт размещения товар только одного качества,
-    он определяется сам — у стеллажа кладовщику незачем решать за упаковщика.
+    from_zone_id — место-источник («взял отсюда»). Без него товар ищется сам:
+    сначала среди ждущего размещения, затем на хранении; неоднозначность
+    (несколько мест или оба качества) отдаётся ошибкой, а не угадывается.
+    quality не обязателен по той же причине.
     """
 
-    barcode: str = Field(min_length=1)
+    barcode: str | None = None
+    # Веб работает без сканера: там позиция приходит вариантом, а не штрих-кодом.
+    product_id: str | None = None
+    color_id: str | None = None
+    size_id: str | None = None
     qty: int = Field(ge=1, default=1)
     quality: str | None = None
+    from_zone_id: str | None = None
 
 
 class ContainerPlaceRequest(BaseModel):
@@ -113,7 +120,7 @@ class ContainerPlaceRequest(BaseModel):
 
 
 class ContainerPlacedItem(BaseModel):
-    """Строка размещённой россыпи: что и сколько уехало в место хранения."""
+    """Строка перемещённого товара: что, сколько и откуда уехало в место хранения."""
 
     product_name: str | None = None
     product_sku: str | None = None
@@ -121,6 +128,8 @@ class ContainerPlacedItem(BaseModel):
     size_name: str | None = None
     quality: str
     qty: int
+    # false — товар взят с полки (перенос), true — собранное, ждавшее размещения.
+    from_collected: bool = True
 
 
 class ContainerPlaceResult(BaseModel):
@@ -134,7 +143,30 @@ class ContainerPlaceResult(BaseModel):
 
 
 class ContainerItemRemoveRequest(BaseModel):
-    """Изъятие позиции из размещённого короба: товар остаётся в том же месте россыпью."""
+    """Изъятие позиции из размещённого короба: товар остаётся в том же месте россыпью.
 
-    barcode: str = Field(min_length=1)
+    Позиция приходит сканом (ТСД) либо вариантом (веб — там сканера нет).
+    """
+
+    barcode: str | None = None
+    product_id: str | None = None
+    color_id: str | None = None
+    size_id: str | None = None
     qty: int = Field(ge=1, default=1)
+
+
+class ContainerHoldingRow(BaseModel):
+    """Что из позиции лежит в коробе в этом месте — бейдж «в коробе» в остатках."""
+
+    zone_id: str
+    product_id: str
+    color_id: str | None = None
+    size_id: str | None = None
+    client_id: str | None = None
+    quality: str
+    doc_number: str
+    qty: int
+
+
+class ContainerHoldingsResponse(BaseModel):
+    items: list[ContainerHoldingRow]

@@ -3,7 +3,7 @@ import { request } from './http'
 // --- Types ---
 
 /** Операционный статус запаса: что товар делает. */
-export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'boxed' | 'ready'
+export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'boxed' | 'picked' | 'ready'
 /** Качество запаса. «Не проверен» существует только внутри приёмки. */
 export type InvQuality = 'good' | 'defect'
 
@@ -12,6 +12,7 @@ export const INV_OP_LABELS: Record<InvOpStatus, string> = {
   packing: 'На упаковке',
   packed:  'Упакован',
   boxed:   'Собран в короб',
+  picked:  'Собрано под МП',
   ready:   'Готов к отгрузке',
 }
 
@@ -442,6 +443,9 @@ export type ZoneRelocationItem = {
   reverses_id:      string | null
   /** Запись уже откачена (по ней есть сторно). */
   is_reversed:      boolean
+  /** Короб, которым ехал товар (у переноса короба обе стороны — один и тот же). */
+  from_container:   string | null
+  to_container:     string | null
 }
 
 export type ZoneRelocationListParams = {
@@ -449,6 +453,8 @@ export type ZoneRelocationListParams = {
   limit?:     number
   client_id?: string
   search?:    string
+  /** Только движения коробов — развозка и переносы тары. */
+  boxed_only?: boolean
 }
 
 export type ZoneRelocationListResponse = {
@@ -464,6 +470,7 @@ export function getZoneRelocations(params: ZoneRelocationListParams = {}, signal
   if (params.limit) sp.set('limit', String(params.limit))
   if (params.client_id) sp.set('client_id', params.client_id)
   if (params.search) sp.set('search', params.search)
+  if (params.boxed_only) sp.set('boxed_only', 'true')
   const q = sp.toString()
   return request<ZoneRelocationListResponse>(`/balances/relocations${q ? `?${q}` : ''}`, { signal })
 }

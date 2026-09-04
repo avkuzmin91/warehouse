@@ -44,6 +44,9 @@ export type ClientStoreItem = {
   client_id: string
   name: string
   is_active: boolean
+  mp_account_id?: string | null
+  mp_account_name?: string | null
+  mp_marketplace?: string | null
   is_deleted?: boolean
   deleted_at?: string | null
   deleted_by?: string | null

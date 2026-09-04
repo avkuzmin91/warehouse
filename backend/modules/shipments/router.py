@@ -91,6 +91,9 @@ from modules.shipments.schemas import (
     ShipmentPriorityUpdate,
     ShipmentReturnFromPackingPayload,
     ShipmentReturnToPackingPayload,
+    StoreBarcodeSuggestion,
+    StoreBarcodesApply,
+    StoreBarcodesResponse,
 )
 from modules.shipments.service import (
     _PACKED_NET_SQL,
@@ -108,12 +111,15 @@ from modules.shipments.service import (
     resolve_line_variant_id,
     finish_defect_relocation,
     finish_relocation,
+    line_aside_defect_qty,
     line_aside_qty,
     line_boxed_defect_qty,
     line_boxed_qty,
     line_on_packing_qty,
     line_packed_breakdown,
     line_placed_qty,
+    line_store_barcodes,
+    store_barcode_items,
     list_packing_entries,
     list_task_boxes,
     list_productivity_entries,
@@ -139,6 +145,7 @@ from modules.shipments.service import (
     undo_aside_item,
     undo_box_item,
 )
+from modules.marketplaces.service import apply_store_barcodes, suggest_store_barcodes
 from modules.products.service import assign_product_sku_if_missing
 from modules.push.service import notify_packing_correction
 from modules.timesheet.service import business_today
@@ -759,8 +766,11 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
         boxed_by_line = {str(l["id"]): line_boxed_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
         placed_by_line = {str(l["id"]): line_placed_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
         aside_by_line = {str(l["id"]): line_aside_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
+        aside_defect_by_line = {str(l["id"]): line_aside_defect_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
         boxed_defect_by_line = {str(l["id"]): line_boxed_defect_qty(conn, str(l["id"])) for l in lines_rows} if is_putaway else {}
         boxes = [ShipmentBoxItem(**b) for b in list_task_boxes(conn, doc_id)] if is_putaway else []
+
+        store_barcodes_by_line = line_store_barcodes(conn, doc_id)
 
         # Статус сохранённых кодов файла считается при каждом чтении: «непривязанный»
         # ШК остаётся видимым в деталке, пока его не привязали (или не привязал кто-то ещё).
@@ -812,12 +822,14 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             boxed_qty=boxed_by_line.get(str(l["id"]), 0),
             placed_qty=placed_by_line.get(str(l["id"]), 0),
             aside_qty=aside_by_line.get(str(l["id"]), 0),
+            aside_defect_qty=aside_defect_by_line.get(str(l["id"]), 0),
             boxed_defect_qty=boxed_defect_by_line.get(str(l["id"]), 0),
             available_for_pack=available_for_pack.get(str(l["id"]), 0),
             storage_zone_id=l["storage_zone_id"],
             storage_zone_name=l["storage_zone_name"],
             store_id=l["store_id"],
             store_name=l["store_name"],
+            store_barcodes=store_barcodes_by_line.get(str(l["id"]), []),
             placements=placements_by_line.get(str(l["id"]), []),
             files=files_by_line.get(str(l["id"]), []),
         )
@@ -1118,6 +1130,81 @@ def update_shipment_line_store(doc_id: str, line_id: str, body: ShipmentLineStor
         if status == SHIPMENT_STATUS_ON_PACKING:
             notify_packing_correction(conn, doc_id=doc_id, doc_number=str(row["doc_number"]), body=op_comment)
     return {"message": "ok"}
+
+
+def _store_barcode_suggestions(conn, doc_id: str) -> tuple[list[dict], list[dict]]:
+    """Позиции задачи + предложение по каждой: ШК из кабинета магазина строки."""
+    items = store_barcode_items(conn, doc_id)
+    by_key = {str(i["key"]): i for i in items}
+    out: list[dict] = []
+    for suggestion in suggest_store_barcodes(conn, items):
+        item = by_key[str(suggestion["key"])]
+        out.append({
+            **suggestion,
+            "line_id": str(suggestion["key"]),
+            "product_name": item["product_name"],
+            "product_sku": item["product_sku"],
+            "color_name": item["color_name"],
+            "size_name": item["size_name"],
+            # Для UI «что запишется» — и новые коды, и дозаполнение магазина у своих.
+            "new_barcodes": list(suggestion["new_barcodes"]) + list(suggestion.get("adopt_barcodes") or []),
+        })
+    return items, out
+
+
+@router.get("/shipments/{doc_id}/store-barcodes", response_model=StoreBarcodesResponse)
+def get_store_barcodes(doc_id: str, user=Depends(_get_manager)):
+    """Предпросмотр подтягивания ШК маркетплейса по строкам задачи."""
+    ensure_shipment_planning_access(user)
+    with get_connection() as conn:
+        doc = conn.execute(
+            "SELECT id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        _, suggestions = _store_barcode_suggestions(conn, doc_id)
+    return StoreBarcodesResponse(items=[StoreBarcodeSuggestion(**s) for s in suggestions])
+
+
+@router.post("/shipments/{doc_id}/store-barcodes")
+def apply_store_barcodes_to_lines(
+    doc_id: str,
+    body: StoreBarcodesApply,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
+    """Записать вариантам строк ШК из кабинетов их магазинов (выбор подтверждает менеджер)."""
+    ensure_shipment_planning_access(user)
+    uid = str(user["id"])
+    keys = {str(x) for x in body.line_ids if str(x)}
+    if not keys:
+        raise HTTPException(status_code=400, detail="Выберите позиции")
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_store_barcodes")
+        if not proceed:
+            return stored
+        doc = conn.execute(
+            "SELECT doc_number FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        items = store_barcode_items(conn, doc_id)
+        unknown = keys - {str(i["key"]) for i in items}
+        if unknown:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        stats = apply_store_barcodes(conn, items, keys, uid)
+        if not stats["written"]:
+            raise HTTPException(status_code=400, detail="Нечего записывать: ШК не найдены или заняты")
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE,
+             f"Подтянуты ШК маркетплейса: {stats['written']} шт. по {stats['lines']} позициям",
+             _now(), uid),
+        )
+        result = {"message": f"Записано ШК: {stats['written']}"}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
 
 
 @router.post("/shipments/{doc_id}/lines/{line_id}/pack")

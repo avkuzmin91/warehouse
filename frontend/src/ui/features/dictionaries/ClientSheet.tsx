@@ -9,6 +9,8 @@ import {
   updateDictionaryItem,
 } from '../../../api/adminApi'
 import type { ClientStoreItem, DictionaryItem } from '../../../api/domainTypes'
+import { getMpAccounts, MARKETPLACE_LABELS } from '../../../api/marketplacesApi'
+import type { MpAccountItem } from '../../../api/marketplacesApi'
 import { Drawer } from '../../feedback/Drawer'
 import { Field, Input } from '../../primitives/Input'
 import { Toggle } from '../../primitives/Checkbox'
@@ -22,13 +24,14 @@ interface ClientSheetProps {
   initial?: DictionaryItem | null
 }
 
-type StoreDraft = { name: string; is_active: boolean }
+type StoreDraft = { name: string; is_active: boolean; mp_account_id: string }
 
 export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSheetProps) {
   const [name, setName] = useState('')
   const [active, setActive] = useState(true)
   const [stores, setStores] = useState<ClientStoreItem[]>([])
   const [storeDrafts, setStoreDrafts] = useState<Record<string, StoreDraft>>({})
+  const [accounts, setAccounts] = useState<MpAccountItem[]>([])
   const [newStoreName, setNewStoreName] = useState('')
   const [saving, setSaving] = useState(false)
   const [storesLoading, setStoresLoading] = useState(false)
@@ -44,7 +47,7 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
       setStores(items)
       setStoreDrafts(Object.fromEntries(items.map((store) => [
         store.id,
-        { name: store.name, is_active: store.is_active },
+        { name: store.name, is_active: store.is_active, mp_account_id: store.mp_account_id ?? '' },
       ])))
     } catch (e) {
       setStoreError(e instanceof Error ? e.message : 'Ошибка загрузки магазинов')
@@ -62,7 +65,14 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
     setNewStoreName('')
     setError(null)
     setStoreError(null)
-    if (!isNew && initial?.id) void loadStores(initial.id)
+    setAccounts([])
+    if (!isNew && initial?.id) {
+      void loadStores(initial.id)
+      // Кабинеты нужны для привязки магазина: ШК подтягиваются из кабинета его магазина.
+      void getMpAccounts()
+        .then((res) => setAccounts(res.items.filter((a) => a.client_id === initial.id)))
+        .catch(() => setAccounts([]))
+    }
   }, [open, initial, isNew, loadStores])
 
   const handleSave = async () => {
@@ -112,6 +122,7 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
       await updateClientStore(initial.id, storeId, {
         name: draft.name.trim(),
         is_active: draft.is_active,
+        mp_account_id: draft.mp_account_id,
       })
       await loadStores(initial.id)
     } catch (e) {
@@ -138,7 +149,7 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
   function setStoreDraft(storeId: string, patch: Partial<StoreDraft>) {
     setStoreDrafts((prev) => ({
       ...prev,
-      [storeId]: { ...(prev[storeId] ?? { name: '', is_active: true }), ...patch },
+      [storeId]: { ...(prev[storeId] ?? { name: '', is_active: true, mp_account_id: '' }), ...patch },
     }))
   }
 
@@ -219,8 +230,11 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {stores.map((store) => {
-                const draft = storeDrafts[store.id] ?? { name: store.name, is_active: store.is_active }
-                const dirty = draft.name !== store.name || draft.is_active !== store.is_active
+                const draft = storeDrafts[store.id]
+                  ?? { name: store.name, is_active: store.is_active, mp_account_id: store.mp_account_id ?? '' }
+                const dirty = draft.name !== store.name
+                  || draft.is_active !== store.is_active
+                  || draft.mp_account_id !== (store.mp_account_id ?? '')
                 const busy = storeSavingId === store.id
                 return (
                   <div
@@ -263,6 +277,25 @@ export function ClientSheet({ open, onClose, onSaved, isNew, initial }: ClientSh
                     >
                       <Icon name="trash" size={13} />
                     </button>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <select
+                        className="input sm"
+                        style={{ width: '100%' }}
+                        value={draft.mp_account_id}
+                        disabled={busy}
+                        onChange={(e) => setStoreDraft(store.id, { mp_account_id: e.target.value })}
+                      >
+                        <option value="">Без кабинета маркетплейса</option>
+                        {accounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {MARKETPLACE_LABELS[account.marketplace]} · {account.name}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="text-xs subtle" style={{ marginTop: 4 }}>
+                        Кабинет магазина — из него подтягиваются ШК товара
+                      </div>
+                    </div>
                   </div>
                 )
               })}

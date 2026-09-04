@@ -328,7 +328,10 @@ def list_relocations(
     limit: int = Query(50, ge=1, le=200),
     client_id: str | None = Query(None),
     search: str | None = Query(None),
+    boxed_only: bool = Query(False, description="Только движения коробов"),
     user=Depends(get_current_shipment_viewer),
 ):
     with get_connection() as conn:
-        return list_zone_relocations(conn, page=page, limit=limit, client_id=client_id, search=search)
+        return list_zone_relocations(
+            conn, page=page, limit=limit, client_id=client_id, search=search, boxed_only=boxed_only,
+        )

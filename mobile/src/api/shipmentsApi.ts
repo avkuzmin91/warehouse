@@ -54,6 +54,7 @@ export type ShipmentLine = {
   boxed_qty: number
   boxed_defect_qty: number
   aside_qty: number
+  aside_defect_qty: number
   placed_qty: number
   available_for_pack: number
   store_id: string | null

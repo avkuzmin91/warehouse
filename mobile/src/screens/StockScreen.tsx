@@ -13,6 +13,7 @@ import {
   type ZoneBalance,
 } from '../api/balancesApi'
 import { newRequestId } from '../api/http'
+import { useNav } from '../nav/NavContext'
 import { balanceKey } from '../utils/balanceKey'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
@@ -90,6 +91,7 @@ function groupByProduct(rows: ZoneBalance[]): ProductGroup[] {
 }
 
 export function StockScreen() {
+  const { openPlace } = useNav()
   const toast = useToast()
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<ZoneBalance[]>([])
@@ -228,6 +230,10 @@ export function StockScreen() {
         )}
         {!selectedPlace && (
           <>
+            {/* Перемещения по складу — постоянная работа, а не продолжение задачи. */}
+            <button className="btn" style={{ width: '100%', marginBottom: 12 }} onClick={() => openPlace()}>
+              <Icon name="layers" size={18} /> Перенос — короба и товар
+            </button>
             <div className="input search-wrap" style={{ marginBottom: 14 }}>
               <Icon name="search" size={18} />
               <input

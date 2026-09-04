@@ -80,8 +80,20 @@ export type ContainerLabel = {
 
 export type ContainerLookupResponse = { found: boolean; container: ContainerItem | null }
 
-/** Скан товара, собранного мимо короба: качество определится само, если оно одно. */
-export type ContainerPlaceItemScan = { barcode: string; qty?: number; quality?: 'good' | 'defect' }
+/** Позиция в пачке переноса: ШК со сканера либо явный вариант (в вебе сканера нет).
+ *
+ * from_zone_id — «взял отсюда»; без него товар ищется сам: сначала среди ждущего
+ * размещения, затем на хранении. Качество не указывают, пока оно однозначно.
+ */
+export type ContainerPlaceItemScan = {
+  barcode?: string
+  product_id?: string
+  color_id?: string | null
+  size_id?: string | null
+  qty?: number
+  quality?: 'good' | 'defect'
+  from_zone_id?: string | null
+}
 
 export type ContainerPlacedItem = {
   product_name: string | null
@@ -90,6 +102,8 @@ export type ContainerPlacedItem = {
   size_name: string | null
   quality: 'good' | 'defect'
   qty: number
+  /** false — товар взят с полки (перенос), true — собранное, ждавшее размещения. */
+  from_collected: boolean
 }
 
 export type ContainerPlaceResult = {
@@ -132,6 +146,23 @@ export function getContainerLabels(ids: string[], signal?: AbortSignal) {
   return request<{ items: ContainerLabel[] }>(`/containers/labels?${sp.toString()}`, { signal })
 }
 
+/** Что из позиций лежит в коробах в этих местах — бейдж «в коробе» в остатках. */
+export type ContainerHoldingRow = {
+  zone_id: string
+  product_id: string
+  color_id: string | null
+  size_id: string | null
+  client_id: string | null
+  quality: 'good' | 'defect'
+  doc_number: string
+  qty: number
+}
+
+export function getContainerHoldings(zoneIds: string[], signal?: AbortSignal) {
+  const sp = new URLSearchParams({ zone_ids: zoneIds.join(',') })
+  return request<{ items: ContainerHoldingRow[] }>(`/containers/holdings?${sp.toString()}`, { signal })
+}
+
 export function getContainerByCode(code: string, signal?: AbortSignal) {
   return request<ContainerLookupResponse>(`/containers/by-code/${encodeURIComponent(code)}`, { signal })
 }
@@ -161,7 +192,10 @@ export function placeContainers(payload: {
 }
 
 /** Изъятие позиции из размещённого короба: товар остаётся в месте россыпью. */
-export function removeContainerItem(id: string, payload: { barcode: string; qty?: number }) {
+export function removeContainerItem(
+  id: string,
+  payload: { barcode?: string; product_id?: string; color_id?: string | null; size_id?: string | null; qty?: number },
+) {
   return request<ContainerItem>(`/containers/${id}/items/remove`, {
     method: 'POST',
     body: JSON.stringify(payload),

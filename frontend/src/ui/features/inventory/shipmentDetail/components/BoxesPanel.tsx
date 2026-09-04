@@ -6,7 +6,9 @@ import {
   reopenShipmentBox,
   SHIPMENT_BOX_STATUS_LABELS,
 } from '../../../../../api/shipmentsApi'
-import type { ShipmentBox, ShipmentDetail } from '../../../../../api/shipmentsApi'
+import type { ShipmentBox, ShipmentDetail, ShipmentLine } from '../../../../../api/shipmentsApi'
+import { placeContainers } from '../../../../../api/containersApi'
+import { Combobox } from '../../../../data/Combobox'
 import { Icon } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
@@ -17,12 +19,13 @@ import { useConfirm } from '../../../../feedback/ConfirmDialog'
 export type CellOption = { id: string; name: string }
 
 type Props = {
-  docId:      string
-  doc:        ShipmentDetail
-  canEdit:    boolean
-  readOnly?:  boolean
-  collected?: boolean
-  onDone:     () => Promise<void> | void
+  docId:       string
+  doc:         ShipmentDetail
+  canEdit:     boolean
+  readOnly?:   boolean
+  collected?:  boolean
+  zoneOptions: CellOption[]
+  onDone:      () => Promise<void> | void
 }
 
 function boxTone(status: ShipmentBox['status']): 'success' | 'info' | 'warning' {
@@ -37,10 +40,14 @@ function boxTone(status: ShipmentBox['status']): 'success' | 'info' | 'warning' 
  * местам — отдельный процесс на ТСД у стеллажа, поэтому здесь её нет: только
  * контроль, разбор ошибок и кнопка «Сборка завершена».
  */
-export function BoxesPanel({ docId, doc, canEdit, readOnly = false, collected = false, onDone }: Props) {
+export function BoxesPanel({
+  docId, doc, canEdit, readOnly = false, collected = false, zoneOptions, onDone,
+}: Props) {
   const toast = useToast()
   const confirm = useConfirm()
   const [busy, setBusy] = useState<string | null>(null)
+  // Ручная развозка без ТСД: место выбирается из справочника для каждого объекта.
+  const [zoneByKey, setZoneByKey] = useState<Record<string, string>>({})
 
   const boxes = doc.boxes ?? []
   // Пустой открытый короб задачу не держит: при завершении сборки он освобождается сам.
@@ -52,6 +59,8 @@ export function BoxesPanel({ docId, doc, canEdit, readOnly = false, collected = 
   const boxedTotal = doc.lines.reduce((s, l) => s + l.boxed_qty, 0)
   const asideTotal = doc.lines.reduce((s, l) => s + l.aside_qty, 0)
   const defectTotal = doc.lines.reduce((s, l) => s + l.boxed_defect_qty, 0)
+  const asideLines = doc.lines.filter((l) => l.aside_qty > 0)
+  const zoneOpts = zoneOptions.map((z) => ({ value: z.id, label: z.name }))
 
   async function run(key: string, fn: () => Promise<unknown>) {
     setBusy(key)
@@ -75,6 +84,36 @@ export function BoxesPanel({ docId, doc, canEdit, readOnly = false, collected = 
     })
     if (!ok) return
     await run('finish', () => finishCollecting(docId))
+  }
+
+  async function placeBox(box: ShipmentBox) {
+    const zoneId = zoneByKey[box.id]
+    if (!zoneId) return
+    await run(`place-${box.id}`, async () => {
+      const res = await placeContainers({ zone_id: zoneId, box_ids: [box.id] })
+      setZoneByKey((prev) => ({ ...prev, [box.id]: '' }))
+      toast(`Короб ${box.doc_number} → ${res.zone_name}`, 'success')
+    })
+  }
+
+  async function placeAside(line: ShipmentLine, quality: 'good' | 'defect', qty: number) {
+    const key = `${line.id}-${quality}`
+    const zoneId = zoneByKey[key]
+    if (!zoneId || qty <= 0) return
+    await run(`aside-${key}`, async () => {
+      const res = await placeContainers({
+        zone_id: zoneId,
+        items: [{
+          product_id: line.product_id,
+          color_id: line.color_id,
+          size_id: line.size_id,
+          quality,
+          qty,
+        }],
+      })
+      setZoneByKey((prev) => ({ ...prev, [key]: '' }))
+      toast(`${qty} шт. → ${res.zone_name}`, 'success')
+    })
   }
 
   const hint = readOnly
@@ -149,7 +188,27 @@ export function BoxesPanel({ docId, doc, canEdit, readOnly = false, collected = 
                     Открыть заново
                   </button>
                 )}
-                {collected && b.status === 'closed' && (
+                {collected && b.status === 'closed' && canEdit && (
+                  <>
+                    <div style={{ minWidth: 200 }}>
+                      <Combobox
+                        options={zoneOpts}
+                        value={zoneByKey[b.id] ?? ''}
+                        onChange={(v) => setZoneByKey((prev) => ({ ...prev, [b.id]: String(v ?? '') }))}
+                        placeholder="Место хранения"
+                      />
+                    </div>
+                    <button
+                      className="btn sm primary"
+                      disabled={busy != null || !zoneByKey[b.id]}
+                      title="Обычно короб развозят сканером; здесь — вручную, если ТСД нет"
+                      onClick={() => { void placeBox(b) }}
+                    >
+                      Разместить
+                    </button>
+                  </>
+                )}
+                {collected && b.status === 'closed' && !canEdit && (
                   <span className="t-sub" style={{ fontSize: 12 }}>ждёт развозки</span>
                 )}
               </div>
@@ -193,6 +252,58 @@ export function BoxesPanel({ docId, doc, canEdit, readOnly = false, collected = 
               На столе ещё {poolLeft} шт — при завершении вернутся на хранение
             </span>
           )}
+        </div>
+      )}
+
+      {collected && asideLines.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div className="t-sub" style={{ fontSize: 12, marginBottom: 6 }}>
+            Собрано мимо коробов — ждёт места хранения
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {doc.lines.filter((l) => l.aside_qty > 0).flatMap((l) => {
+              const parts: { quality: 'good' | 'defect'; qty: number }[] = []
+              const defect = l.aside_defect_qty
+              const good = l.aside_qty - defect
+              if (good > 0) parts.push({ quality: 'good', qty: good })
+              if (defect > 0) parts.push({ quality: 'defect', qty: defect })
+              return parts.map(({ quality, qty }) => {
+                const key = `${l.id}-${quality}`
+                return (
+                  <div key={key} className="row gap-8" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span className="mono">{l.product_sku}</span>
+                    <span className="t-sub">
+                      {[l.product_name, l.color_name, l.size_name].filter(Boolean).join(' · ')}
+                    </span>
+                    <span className="num">{qty}</span>
+                    <span style={{ color: quality === 'defect' ? 'var(--c-danger)' : undefined, fontSize: 12 }}>
+                      {quality === 'defect' ? 'брак' : 'годный'}
+                    </span>
+                    <span style={{ flex: 1 }} />
+                    {canEdit && (
+                      <>
+                        <div style={{ minWidth: 200 }}>
+                          <Combobox
+                            options={zoneOpts}
+                            value={zoneByKey[key] ?? ''}
+                            onChange={(v) => setZoneByKey((prev) => ({ ...prev, [key]: String(v ?? '') }))}
+                            placeholder="Место хранения"
+                          />
+                        </div>
+                        <button
+                          className="btn sm"
+                          disabled={busy != null || !zoneByKey[key]}
+                          onClick={() => { void placeAside(l, quality, qty) }}
+                        >
+                          Разместить
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )
+              })
+            })}
+          </div>
         </div>
       )}
 

@@ -21,6 +21,8 @@ log = logging.getLogger("wms.mp")
 OZON_BASE = "https://api-seller.ozon.ru"
 WB_MARKETPLACE_BASE = "https://marketplace-api.wildberries.ru"
 WB_CONTENT_BASE = "https://content-api.wildberries.ru"
+WB_MARKETPLACE_SANDBOX_BASE = "https://marketplace-api-sandbox.wildberries.ru"
+WB_CONTENT_SANDBOX_BASE = "https://content-api-sandbox.wildberries.ru"
 
 _TIMEOUT = 30.0
 _RETRIES = 3
@@ -170,8 +172,16 @@ def _wb_headers(creds: dict) -> dict:
     return {"Authorization": str(creds["api_key"] or "")}
 
 
+def _wb_marketplace(creds: dict) -> str:
+    return WB_MARKETPLACE_SANDBOX_BASE if creds.get("is_sandbox") else WB_MARKETPLACE_BASE
+
+
+def _wb_content(creds: dict) -> str:
+    return WB_CONTENT_SANDBOX_BASE if creds.get("is_sandbox") else WB_CONTENT_BASE
+
+
 def wb_check(creds: dict) -> None:
-    _request("GET", f"{WB_MARKETPLACE_BASE}/ping", headers=_wb_headers(creds))
+    _request("GET", f"{_wb_marketplace(creds)}/ping", headers=_wb_headers(creds))
 
 
 def wb_fetch_cards(creds: dict) -> list[dict]:
@@ -181,7 +191,7 @@ def wb_fetch_cards(creds: dict) -> list[dict]:
     cursor: dict = {"limit": 100}
     while True:
         data = _request(
-            "POST", f"{WB_CONTENT_BASE}/content/v2/get/cards/list", headers=headers,
+            "POST", f"{_wb_content(creds)}/content/v2/get/cards/list", headers=headers,
             json_body={"settings": {"cursor": cursor, "filter": {"withPhoto": -1}}},
         )
         items = (data or {}).get("cards") or []
@@ -201,7 +211,7 @@ def wb_fetch_cards(creds: dict) -> list[dict]:
 
 def wb_fetch_new_orders(creds: dict) -> list[dict]:
     """Новые сборочные задания (ещё не взятые в работу)."""
-    data = _request("GET", f"{WB_MARKETPLACE_BASE}/api/v3/orders/new", headers=_wb_headers(creds))
+    data = _request("GET", f"{_wb_marketplace(creds)}/api/v3/orders/new", headers=_wb_headers(creds))
     return (data or {}).get("orders") or []
 
 
@@ -212,7 +222,7 @@ def wb_fetch_order_statuses(creds: dict, external_ids: list[int]) -> list[dict]:
     for i in range(0, len(external_ids), 1000):
         chunk = external_ids[i:i + 1000]
         data = _request(
-            "POST", f"{WB_MARKETPLACE_BASE}/api/v3/orders/status", headers=headers,
+            "POST", f"{_wb_marketplace(creds)}/api/v3/orders/status", headers=headers,
             json_body={"orders": chunk},
         )
         statuses.extend((data or {}).get("orders") or [])

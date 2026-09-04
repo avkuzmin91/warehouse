@@ -583,6 +583,95 @@ def test_placed_box_moves_between_locations(api, client_id, product, zones):
     assert sum(c["qty"] for c in detail["contents"]) == 2  # содержимое при переезде не изменилось
 
 
+def test_scan_move_of_stored_goods_between_locations(api, client_id, product, zones):
+    """Тем же сканом двигают уже размещённый товар: место → место, без задачи."""
+    _doc_id, _box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    # Часть выкладываем из короба, иначе двигать её нельзя — короб атомарен.
+    api.post(f"/containers/{_box_id}/items/remove", json={"barcode": product["barcode"], "qty": 1})
+
+    moved = _place(
+        api, zone_id=zones["special_id"],
+        items=[{"barcode": product["barcode"], "qty": 1, "from_zone_id": zones["cell_id"]}],
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["items"][0]["from_collected"] is False
+    assert moved.json()["placed_qty"] == 1
+    # Перенос ничью задачу не закрывает и остаток не меняет — меняется только место.
+    assert moved.json()["closed_tasks"] == []
+    assert _bucket(client_id, product["product_id"], "storage") == 2
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
+            "WHERE product_id = ? AND to_op = 'storage' AND to_zone_id = ? AND from_op = 'storage'",
+            (product["product_id"], zones["special_id"]),
+        ).fetchone()
+    assert int(row["n"]) == 1
+
+
+def test_scan_move_refuses_goods_locked_in_box(api, client_id, product, zones):
+    """Товар в коробе сканом не утащить: короб едет целиком."""
+    _doc_id, _box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    blocked = _place(
+        api, zone_id=zones["special_id"],
+        items=[{"barcode": product["barcode"], "qty": 1, "from_zone_id": zones["cell_id"]}],
+    )
+    assert blocked.status_code == 400, blocked.text
+    assert "коробе" in blocked.json()["detail"]
+
+
+def test_scan_move_asks_source_when_ambiguous(api, client_id, product, zones):
+    """Товар лежит в двух местах — источник спрашиваем, а не угадываем."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    api.post(f"/containers/{box_id}/items/remove", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/containers/{box_id}/move", json={"zone_id": zones["special_id"]})
+    # Половину переносим в служебное место — товар оказывается в двух местах.
+    api.post("/balances/relocations", json={
+        "product_id": product["product_id"],
+        "product_name": "Putaway Product",
+        "product_sku": product["sku"],
+        "client_id": client_id,
+        "quality": "good",
+        "qty": 1,
+        "from_zone_id": zones["cell_id"],
+        "to_zone_id": zones["special_id"],
+    })
+
+    ambiguous = _place(api, zone_id=zones["packing_id"], items=[{"barcode": product["barcode"], "qty": 1}])
+    assert ambiguous.status_code == 400
+    assert "нескольких местах" in ambiguous.json()["detail"]
+
+    ok = _place(
+        api, zone_id=zones["packing_id"],
+        items=[{"barcode": product["barcode"], "qty": 1, "from_zone_id": zones["cell_id"]}],
+    )
+    assert ok.status_code == 200, ok.text
+
+
+def test_holdings_report_boxes_in_location(api, client_id, product, zones):
+    """Остатки должны показывать, что позиция лежит в коробе, а не упираться в отказ."""
+    _doc_id, _box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    r = api.get(f"/containers/holdings?zone_ids={zones['cell_id']}")
+    assert r.status_code == 200, r.text
+    rows = [i for i in r.json()["items"] if i["product_id"] == product["product_id"]]
+    assert len(rows) == 1
+    assert rows[0]["qty"] == 2 and rows[0]["doc_number"].startswith("BOX-")
+
+
+def test_relocations_journal_shows_box(api, client_id, product, zones):
+    """Журнал перемещений различает движение коробом — иначе развозки в нём не видно."""
+    _doc_id, _box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    _as(_ADMIN)
+    r = api.get("/balances/relocations?boxed_only=true&limit=50")
+    assert r.status_code == 200, r.text
+    mine = [i for i in r.json()["items"] if i["product_sku"] == product["sku"]]
+    assert mine, r.text
+    assert any(i["to_container"] for i in mine)
+
+
 def test_packing_task_has_no_boxes(api, client_id, product, zones):
     """Короба не относятся к обычной задаче упаковки."""
     _as(_ADMIN)

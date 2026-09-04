@@ -31,6 +31,8 @@ const ROUTES: Array<[pattern: string, crumbs: CrumbDef[]]> = [
   ['/inventory/receipts', [INVENTORY, { label: 'Поступления' }]],
   ['/inventory/receipts/new', [INVENTORY, { label: 'Поступления', to: '/inventory/receipts' }, { label: 'Новое поступление' }]],
   ['/inventory/receipts/:docId', [INVENTORY, { label: 'Поступления', to: '/inventory/receipts' }, { label: 'Карточка поступления' }]],
+  ['/inventory/boxes', [INVENTORY, { label: 'Короба' }]],
+  ['/inventory/boxes/:boxId', [INVENTORY, { label: 'Короба', to: '/inventory/boxes' }, { label: 'Карточка короба' }]],
   ['/inventory/packing', [INVENTORY, { label: 'Упаковка' }]],
   ['/inventory/packing/productivity', [INVENTORY, PACKING, { label: 'Производительность' }]],
   ['/inventory/shipments/new', [INVENTORY, PACKING, { label: 'Новая задача упаковки' }]],
@@ -60,6 +62,8 @@ const ROUTES: Array<[pattern: string, crumbs: CrumbDef[]]> = [
   ['/finance/recurring', [FINANCE, { label: 'Регулярные расходы' }]],
   ['/finance/storage', [FINANCE, { label: 'Хранение' }]],
 
+  ['/marketplaces/supplies', [MARKETPLACES, { label: 'Отгрузки FBS' }]],
+  ['/marketplaces/supplies/:supplyId', [MARKETPLACES, { label: 'Отгрузки FBS', to: '/marketplaces/supplies' }, { label: 'Поставка' }]],
   ['/marketplaces/orders', [MARKETPLACES, { label: 'FBS-заказы' }]],
   ['/marketplaces/orders/:orderId', [MARKETPLACES, { label: 'FBS-заказы', to: '/marketplaces/orders' }, { label: 'Карточка заказа' }]],
   ['/marketplaces/links', [MARKETPLACES, { label: 'Связка товаров' }]],

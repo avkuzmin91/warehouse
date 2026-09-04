@@ -12,11 +12,12 @@ export type TaskKind =
   | 'shipment_relocate'
   | 'shipment_defect_prepare'
   | 'dispatch_prepare'
+  | 'mp_supply_pick'
 
 export type TaskItem = {
   kind: TaskKind
   title: string
-  doc_type: 'trip' | 'receipt' | 'shipment' | 'dispatch'
+  doc_type: 'trip' | 'receipt' | 'shipment' | 'dispatch' | 'mp_supply'
   doc_id: string
   doc_number: string
   status: string
@@ -57,5 +58,6 @@ export function taskLink(task: TaskItem): string {
   if (task.doc_type === 'trip')     return `/logistics/trips/${task.doc_id}`
   if (task.doc_type === 'shipment') return `/inventory/shipments/${task.doc_id}`
   if (task.doc_type === 'dispatch') return `/inventory/dispatches/${task.doc_id}`
+  if (task.doc_type === 'mp_supply') return `/marketplaces/supplies/${task.doc_id}`
   return `/inventory/receipts/${task.doc_id}`
 }

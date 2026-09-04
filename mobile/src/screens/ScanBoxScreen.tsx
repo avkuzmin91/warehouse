@@ -203,7 +203,7 @@ export function ScanBoxScreen({ containerId }: { containerId: string }) {
                 </>
               )}
               {(box.status === 'closed' || box.status === 'placed') && (
-                <button className="btn ghost" disabled={busy} onClick={openPlace}>
+                <button className="btn ghost" disabled={busy} onClick={() => openPlace()}>
                   <Icon name="layers" size={16} /> Везу пачкой — открыть «Перенос»
                 </button>
               )}

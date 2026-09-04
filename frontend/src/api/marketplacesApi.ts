@@ -14,6 +14,7 @@ export type MpAccountItem = {
   name: string
   ozon_client_id_masked: string | null
   api_key_masked: string
+  is_sandbox: boolean
   status: MpAccountStatus
   last_sync_at: string | null
   last_sync_error: string | null
@@ -28,6 +29,7 @@ export type MpAccountCreatePayload = {
   name: string
   ozon_client_id?: string
   api_key: string
+  is_sandbox?: boolean
 }
 
 export type MpAccountUpdatePayload = {
@@ -35,6 +37,7 @@ export type MpAccountUpdatePayload = {
   status?: MpAccountStatus
   ozon_client_id?: string
   api_key?: string
+  is_sandbox?: boolean
 }
 
 export type SyncStatsResponse = { message: string; stats: Record<string, number> }
@@ -55,6 +58,9 @@ export type MpOrderListItem = {
   total_qty: number
   lines_total: number
   lines_linked: number
+  supply_id: string | null
+  supply_number: string | null
+  supply_status: string | null
   first_seen_at: string
   updated_at: string
 }
@@ -121,6 +127,7 @@ export type MpOrderListParams = {
   marketplace?: string
   status?: string
   overdue?: boolean
+  no_supply?: boolean
   search?: string
 }
 
@@ -180,6 +187,7 @@ export function getMpOrders(params: MpOrderListParams = {}, signal?: AbortSignal
   if (params.marketplace) sp.set('marketplace', params.marketplace)
   if (params.status) sp.set('status', params.status)
   if (params.overdue) sp.set('overdue', 'true')
+  if (params.no_supply) sp.set('no_supply', 'true')
   if (params.search) sp.set('search', params.search)
   const q = sp.toString()
   return request<MpOrdersResponse>(`/marketplaces/orders${q ? `?${q}` : ''}`, { signal })
@@ -258,4 +266,188 @@ export function isMpOrderOverdue(item: Pick<MpOrderListItem, 'status' | 'deadlin
   if (!item.deadline_at) return false
   if (item.status !== 'new' && item.status !== 'in_progress') return false
   return new Date(item.deadline_at).getTime() < Date.now()
+}
+
+// --- FBS-поставки ---
+export type MpSupplyStatus = 'draft' | 'checking' | 'picking' | 'handover' | 'done' | 'cancelled'
+export type MpSupplyOrderState = 'selected' | 'unselected' | 'pending'
+
+export type MpSupplyBoardItem = {
+  id: string
+  doc_number: string
+  status: MpSupplyStatus
+  account_id: string
+  account_name: string
+  marketplace: Marketplace
+  client_id: string
+  client_name: string | null
+  cutoff_at: string | null
+  intake_closes_at: string | null
+  intake_closed_at: string | null
+  overdue: boolean
+  orders_total: number
+  orders_ready: number
+  orders_pending: number
+  positions: number
+  total_qty: number
+  cells_count: number
+  unlinked_positions: number
+  shortage_positions: number
+  no_location_positions: number
+  created_at: string
+  updated_at: string
+}
+
+export type MpSupplyBoardResponse = {
+  items: MpSupplyBoardItem[]
+  counters: { supplies: number; orders: number; overdue: number }
+}
+
+export type MpSupplyOrderItem = {
+  order_id: string
+  external_id: string
+  order_status: MpOrderStatus
+  state: MpSupplyOrderState
+  deadline_at: string | null
+  created_at_mp: string | null
+  lines_total: number
+  total_qty: number
+  summary: string
+  cells: string[]
+  blockers: string[]
+  ready: boolean
+}
+
+export type MpSupplyPickItem = {
+  variant_id: string | null
+  product_id: string | null
+  product_sku: string | null
+  product_name: string | null
+  color_name: string | null
+  size_name: string | null
+  offer_id: string | null
+  linked: boolean
+  need_qty: number
+  available_qty: number
+  shortage_qty: number
+  orders_count: number
+  cells: string[]
+}
+
+export type MpSupplyBlocker = {
+  kind: 'unlinked' | 'shortage'
+  text: string
+  orders_count: number
+  variant_id: string | null
+}
+
+export type MpSupplyDoc = MpSupplyBoardItem & {
+  created_by_name: string | null
+  external_supply_id: string | null
+  checking_at: string | null
+  picking_at: string | null
+  handover_at: string | null
+  done_at: string | null
+}
+
+export type MpSupplyDetail = {
+  doc: MpSupplyDoc
+  orders: MpSupplyOrderItem[]
+  pick_list: MpSupplyPickItem[]
+  blockers: MpSupplyBlocker[]
+}
+
+export type MpSupplyOpItem = {
+  id: string
+  op_type: string
+  comment: string | null
+  created_at: string
+  created_by_name: string | null
+}
+
+export type MpSupplyCandidateItem = {
+  order_id: string
+  external_id: string
+  order_status: MpOrderStatus
+  deadline_at: string | null
+  created_at_mp: string | null
+  total_qty: number
+}
+
+export type MpSupplyBoardParams = { client_id?: string; marketplace?: string; account_id?: string }
+
+export function getMpSupplyBoard(params: MpSupplyBoardParams = {}, signal?: AbortSignal) {
+  const sp = new URLSearchParams()
+  if (params.client_id) sp.set('client_id', params.client_id)
+  if (params.marketplace) sp.set('marketplace', params.marketplace)
+  if (params.account_id) sp.set('account_id', params.account_id)
+  const q = sp.toString()
+  return request<MpSupplyBoardResponse>(`/marketplaces/supplies/board${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getMpSupply(supplyId: string, signal?: AbortSignal) {
+  return request<MpSupplyDetail>(`/marketplaces/supplies/${supplyId}`, { signal })
+}
+
+export function getMpSupplyCandidates(supplyId: string, signal?: AbortSignal) {
+  return request<{ items: MpSupplyCandidateItem[] }>(
+    `/marketplaces/supplies/${supplyId}/candidates`, { signal },
+  )
+}
+
+export function getMpSupplyOps(supplyId: string, signal?: AbortSignal) {
+  return request<{ items: MpSupplyOpItem[] }>(`/marketplaces/supplies/${supplyId}/ops`, { signal })
+}
+
+export function setMpSupplyOrders(supplyId: string, orderIds: string[]) {
+  return request<{ message: string }>(`/marketplaces/supplies/${supplyId}/orders`, {
+    method: 'PUT',
+    body: JSON.stringify({ order_ids: orderIds }),
+  })
+}
+
+export function dockMpSupplyOrders(supplyId: string, orderIds: string[]) {
+  return request<{ message: string }>(`/marketplaces/supplies/${supplyId}/dock`, {
+    method: 'POST',
+    body: JSON.stringify({ order_ids: orderIds }),
+  })
+}
+
+export function advanceMpSupply(supplyId: string) {
+  return request<{ message: string }>(`/marketplaces/supplies/${supplyId}/advance`, { method: 'POST' })
+}
+
+export function cancelMpSupply(supplyId: string) {
+  return request<{ message: string }>(`/marketplaces/supplies/${supplyId}/cancel`, { method: 'POST' })
+}
+
+export const MP_SUPPLY_STATUS_LABELS: Record<MpSupplyStatus, string> = {
+  draft: 'Состав',
+  checking: 'Проверка',
+  picking: 'Сборка',
+  handover: 'Передача',
+  done: 'Передана',
+  cancelled: 'Аннулирована',
+}
+
+/** Подпись главной кнопки фазы — она же индикатор, что сейчас делает менеджер. */
+export const MP_SUPPLY_ADVANCE_LABELS: Record<MpSupplyStatus, string> = {
+  draft: 'Утвердить состав',
+  checking: 'Передать в сборку',
+  picking: 'Собрано, к передаче',
+  handover: 'Закрыть поставку',
+  done: '',
+  cancelled: '',
+}
+
+export function mpSupplyStatusTone(status: MpSupplyStatus): BadgeTone {
+  const map: Record<MpSupplyStatus, BadgeTone> = {
+    draft: '',
+    checking: 'warning',
+    picking: 'info',
+    handover: 'accent',
+    done: 'success',
+    cancelled: 'danger',
+  }
+  return map[status] ?? ''
 }

@@ -27,7 +27,7 @@ function kindLabel(kind: string): string {
 // Карточка места по отсканированному QR: что это за место + что в нём лежит (остатки,
 // отфильтрованные точно по location_id) + участие в живых документах.
 export function ScanLocationScreen({ location }: { location: LocationMatch }) {
-  const { back } = useNav()
+  const { back, openPlace } = useNav()
   const [rows, setRows] = useState<ZoneBalance[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -92,6 +92,15 @@ export function ScanLocationScreen({ location }: { location: LocationMatch }) {
             {error}
           </div>
         )}
+
+        {/* Перенос начинается там, где человек стоит: отсканировал место — забирает из него. */}
+        <button
+          className="btn"
+          style={{ width: '100%' }}
+          onClick={() => openPlace({ id: location.id, code: location.code })}
+        >
+          <Icon name="layers" size={18} /> Взять отсюда — перенос
+        </button>
 
         {loading ? (
           <div className="center">

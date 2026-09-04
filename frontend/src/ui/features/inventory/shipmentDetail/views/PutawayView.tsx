@@ -8,6 +8,7 @@ import type { CompositionPhaseProps } from '../components/CompositionPhase'
 import { PackingPhase } from '../components/PackingPhase'
 import type { PackingPhaseData } from '../components/PackingPhase'
 import { BoxesPanel } from '../components/BoxesPanel'
+import type { CellOption } from '../components/BoxesPanel'
 import { Panel, ReadRow, RailPanel, ChecklistPanel, LockedGrid } from '../components/processUI'
 import type { ChecklistItem } from '../components/processUI'
 
@@ -20,6 +21,7 @@ type Props = {
   info:        InfoPhaseProps
   composition: CompositionPhaseProps
   packing:     PackingPhaseData
+  zoneOptions: CellOption[]
   canManage:   boolean
   checklist:   ChecklistItem[]
   onDone:      () => Promise<void> | void
@@ -31,7 +33,7 @@ type Props = {
  * поэтому карточка заканчивается на «Сборка завершена»: дальше задача закрывается сама.
  */
 export function PutawayView({
-  docId, doc, isPacking, isCollected, isPlaced, info, composition, packing,
+  docId, doc, isPacking, isCollected, isPlaced, info, composition, packing, zoneOptions,
   canManage, checklist, onDone,
 }: Props) {
   const planTotal = doc.lines.reduce((s, l) => s + l.qty, 0)
@@ -76,6 +78,7 @@ export function PutawayView({
             canEdit={canManage}
             readOnly={isPlaced}
             collected={isCollected}
+            zoneOptions={zoneOptions}
             onDone={onDone}
           />
         )}

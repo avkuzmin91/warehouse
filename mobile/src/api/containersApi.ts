@@ -73,8 +73,20 @@ export type ContainerListParams = {
 
 export type ContainerLookupResponse = { found: boolean; container: ContainerItem | null }
 
-/** Скан товара, собранного мимо короба: качество определится само, если оно одно. */
-export type ContainerPlaceItemScan = { barcode: string; qty?: number; quality?: 'good' | 'defect' }
+/** Позиция в пачке переноса: ШК со сканера либо явный вариант.
+ *
+ * from_zone_id — «взял отсюда»; без него товар ищется сам: сначала среди ждущего
+ * размещения, затем на хранении. Качество не указывают, пока оно однозначно.
+ */
+export type ContainerPlaceItemScan = {
+  barcode?: string
+  product_id?: string
+  color_id?: string | null
+  size_id?: string | null
+  qty?: number
+  quality?: 'good' | 'defect'
+  from_zone_id?: string | null
+}
 
 export type ContainerPlacedItem = {
   product_name: string | null
@@ -83,6 +95,8 @@ export type ContainerPlacedItem = {
   size_name: string | null
   quality: 'good' | 'defect'
   qty: number
+  /** false — товар взят с полки (перенос), true — собранное, ждавшее размещения. */
+  from_collected: boolean
 }
 
 export type ContainerPlaceResult = {
@@ -147,7 +161,9 @@ export function moveContainer(id: string, zoneId: string, requestId: string) {
 
 /** Изъятие позиции из размещённого короба: товар остаётся в месте россыпью. */
 export function removeContainerItem(
-  id: string, payload: { barcode: string; qty?: number }, requestId: string,
+  id: string,
+  payload: { barcode?: string; product_id?: string; color_id?: string | null; size_id?: string | null; qty?: number },
+  requestId: string,
 ) {
   return request<ContainerItem>(`/containers/${id}/items/remove`, {
     method: 'POST',

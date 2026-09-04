@@ -139,6 +139,9 @@ def _client_store_row_to_item(row: Mapping[str, Any]) -> ClientStoreItem:
         client_id=row["client_id"],
         name=row["name"],
         is_active=bool(row["is_active"]),
+        mp_account_id=row["mp_account_id"],
+        mp_account_name=row["mp_account_name"],
+        mp_marketplace=row["mp_marketplace"],
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
         deleted_by=row["deleted_by"],
@@ -336,9 +339,11 @@ def list_client_stores(client_id: str, *, include_deleted: bool = False) -> list
         rows = connection.execute(
             f"""
             SELECT s.id, s.client_id, s.name, s.is_active, COALESCE(s.is_deleted, 0) AS is_deleted,
-                   s.deleted_at, s.created_at, s.updated_at,
+                   s.deleted_at, s.created_at, s.updated_at, s.mp_account_id,
+                   acc.name AS mp_account_name, acc.marketplace AS mp_marketplace,
                    COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM client_stores s
+            LEFT JOIN mp_accounts acc ON acc.id = s.mp_account_id AND COALESCE(acc.is_deleted, 0) = 0
             LEFT JOIN users creator ON creator.id = s.creator_id
             LEFT JOIN users editor ON editor.id = s.updated_by_id
             LEFT JOIN users deleter ON deleter.id = s.deleted_by_id
@@ -350,18 +355,38 @@ def list_client_stores(client_id: str, *, include_deleted: bool = False) -> list
     return [_client_store_row_to_item(row) for row in rows]
 
 
+def _resolve_store_mp_account(connection, client_id: str, mp_account_id: str | None) -> str | None:
+    """Кабинет МП магазина: пустая строка — снять привязку, иначе кабинет того же клиента."""
+    value = (mp_account_id or "").strip()
+    if not value:
+        return None
+    row = connection.execute(
+        "SELECT client_id FROM mp_accounts WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
+        (value,),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Подключение не найдено")
+    if str(row["client_id"]) != str(client_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Кабинет маркетплейса принадлежит другому клиенту",
+        )
+    return value
+
+
 def create_client_store(client_id: str, payload: ClientStoreCreateRequest, creator_id: str) -> MessageResponse:
     store_id = str(uuid4())
     name = _normalize_name(payload.name)
     with get_connection() as connection:
         _ensure_client_exists(connection, client_id)
+        account_id = _resolve_store_mp_account(connection, client_id, payload.mp_account_id)
         try:
             connection.execute(
                 """
-                INSERT INTO client_stores (id, client_id, name, is_active, created_at, creator_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO client_stores (id, client_id, name, is_active, mp_account_id, created_at, creator_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (store_id, client_id, name, 1 if payload.is_active else 0, _now(), creator_id),
+                (store_id, client_id, name, 1 if payload.is_active else 0, account_id, _now(), creator_id),
             )
             connection.commit()
         except IntegrityError as exc:
@@ -386,7 +411,7 @@ def update_client_store(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Магазин не найден")
         is_del = bool(meta["del"])
         if is_del and payload.is_deleted is not False:
-            if payload.name is not None or payload.is_active is not None:
+            if payload.name is not None or payload.is_active is not None or payload.mp_account_id is not None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Магазин удалён. Восстановите его перед редактированием.",
@@ -407,6 +432,9 @@ def update_client_store(
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
+        if payload.mp_account_id is not None:
+            fields.append("mp_account_id = ?")
+            values.append(_resolve_store_mp_account(connection, client_id, payload.mp_account_id))
         if not fields:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет данных для обновления")
         fields.extend(["updated_at = ?", "updated_by_id = ?"])

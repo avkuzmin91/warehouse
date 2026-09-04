@@ -18,6 +18,7 @@ from config import (
     TRIP_STATUS_UNLOADING,
 )
 from modules.dispatch.service import list_stuck_partial_dispatches
+from modules.marketplaces.service import list_picking_supplies
 from modules.receipts.service import list_shortage_receipts
 from modules.timesheet.service import business_today
 
@@ -26,6 +27,9 @@ ROLE_MANAGER = "manager"
 ROLE_SHIFT = "shift_supervisor"
 # Начальник склада видит очереди и кладовщика, и начальника смены.
 ROLE_WAREHOUSE_HEAD = "warehouse_head"
+# Сборщик FBS-поставок. Роль узкая (только ТСД), но не эксклюзивная: сборку видят
+# и кладовщик с начальником склада — иначе очередь встанет без выделенного человека.
+ROLE_PICKER = "picker"
 
 _TRIP_TASKS = {
     TRIP_STATUS_AWAITING_ARRIVAL: (ROLE_WAREHOUSE, "trip_arrival", "Встретить рейс {num}"),
@@ -54,6 +58,7 @@ def list_my_tasks(connection, *, user) -> list[dict]:
     see_warehouse = role in (ROLE_WAREHOUSE, ROLE_WAREHOUSE_HEAD, "admin")
     see_manager = role in (ROLE_MANAGER, "admin")
     see_shift = role in (ROLE_SHIFT, ROLE_WAREHOUSE_HEAD, "admin")
+    see_picker = role in (ROLE_PICKER, ROLE_WAREHOUSE, ROLE_WAREHOUSE_HEAD, "admin")
     visible_roles = set()
     if see_warehouse:
         visible_roles.add(ROLE_WAREHOUSE)
@@ -61,6 +66,8 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         visible_roles.add(ROLE_MANAGER)
     if see_shift:
         visible_roles.add(ROLE_SHIFT)
+    if see_picker:
+        visible_roles.add(ROLE_PICKER)
     if not visible_roles:
         return []
 
@@ -165,6 +172,26 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "role": ROLE_WAREHOUSE,
                 "since": r["updated_at"] or r["created_at"],
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+    if ROLE_PICKER in visible_roles:
+        # FBS-поставка на сборке — задача сборщику. Единица задачи именно
+        # поставка: задача на заказ дала бы десятки карточек и столько же
+        # проходов по складу, задача на товар — не имеет момента закрытия.
+        # Взятая поставка исчезает из чужих очередей: сборку ведёт один человек.
+        for r in list_picking_supplies(connection):
+            holder = r.get("picker_id")
+            if holder and str(holder) != str(user["id"]) and role != "admin":
+                continue
+            tasks.append({
+                "kind": "mp_supply_pick",
+                "title": f"Собрать поставку {r['doc_number']}",
+                "doc_type": "mp_supply",
+                "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]),
+                "status": str(r["status"]),
+                "role": ROLE_PICKER,
+                "since": r["updated_at"] or r["created_at"],
             })
 
     if see_manager:

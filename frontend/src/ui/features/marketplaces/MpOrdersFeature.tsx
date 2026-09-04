@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import {
   getMpAccounts,
   getMpOrders,
@@ -35,6 +35,7 @@ const MARKETPLACE_OPTIONS = [
 const STATUS_OPTIONS = [
   { value: '', label: 'Активные' },
   { value: 'overdue', label: 'Просроченные' },
+  { value: 'no_supply', label: 'Без поставки' },
   { value: 'new', label: MP_ORDER_STATUS_LABELS.new },
   { value: 'in_progress', label: MP_ORDER_STATUS_LABELS.in_progress },
   { value: 'shipped', label: MP_ORDER_STATUS_LABELS.shipped },
@@ -64,7 +65,8 @@ export function MpOrdersFeature() {
   }, [searchInput, search])
 
   const isOverdue = statusFilter === 'overdue'
-  const statusParam = !statusFilter || isOverdue ? undefined : statusFilter
+  const isNoSupply = statusFilter === 'no_supply'
+  const statusParam = !statusFilter || isOverdue || isNoSupply ? undefined : statusFilter
 
   const { data: accountsData } = useApi((s) => getMpAccounts(s), [])
   const accounts = accountsData?.items ?? []
@@ -82,8 +84,9 @@ export function MpOrdersFeature() {
       ...commonParams,
       status: statusParam,
       overdue: isOverdue || undefined,
+      no_supply: isNoSupply || undefined,
     }, signal),
-    [page, search, clientId, marketplace, accountId, statusParam, isOverdue],
+    [page, search, clientId, marketplace, accountId, statusParam, isOverdue, isNoSupply],
   )
 
   const { data: summary } = useApi(
@@ -93,7 +96,7 @@ export function MpOrdersFeature() {
 
   const items = data?.items ?? []
   const total = data?.total ?? 0
-  const colCount = 8
+  const colCount = 9
 
   return (
     <ListPage
@@ -147,6 +150,7 @@ export function MpOrdersFeature() {
             <th style={{ width: 110, textAlign: 'right' }}>Состав</th>
             <th style={{ width: 140 }}>Создан</th>
             <th style={{ width: 150 }}>Дедлайн сборки</th>
+            <th style={{ width: 130 }}>Поставка</th>
             <th style={{ width: 150 }}>Статус</th>
             <th style={{ width: 120 }}>Связка</th>
           </tr>
@@ -195,6 +199,20 @@ function OrderRow({ item, onOpen }: { item: MpOrderListItem; onOpen: () => void 
               {fmtDateTime(item.deadline_at)}
             </>
           : '—'}
+      </Td>
+      <Td>
+        {item.supply_number
+          ? (
+            <Link
+              to={`/marketplaces/supplies/${item.supply_id}`}
+              className="mono"
+              style={{ fontSize: 12, color: 'var(--c-accent)' }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {item.supply_number}
+            </Link>
+          )
+          : <span style={{ color: 'var(--c-text-faint)' }}>—</span>}
       </Td>
       <Td><Badge tone={mpOrderStatusTone(item.status)}>{MP_ORDER_STATUS_LABELS[item.status]}</Badge></Td>
       <Td>

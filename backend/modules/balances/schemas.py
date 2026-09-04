@@ -26,6 +26,8 @@ class BalanceItem(BaseModel):
     packed_defect: int
     # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
     boxed_good: int = 0
+    # Собрано под FBS-поставку: обещано площадке, к отгрузке и упаковке НЕ доступно.
+    picked_good: int = 0
     ready_good: int
     ready_defect: int
     total: int
@@ -59,6 +61,8 @@ class BalanceGroupItem(BaseModel):
     packed_defect: int
     # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
     boxed_good: int = 0
+    # Собрано под FBS-поставку: обещано площадке, к отгрузке и упаковке НЕ доступно.
+    picked_good: int = 0
     ready_good: int
     ready_defect: int
     total: int
@@ -125,6 +129,8 @@ class BalanceSummaryResponse(BaseModel):
     packed_defect: int
     # Собран в короб (задача размещения): лежит на столе в коробе, к отгрузке НЕ доступен.
     boxed_good: int = 0
+    # Собрано под FBS-поставку: обещано площадке, к отгрузке и упаковке НЕ доступно.
+    picked_good: int = 0
     ready_good: int
     ready_defect: int
     total: int
@@ -133,7 +139,7 @@ class BalanceSummaryResponse(BaseModel):
 class BalanceZoneItem(BaseModel):
     location_id: str | None
     location_name: str | None
-    op_status: str  # 'storage' | 'packing' | 'packed' | 'boxed' | 'ready'
+    op_status: str  # 'storage' | 'packing' | 'packed' | 'boxed' | 'picked' | 'ready'
     quality: str    # 'good' | 'defect'
     product_id: str
     product_name: str
@@ -289,6 +295,9 @@ class ZoneRelocationItem(BaseModel):
     # Ссылка на оригинал (заполнена у записей-сторно) и признак, что запись уже откачена.
     reverses_id: str | None = None
     is_reversed: bool = False
+    # Короб, которым ехал товар (у переноса короба обе стороны — один и тот же).
+    from_container: str | None = None
+    to_container: str | None = None
 
 
 class ZoneRelocationListResponse(BaseModel):

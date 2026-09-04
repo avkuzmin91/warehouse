@@ -143,12 +143,15 @@ export type ShipmentLine = {
   boxed_qty:          number
   boxed_defect_qty:   number
   aside_qty:          number
+  aside_defect_qty:   number
   placed_qty:         number
   available_for_pack: number
   storage_zone_id:   string | null
   storage_zone_name: string | null
   store_id:          string | null
   store_name:        string | null
+  // ШК варианта, заведённые под магазин строки (подтянуты из кабинета МП).
+  store_barcodes:    string[]
   placements:        ShipmentLinePlacement[]
   files:             ShipmentLineFile[]
 }
@@ -406,6 +409,51 @@ export function updateShipmentLineStore(docId: string, lineId: string, storeId: 
 
 export function deleteShipmentLine(docId: string, lineId: string) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'DELETE' })
+}
+
+export type StoreBarcodePullStatus =
+  | 'ready' | 'exists' | 'ambiguous' | 'not_found' | 'conflict'
+  | 'no_store' | 'no_account' | 'no_variant'
+
+export type StoreBarcodeSuggestion = {
+  line_id:          string
+  status:           StoreBarcodePullStatus
+  store_id:         string | null
+  store_name:       string | null
+  marketplace:      string | null
+  account_name:     string | null
+  product_name:     string | null
+  product_sku:      string | null
+  color_name:       string | null
+  size_name:        string | null
+  card_external_id: string | null
+  card_offer_id:    string | null
+  card_size:        string | null
+  card_barcodes:    string[]
+  new_barcodes:     string[]
+  conflicts:        { code: string; owner: string }[]
+}
+
+export const STORE_BARCODE_PULL_LABELS: Record<StoreBarcodePullStatus, string> = {
+  ready:      'Можно записать',
+  exists:     'ШК уже есть',
+  ambiguous:  'Несколько карточек',
+  not_found:  'Карточка не найдена',
+  conflict:   'ШК занят',
+  no_store:   'Без магазина',
+  no_account: 'Магазин без кабинета',
+  no_variant: 'Вариант не заведён',
+}
+
+export function getStoreBarcodeSuggestions(docId: string, signal?: AbortSignal) {
+  return request<{ items: StoreBarcodeSuggestion[] }>(`/shipments/${docId}/store-barcodes`, { signal })
+}
+
+export function applyStoreBarcodes(docId: string, lineIds: string[]) {
+  return request<{ message: string }>(`/shipments/${docId}/store-barcodes`, {
+    method: 'POST',
+    body: JSON.stringify({ line_ids: lineIds }),
+  })
 }
 
 export type PackingPayload = { good_delta?: number; defect_delta?: number; packed_date: string }

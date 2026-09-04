@@ -171,6 +171,11 @@ export function CompositionTable({
                   readonly={!(canEditStore ?? canEditPlan)}
                   readonlyLabel={line.store_name}
                 />
+                {(line.store_barcodes ?? []).length > 0 && (
+                  <div className="mono text-xs subtle" style={{ marginTop: 4 }}>
+                    ШК {line.store_barcodes.join(', ')}
+                  </div>
+                )}
               </Td>
               <Td className="num">
                 {canEditPlan ? (

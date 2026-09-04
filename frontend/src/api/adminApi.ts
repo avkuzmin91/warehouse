@@ -250,7 +250,10 @@ export function getClientStores(clientId: string, includeDeleted = false) {
   return request<ClientStoreItem[]>(`/clients/${clientId}/stores${q}`)
 }
 
-export function createClientStore(clientId: string, payload: { name: string; is_active: boolean }) {
+export function createClientStore(
+  clientId: string,
+  payload: { name: string; is_active: boolean; mp_account_id?: string | null },
+) {
   return request<{ message: string }>(`/clients/${clientId}/stores`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -260,7 +263,7 @@ export function createClientStore(clientId: string, payload: { name: string; is_
 export function updateClientStore(
   clientId: string,
   storeId: string,
-  payload: { name?: string; is_active?: boolean; is_deleted?: boolean },
+  payload: { name?: string; is_active?: boolean; is_deleted?: boolean; mp_account_id?: string | null },
 ) {
   return request<{ message: string }>(`/clients/${clientId}/stores/${storeId}`, {
     method: 'PATCH',

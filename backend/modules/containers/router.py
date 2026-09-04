@@ -14,6 +14,7 @@ from .schemas import (
     ContainerBatchCreate,
     ContainerBatchResult,
     ContainerDetailResponse,
+    ContainerHoldingsResponse,
     ContainerItem,
     ContainerItemRemoveRequest,
     ContainerLabelsResponse,
@@ -27,6 +28,7 @@ from .service import (
     container_contents,
     container_item,
     container_labels,
+    containers_holdings,
     create_containers,
     list_container_ops,
     list_containers,
@@ -94,6 +96,18 @@ def lookup_container_endpoint(code: str, user=Depends(get_current_stock_operator
     _ = user
     with get_connection() as conn:
         return lookup_container(conn, code)
+
+
+@router.get("/containers/holdings", response_model=ContainerHoldingsResponse)
+def container_holdings_endpoint(
+    user=Depends(get_current_shipment_viewer),
+    zone_ids: str = Query(..., description="Список мест через запятую"),
+):
+    """Что из позиций лежит в коробах в этих местах: бейдж «в коробе» в остатках."""
+    _ = user
+    ids = [z for z in (zone_ids or "").split(",") if z.strip()]
+    with get_connection() as conn:
+        return containers_holdings(conn, ids)
 
 
 @router.post("/containers/place", response_model=ContainerPlaceResult)
@@ -165,7 +179,7 @@ def remove_container_item_endpoint(
         if not proceed:
             return stored
         item = remove_item_from_placed(
-            conn, container_id, barcode=payload.barcode, qty=payload.qty, user_id=uid,
+            conn, container_id, scan=payload, qty=payload.qty, user_id=uid,
         )
         finish_idempotent(conn, x_request_id, item.model_dump())
         conn.commit()

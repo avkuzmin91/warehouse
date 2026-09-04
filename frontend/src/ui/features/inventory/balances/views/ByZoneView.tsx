@@ -11,6 +11,8 @@ import {
   WRITEOFF_REASON_LABELS,
 } from '../../../../../api/balancesApi'
 import type { BalanceSummary, BalanceZoneItem, InvOpStatus, InvQuality, WriteOffReason } from '../../../../../api/balancesApi'
+import { getContainerHoldings } from '../../../../../api/containersApi'
+import type { ContainerHoldingRow } from '../../../../../api/containersApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../../../hooks/useFilterParams'
 import { Table, Td } from '../../../../data/Table'
@@ -74,6 +76,10 @@ export function ByZoneView() {
   const [bulkToZoneId, setBulkToZoneId] = useState('')
   const [bulkComment, setBulkComment] = useState('')
   const [bulkSaving, setBulkSaving] = useState(false)
+
+  // Что из показанных позиций лежит в коробах: короб двигается только целиком, и
+  // без этой пометки кладовщик жмёт «переместить» и упирается в отказ гейта.
+  const [holdings, setHoldings] = useState<ContainerHoldingRow[]>([])
 
   // Перемещение между местоположениями: любой нетерминальный статус — товар можно
   // временно переставить, даже когда он на упаковке или готов к отгрузке.
@@ -363,6 +369,23 @@ export function ByZoneView() {
     return () => { clearTimeout(timer); ctrl.abort() }
   }, [load, search, place])
 
+  const boxedByKey = useMemo(() => {
+    const map = new Map<string, ContainerHoldingRow[]>()
+    for (const h of holdings) {
+      const key = `${h.zone_id}__${h.product_id}__${h.color_id ?? ''}__${h.size_id ?? ''}__${h.quality}`
+      const list = map.get(key)
+      if (list) list.push(h)
+      else map.set(key, [h])
+    }
+    return map
+  }, [holdings])
+
+  const boxedFor = useCallback((item: BalanceZoneItem): ContainerHoldingRow[] => {
+    if (!item.location_id || item.op_status !== 'storage') return []
+    const key = `${item.location_id}__${item.product_id}__${item.color_id ?? ''}__${item.size_id ?? ''}__${item.quality}`
+    return boxedByKey.get(key) ?? []
+  }, [boxedByKey])
+
   const groups = useMemo<LocationGroup[]>(() => {
     const map = new Map<string, LocationGroup>()
     for (const item of items) {
@@ -381,6 +404,20 @@ export function ByZoneView() {
       group.totalQty += item.qty
     }
     return [...map.values()]
+  }, [items])
+
+  useEffect(() => {
+    const zoneIds = [...new Set(items.map((i) => i.location_id).filter((v): v is string => !!v))]
+    if (zoneIds.length === 0) {
+      setHoldings([])
+      return
+    }
+    const ac = new AbortController()
+    getContainerHoldings(zoneIds, ac.signal)
+      .then((r) => setHoldings(r.items))
+      // Пометка вспомогательная: без неё список остаётся рабочим.
+      .catch(() => setHoldings([]))
+    return () => ac.abort()
   }, [items])
 
   // Итоги — из /balances/summary (не зависят от усечения списка);
@@ -617,6 +654,11 @@ export function ByZoneView() {
                       </Td>
                       <Td>
                         <Badge tone={QUALITY_TONE[item.quality]}>{INV_QUALITY_LABELS[item.quality]}</Badge>
+                        {boxedFor(item).length > 0 && (
+                          <div className="t-sub" style={{ fontSize: 11, marginTop: 3 }}>
+                            в коробе {boxedFor(item).map((h) => h.doc_number).join(', ')}
+                          </div>
+                        )}
                       </Td>
                       <Td className="num" style={{ fontWeight: 600 }}>
                         {entry ? (
@@ -641,13 +683,23 @@ export function ByZoneView() {
                       </Td>
                       <Td>
                         <div style={{ display: 'flex', gap: 2 }}>
-                          <button
-                            className="btn ghost icon sm"
-                            title="Переместить в другое местоположение"
-                            onClick={() => openReloc(item)}
-                          >
-                            <Icon name="arrowRight" size={14} />
-                          </button>
+                          {(() => {
+                            const boxed = boxedFor(item)
+                            const inBoxes = boxed.reduce((sum, h) => sum + h.qty, 0)
+                            const free = item.qty - inBoxes
+                            return (
+                              <button
+                                className="btn ghost icon sm"
+                                disabled={boxed.length > 0 && free <= 0}
+                                title={boxed.length > 0 && free <= 0
+                                  ? `Товар лежит в коробе ${boxed.map((h) => h.doc_number).join(', ')} — двигайте короб целиком`
+                                  : 'Переместить в другое местоположение'}
+                                onClick={() => openReloc(item)}
+                              >
+                                <Icon name="arrowRight" size={14} />
+                              </button>
+                            )
+                          })()}
                           {item.location_id && (item.op_status === 'storage' || item.quality === 'good') && (
                             <button
                               className="btn ghost icon sm"

@@ -62,6 +62,13 @@ def _load_account(account_id: str):
 def _cleanup_account(account_id: str, client_id: str) -> None:
     with get_connection() as conn:
         conn.execute(
+            "DELETE FROM mp_supply_ops WHERE supply_id IN "
+            "(SELECT id FROM mp_supplies WHERE account_id = ?)", (account_id,))
+        conn.execute(
+            "DELETE FROM mp_supply_orders WHERE supply_id IN "
+            "(SELECT id FROM mp_supplies WHERE account_id = ?)", (account_id,))
+        conn.execute("DELETE FROM mp_supplies WHERE account_id = ?", (account_id,))
+        conn.execute(
             "DELETE FROM mp_order_lines WHERE order_id IN "
             "(SELECT id FROM mp_orders WHERE account_id = ?)", (account_id,))
         conn.execute("DELETE FROM mp_orders WHERE account_id = ?", (account_id,))
@@ -560,3 +567,55 @@ def test_link_foreign_client_product_rejected(manager_client, catalog_fixture):
         conn.execute("DELETE FROM product_types WHERE id = ?", (type_id,))
         conn.commit()
     cleanup_client(other_cid)
+
+
+def test_wb_sandbox_routes_to_sandbox_hosts(monkeypatch):
+    """Токен «Тестового контура» WB отвечает только на sandbox-хостах, боевые
+    отдают 401 — признак подключения обязан доехать до выбора базового URL."""
+    urls: list[str] = []
+
+    def fake_request(method, url, *, headers, json_body=None):
+        urls.append(url)
+        return {}
+
+    monkeypatch.setattr(mp_clients, "_request", fake_request)
+    sandbox = {"api_key": "token", "is_sandbox": True}
+    mp_clients.wb_check(sandbox)
+    mp_clients.wb_fetch_new_orders(sandbox)
+    mp_clients.wb_fetch_cards(sandbox)
+    mp_clients.wb_check({"api_key": "token", "is_sandbox": False})
+
+    assert urls == [
+        f"{mp_clients.WB_MARKETPLACE_SANDBOX_BASE}/ping",
+        f"{mp_clients.WB_MARKETPLACE_SANDBOX_BASE}/api/v3/orders/new",
+        f"{mp_clients.WB_CONTENT_SANDBOX_BASE}/content/v2/get/cards/list",
+        f"{mp_clients.WB_MARKETPLACE_BASE}/ping",
+    ]
+
+
+def test_account_sandbox_flag_reaches_client(monkeypatch, wb_account):
+    seen: list[dict] = []
+    monkeypatch.setattr(mp_clients, "wb_check", lambda creds: seen.append(creds))
+    with get_connection() as conn:
+        conn.execute("UPDATE mp_accounts SET is_sandbox = 1 WHERE id = ?", (wb_account["id"],))
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM mp_accounts WHERE id = ?", (wb_account["id"],)
+        ).fetchone()
+    mp_service.check_account(row)
+    assert seen and seen[0]["is_sandbox"] is True
+
+
+def test_sandbox_flag_rejected_for_ozon(manager_client):
+    cid = make_client_id()
+    r = manager_client.post("/marketplaces/accounts", json={
+        "client_id": cid,
+        "marketplace": MP_OZON,
+        "name": "Тестовый Ozon",
+        "ozon_client_id": "123",
+        "api_key": "key",
+        "is_sandbox": True,
+    })
+    assert r.status_code == 400
+    assert "Wildberries" in r.json()["detail"]
+    cleanup_client(cid)

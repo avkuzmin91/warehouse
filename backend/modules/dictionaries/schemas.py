@@ -45,6 +45,11 @@ class ClientStoreItem(BaseModel):
     client_id: str
     name: str
     is_active: bool
+    # Кабинет маркетплейса магазина: у клиента может быть несколько кабинетов на одном
+    # МП, и ШК товара ищется в кабинете именно того магазина, под который упаковывают.
+    mp_account_id: str | None = None
+    mp_account_name: str | None = None
+    mp_marketplace: str | None = None
     is_deleted: bool = False
     deleted_at: str | None = None
     deleted_by: str | None = None
@@ -57,12 +62,15 @@ class ClientStoreItem(BaseModel):
 class ClientStoreCreateRequest(BaseModel):
     name: str = Field(min_length=1)
     is_active: bool = True
+    mp_account_id: str | None = None
 
 
 class ClientStoreUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1)
     is_active: bool | None = None
     is_deleted: bool | None = None
+    # Пустая строка снимает привязку к кабинету МП, None — оставить как есть.
+    mp_account_id: str | None = None
 
 
 class ProductTypeCreateRequest(BaseModel):

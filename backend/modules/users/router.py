@@ -157,10 +157,10 @@ def update_user_display_name(
 
 @router.patch("/{user_id}/role", response_model=MessageResponse)
 def update_user_role(user_id: str, payload: RoleUpdateRequest, actor=Depends(_get_users_manager)):
-    if payload.role not in ("user", "manager", "warehouse_manager", "shift_supervisor", "warehouse_head", "client"):
+    if payload.role not in ("user", "manager", "warehouse_manager", "shift_supervisor", "warehouse_head", "picker", "client"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Можно назначить роль: user, manager, warehouse_manager, shift_supervisor, warehouse_head или client",
+            detail="Можно назначить роль: user, manager, warehouse_manager, shift_supervisor, warehouse_head, picker или client",
         )
     if user_id == actor["id"]:
         raise HTTPException(

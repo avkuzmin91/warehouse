@@ -34,6 +34,7 @@ const FINANCE_NAV: NavItem[] = [
 ]
 
 const MARKETPLACES_NAV: NavItem[] = [
+  { to: '/marketplaces/supplies', icon: 'truckOut', label: 'Отгрузки FBS' },
   { to: '/marketplaces/orders', icon: 'cart', label: 'FBS-заказы' },
   { to: '/marketplaces/links', icon: 'tag', label: 'Связка товаров' },
   { to: '/marketplaces/accounts', icon: 'settings', label: 'Подключения' },

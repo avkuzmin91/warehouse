@@ -313,12 +313,16 @@ class ShipmentLineItem(BaseModel):
     boxed_qty:        int = 0
     boxed_defect_qty: int = 0
     aside_qty:        int = 0
+    aside_defect_qty: int = 0
     placed_qty:       int = 0
     available_for_pack: int = 0
     storage_zone_id:   str | None
     storage_zone_name: str | None
     store_id:          str | None
     store_name:        str | None
+    # ШК варианта, заведённые под магазин строки: у одного варианта в разных
+    # магазинах разные коды, кладовщику нужен код именно этого магазина.
+    store_barcodes:    list[str] = []
     placements:        list[ShipmentLinePlacement] = []
     files:             list[ShipmentLineFile] = []
 
@@ -552,3 +556,37 @@ class LineFileFromProduct(BaseModel):
     """Прикрепление этикетки из карточки товара к строке задачи."""
 
     product_file_id: str
+
+
+class StoreBarcodeConflict(BaseModel):
+    code:  str
+    owner: str
+
+
+class StoreBarcodeSuggestion(BaseModel):
+    """Что даст подтягивание ШК из кабинета магазина по одной строке задачи."""
+
+    line_id:          str
+    status:           str
+    store_id:         str | None = None
+    store_name:       str | None = None
+    marketplace:      str | None = None
+    account_name:     str | None = None
+    product_name:     str | None = None
+    product_sku:      str | None = None
+    color_name:       str | None = None
+    size_name:        str | None = None
+    card_external_id: str | None = None
+    card_offer_id:    str | None = None
+    card_size:        str | None = None
+    card_barcodes:    list[str] = []
+    new_barcodes:     list[str] = []
+    conflicts:        list[StoreBarcodeConflict] = []
+
+
+class StoreBarcodesResponse(BaseModel):
+    items: list[StoreBarcodeSuggestion] = []
+
+
+class StoreBarcodesApply(BaseModel):
+    line_ids: list[str] = []

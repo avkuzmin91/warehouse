@@ -99,7 +99,7 @@ function Main() {
     case 'packDoc':   screen = <ShiftPackingDetailScreen shipmentId={route.id} focus={route.focus} />; break
     case 'putawayDoc': screen = <PutawayTaskScreen shipmentId={route.id} />; break
     case 'putawayBox': screen = <PutawayBoxScreen shipmentId={route.id} boxId={route.boxId} />; break
-    case 'place': screen = <PlaceScreen />; break
+    case 'place': screen = <PlaceScreen source={route.source} />; break
     case 'scanBox': screen = <ScanBoxScreen containerId={route.containerId} />; break
   }
   return (

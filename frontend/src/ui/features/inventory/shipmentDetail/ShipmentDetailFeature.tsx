@@ -34,6 +34,8 @@ import { Drawer } from '../../../feedback/Drawer'
 import { balanceKey } from '../../../../utils/balanceKey'
 import { canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
+import { getLocations } from '../../../../api/locationsApi'
+import type { LocationItem } from '../../../../api/locationsApi'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
 import { AssignSkuDrawer } from '../../inventory/shared/AssignSkuDrawer'
@@ -42,6 +44,7 @@ import { OpEntry } from './components/OpEntry'
 import { BarcodeReviewModal } from './components/BarcodeReviewModal'
 import type { BarcodeReviewItem } from './components/BarcodeReviewModal'
 import { ProductLabelPickerModal } from './components/ProductLabelPickerModal'
+import { StoreBarcodesDrawer } from './components/StoreBarcodesDrawer'
 import { lineAvailable } from './shared/opLabels'
 import { MassMoveToPackingDrawer } from './components/MassMoveToPackingDrawer'
 import type { MoveZoneOption } from './components/MassMoveToPackingDrawer'
@@ -73,6 +76,7 @@ export function ShipmentDetailFeature() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const { unloadingZones } = useLookups()
+  const [locations, setLocations] = useState<LocationItem[]>([])
   const canEdit = canEditShipments(user)
   const canEditPlanning = canEditShipmentPlanning(user)
   const canEditPriority = canEditShipmentPriority(user)
@@ -501,6 +505,21 @@ export function ShipmentDetailFeature() {
   const advanceBlockReasons = showReadiness
     ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
     : []
+  useEffect(() => {
+    if (!isPutaway) return
+    let live = true
+    getLocations({ limit: 500 })
+      .then((r) => { if (live) setLocations(r.items.filter((i) => i.is_active)) })
+      // Справочник мест доступен не всем ролям склада — тогда остаётся общий список зон.
+      .catch(() => { if (live) setLocations([]) })
+    return () => { live = false }
+  }, [isPutaway])
+
+  // Ручная развозка в вебе (когда ТСД недоступен): любое активное место справочника.
+  const putawayZoneOptions = locations.length > 0
+    ? locations.map((l) => ({ id: l.id, name: l.code }))
+    : unloadingZones
+
   async function refreshAfterLineChange() {
     await load()
     await loadBalances()
@@ -716,6 +735,7 @@ export function ShipmentDetailFeature() {
 
   // Этикетка из карточки товара → строка задачи (без повторной загрузки байтов).
   const [labelPickerLine, setLabelPickerLine] = useState<ShipmentLine | null>(null)
+  const [storeBarcodesOpen, setStoreBarcodesOpen] = useState(false)
 
   async function handlePickLabel(file: { id: string; filename: string }) {
     if (!docId || !labelPickerLine) return
@@ -914,6 +934,9 @@ export function ShipmentDetailFeature() {
     onReplaceFile: handleReplaceFile,
     onDeleteFile: handleDeleteFile,
     onPickLabel: canAttachFiles ? setLabelPickerLine : undefined,
+    // ШК магазина проставляется тем же составом, что и правится: менеджерская правка плана
+    // либо корректировка «На упаковке».
+    onPullStoreBarcodes: (canEditPlan || canCorrectOnPacking) ? () => setStoreBarcodesOpen(true) : undefined,
     onAssignSku: setSkuLine,
     getAvail: canEditPlan ? getLineAvail : undefined,
     availLoading,
@@ -1040,6 +1063,7 @@ export function ShipmentDetailFeature() {
           info={infoProps}
           composition={compositionProps}
           packing={packingProps}
+          zoneOptions={putawayZoneOptions}
           canManage={canEdit || canPack}
           checklist={checklistItems}
           onDone={refreshAfterLineChange}
@@ -1142,6 +1166,15 @@ export function ShipmentDetailFeature() {
         meta={filePreview}
         onClose={() => setFilePreview(null)}
       />
+
+      {storeBarcodesOpen && docId && (
+        <StoreBarcodesDrawer
+          docId={docId}
+          docNumber={doc.doc_number}
+          onClose={() => setStoreBarcodesOpen(false)}
+          onDone={refreshAfterLineChange}
+        />
+      )}
 
       {labelPickerLine && (
         <ProductLabelPickerModal

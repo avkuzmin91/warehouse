@@ -32,6 +32,8 @@ from security import (
     ensure_packing_access,
     ensure_shipment_view_access,
     ensure_stock_write_access,
+    ensure_supply_pick_access,
+    ensure_task_view_access,
     ensure_warehouse_staff,
     user_client_id_opt,
 )
@@ -281,6 +283,18 @@ def get_current_packer(user=Depends(get_current_user)):
 def get_current_stock_operator(user=Depends(get_current_user)):
     """Ручные операции с остатками — складской состав вместе с начальником смены."""
     ensure_stock_write_access(user)
+    return user
+
+
+def get_current_task_viewer(user=Depends(get_current_user)):
+    """Очередь «Мои задачи»."""
+    ensure_task_view_access(user)
+    return user
+
+
+def get_current_supply_picker(user=Depends(get_current_user)):
+    """Сборка FBS-поставки на ТСД."""
+    ensure_supply_pick_access(user)
     return user
 
 

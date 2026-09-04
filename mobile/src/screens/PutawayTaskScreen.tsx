@@ -211,7 +211,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   Сборка завершена. Осталось развезти по местам: коробов {waitingBoxes.length}
                   {asideTotal > 0 ? `, мимо коробов ${asideTotal} шт.` : ''}
                 </div>
-                <button className="btn" style={{ width: '100%' }} onClick={openPlace}>
+                <button className="btn" style={{ width: '100%' }} onClick={() => openPlace()}>
                   <Icon name="layers" size={18} /> Развезти по местам
                 </button>
               </>
@@ -295,8 +295,8 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                 <div className="line-sub mono">{l.product_sku}</div>
                 <div className="line-sub">
                   Ждёт размещения <b>{l.aside_qty}</b> шт.
-                  {l.boxed_defect_qty > 0 && (
-                    <> · из них брак <b style={{ color: 'var(--c-danger)' }}>{l.boxed_defect_qty}</b></>
+                  {l.aside_defect_qty > 0 && (
+                    <> · из них брак <b style={{ color: 'var(--c-danger)' }}>{l.aside_defect_qty}</b></>
                   )}
                 </div>
                 {onPacking && (

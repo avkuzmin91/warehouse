@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from dbconn import get_connection
-from modules.auth.service import get_current_dashboard_user
+from modules.auth.service import get_current_task_viewer
 from modules.tasks.schemas import TaskItem, TaskReadPayload, TasksResponse
 from modules.tasks.service import (
     annotate_task_reads,
@@ -19,7 +19,7 @@ router = APIRouter(tags=["tasks"])
 def get_my_tasks(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
-    user=Depends(get_current_dashboard_user),
+    user=Depends(get_current_task_viewer),
 ):
     with get_connection() as conn:
         tasks = list_my_tasks(conn, user=user)
@@ -31,7 +31,7 @@ def get_my_tasks(
 
 
 @router.post("/tasks/read")
-def read_task(payload: TaskReadPayload, user=Depends(get_current_dashboard_user)):
+def read_task(payload: TaskReadPayload, user=Depends(get_current_task_viewer)):
     with get_connection() as conn:
         mark_task_read(conn, user_id=str(user["id"]), kind=payload.kind, doc_id=payload.doc_id)
         conn.commit()
@@ -39,7 +39,7 @@ def read_task(payload: TaskReadPayload, user=Depends(get_current_dashboard_user)
 
 
 @router.post("/tasks/read-all")
-def read_all_tasks(user=Depends(get_current_dashboard_user)):
+def read_all_tasks(user=Depends(get_current_task_viewer)):
     with get_connection() as conn:
         mark_all_tasks_read(conn, user=user)
         conn.commit()

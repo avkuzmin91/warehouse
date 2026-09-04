@@ -6,6 +6,8 @@ from typing import Any, Mapping
 
 from fastapi import HTTPException, status
 
+from config import MP_SUPPLY_PICK_ROLES
+
 # Сообщение для 403: одна строка — проще сопоставлять в тестах и логах.
 FORBIDDEN_DETAIL = "Недостаточно прав"
 
@@ -58,6 +60,17 @@ def ensure_shipment_view_access(user: Mapping[str, Any]) -> None:
 
 
 def ensure_dashboard_access(user: Mapping[str, Any]) -> None:
+    ensure_shipment_view_access(user)
+
+
+def ensure_task_view_access(user: Mapping[str, Any]) -> None:
+    """Очередь «Мои задачи»: те же роли, что видят документы, плюс сборщик.
+
+    Сборщику доступна только его очередь — карточки документов и сводка склада
+    остаются закрытыми, поэтому проверка отдельная, а не расширение dashboard.
+    """
+    if user["role"] in MP_SUPPLY_PICK_ROLES:
+        return
     ensure_shipment_view_access(user)
 
 
@@ -157,6 +170,19 @@ def ensure_marketplace_access(user: Mapping[str, Any]) -> None:
     """FBS-маркетплейсы — заказы, связка товаров и подключения кабинетов (включая
     API-ключи продавцов) — менеджерский состав (admin, manager), не кладовщик."""
     if user["role"] not in ("admin", "manager"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=FORBIDDEN_DETAIL,
+        )
+
+
+def ensure_supply_pick_access(user: Mapping[str, Any]) -> None:
+    """Сборка FBS-поставки на ТСД: сборщик, кладовщик и начальник склада.
+
+    Роль «picker» — специализация, а не эксклюзив: на малом складе выделенного
+    сборщика нет, и очередь не должна вставать без него.
+    """
+    if user["role"] not in MP_SUPPLY_PICK_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=FORBIDDEN_DETAIL,

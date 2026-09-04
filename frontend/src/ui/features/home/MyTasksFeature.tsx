@@ -23,6 +23,7 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   shipment_relocate: 'forklift',
   shipment_defect_prepare: 'forklift',
   dispatch_prepare: 'forklift',
+  mp_supply_pick: 'truckOut',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -37,6 +38,7 @@ const KIND_LABEL: Record<TaskKind, string> = {
   shipment_relocate: 'Разложить по местам',
   shipment_defect_prepare: 'Подготовить к отгрузке',
   dispatch_prepare: 'Подготовить отгрузку',
+  mp_supply_pick: 'Собрать поставку FBS',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -61,6 +63,7 @@ const DOC_TYPE_SUB: Record<TaskItem['doc_type'], string> = {
   receipt: 'Поступление',
   shipment: 'Задача упаковки',
   dispatch: 'Отгрузка',
+  mp_supply: 'Поставка FBS',
 }
 
 function taskSub(t: TaskItem): string {
@@ -72,6 +75,7 @@ const ROLE_LABEL: Record<string, string> = {
   warehouse_manager: 'кладовщик',
   shift_supervisor: 'начальник смены',
   warehouse_head: 'начальник склада',
+  picker: 'сборщик',
   manager: 'менеджер',
   admin: 'администратор',
   client: 'клиент',

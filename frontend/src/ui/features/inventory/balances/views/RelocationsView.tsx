@@ -57,6 +57,9 @@ export function RelocationsView() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useFilterParam('search', '')
   const [clientId, setClientId] = useFilterParam('client', '')
+  // Развозка коробов — частый повод искать в журнале: отдельный фильтр вместо
+  // перебора строк глазами.
+  const [boxedOnly] = useFilterParam('boxed', '')
   const [undoing, setUndoing] = useState<string | null>(null)
   const { setMany } = useFilterParamsActions()
   const { clients } = useLookups()
@@ -73,13 +76,14 @@ export function RelocationsView() {
         limit: PAGE_SIZE,
         search: search || undefined,
         client_id: clientId || undefined,
+        boxed_only: boxedOnly === '1' || undefined,
       })
       setItems(res.items)
       setTotal(res.total)
     } finally {
       setLoading(false)
     }
-  }, [page, search, clientId])
+  }, [page, search, clientId, boxedOnly])
 
   useEffect(() => { load() }, [load])
 
@@ -111,7 +115,7 @@ export function RelocationsView() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: search ? 26 : undefined }}
-              placeholder="Товар, SKU…"
+              placeholder="Товар, SKU, короб…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -131,8 +135,15 @@ export function RelocationsView() {
             onChange={(v) => setClientId(v)}
             placeholder="Поиск клиента…"
           />
-          {(search || clientId) && (
-            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '' })}>
+          <button
+            className={`btn sm${boxedOnly === '1' ? ' primary' : ' ghost'}`}
+            title="Только движения коробов: развозка и переносы тары"
+            onClick={() => setMany({ boxed: boxedOnly === '1' ? '' : '1', page: '' })}
+          >
+            <Icon name="box" size={13} />Короба
+          </button>
+          {(search || clientId || boxedOnly) && (
+            <button className="btn ghost sm" onClick={() => setMany({ search: '', client: '', boxed: '' })}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
@@ -151,6 +162,7 @@ export function RelocationsView() {
             <th style={{ width: 170 }}>Операция</th>
             <th style={{ width: 90 }}>Качество</th>
             <th>Откуда → Куда</th>
+            <th style={{ width: 110 }}>Короб</th>
             <th style={{ textAlign: 'right', width: 90 }}>Кол-во</th>
             <th>Комментарий</th>
             <th style={{ width: 160 }}>Кто</th>
@@ -159,9 +171,9 @@ export function RelocationsView() {
         </thead>
         <tbody>
           {loading ? (
-            <SkeletonRows rows={8} cols={10} />
+            <SkeletonRows rows={8} cols={11} />
           ) : items.length === 0 ? (
-            <tr><td colSpan={10}><EmptyState title="Движений нет" sub="Здесь появятся движения товара между местоположениями и статусами" /></td></tr>
+            <tr><td colSpan={11}><EmptyState title="Движений нет" sub="Здесь появятся движения товара между местоположениями и статусами" /></td></tr>
           ) : (
             items.map((item) => (
               <tr key={item.id}>
@@ -179,6 +191,9 @@ export function RelocationsView() {
                   <span>{item.from_zone_name ?? 'Без места'}</span>
                   <Icon name="arrowRight" size={12} style={{ margin: '0 6px', color: 'var(--c-text-subtle)' }} />
                   <span style={{ fontWeight: 500 }}>{item.to_zone_name ?? 'Без места'}</span>
+                </Td>
+                <Td className="mono" style={{ fontSize: 12 }}>
+                  {item.to_container ?? item.from_container ?? '—'}
                 </Td>
                 <Td className="num" style={{ fontWeight: 600 }}>{item.qty.toLocaleString('ru-RU')}</Td>
                 <Td style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>{item.comment ?? '—'}</Td>

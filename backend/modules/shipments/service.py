@@ -2422,6 +2422,67 @@ def resolve_line_variant_id(connection, product_id: str, color_id, size_id) -> s
     return str(row["id"]) if row else None
 
 
+def line_store_barcodes(connection, doc_id: str) -> dict[str, list[str]]:
+    """Строка задачи → ШК её варианта, заведённые под магазин строки."""
+    rows = connection.execute(
+        """
+        SELECT l.id AS line_id, pb.barcode
+        FROM shipment_lines l
+        JOIN product_variants v ON v.product_id = l.product_id
+         AND v.color_id IS NOT DISTINCT FROM l.color_id
+         AND v.size_id IS NOT DISTINCT FROM l.size_id
+         AND COALESCE(v.is_deleted, 0) = 0
+        JOIN product_barcodes pb ON pb.variant_id = v.id
+         AND COALESCE(pb.is_deleted, 0) = 0
+         AND pb.store_id = l.store_id
+        WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0 AND l.store_id IS NOT NULL
+        ORDER BY pb.barcode
+        """,
+        (doc_id,),
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        out.setdefault(str(row["line_id"]), []).append(str(row["barcode"]))
+    return out
+
+
+def store_barcode_items(connection, doc_id: str) -> list[dict]:
+    """Позиции задачи для подтягивания ШК из кабинета магазина (см. marketplaces)."""
+    rows = connection.execute(
+        """
+        SELECT l.id, l.product_id, l.store_id, l.color_id, l.size_id,
+               COALESCE(NULLIF(p.name, ''), '') AS product_name,
+               COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku,
+               col.name AS color_name, sz.name AS size_name,
+               v.id AS variant_id
+        FROM shipment_lines l
+        LEFT JOIN products p ON p.id = l.product_id
+        LEFT JOIN colors col ON col.id = l.color_id
+        LEFT JOIN sizes sz ON sz.id = l.size_id
+        LEFT JOIN product_variants v ON v.product_id = l.product_id
+         AND v.color_id IS NOT DISTINCT FROM l.color_id
+         AND v.size_id IS NOT DISTINCT FROM l.size_id
+         AND COALESCE(v.is_deleted, 0) = 0
+        WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0
+        ORDER BY l.created_at, l.id
+        """,
+        (doc_id,),
+    ).fetchall()
+    return [
+        {
+            "key": str(r["id"]),
+            "store_id": r["store_id"],
+            "product_id": str(r["product_id"]),
+            "variant_id": r["variant_id"],
+            "product_name": str(r["product_name"] or ""),
+            "product_sku": str(r["product_sku"] or ""),
+            "color_name": r["color_name"],
+            "size_name": r["size_name"],
+        }
+        for r in rows
+    ]
+
+
 def classify_barcodes_for_variant(connection, codes: list[str], *, product_id: str, variant_id: str | None) -> list[dict]:
     """Статус каждого распознанного кода относительно варианта строки:
     confirmed — привязан к этому варианту; other_variant — другой цвет/размер того же
@@ -2517,6 +2578,20 @@ def line_boxed_defect_qty(connection, line_id: str) -> int:
         f"""SELECT
               COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
             - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS qty
+           FROM zone_relocations WHERE shipment_line_id = ?""",
+        (line_id,),
+    ).fetchone()
+    return int(row["qty"] or 0)
+
+
+def line_aside_defect_qty(connection, line_id: str) -> int:
+    """Из собранного мимо коробов — брак: ему обычно нужно своё место хранения."""
+    row = connection.execute(
+        f"""SELECT
+              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_container_id IS NULL
+                                 AND to_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_container_id IS NULL
+                                 AND from_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS qty
            FROM zone_relocations WHERE shipment_line_id = ?""",
         (line_id,),
     ).fetchone()

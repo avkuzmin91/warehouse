@@ -13,7 +13,7 @@ export type AuthTokenResponse = {
 export type Me = { id: string; email: string; role: string; client_id: string | null }
 
 // Роли, имеющие складскую очередь задач (см. backend/modules/tasks/service.py).
-export const WAREHOUSE_ROLES = new Set(['warehouse_manager', 'warehouse_head', 'shift_supervisor', 'admin'])
+export const WAREHOUSE_ROLES = new Set(['warehouse_manager', 'warehouse_head', 'shift_supervisor', 'picker', 'admin'])
 
 export const ROLE_LABELS: Record<string, string> = {
   admin: 'Администратор',
@@ -21,6 +21,7 @@ export const ROLE_LABELS: Record<string, string> = {
   warehouse_manager: 'Кладовщик',
   shift_supervisor: 'Начальник смены',
   warehouse_head: 'Начальник склада',
+  picker: 'Сборщик',
   user: 'Пользователь',
 }
 

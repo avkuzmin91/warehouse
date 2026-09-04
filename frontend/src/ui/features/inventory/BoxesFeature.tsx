@@ -235,7 +235,7 @@ export function BoxesFeature() {
             <th>Короб</th>
             <th>Статус</th>
             <th className="num">Шт.</th>
-            <th>Ячейка</th>
+            <th>Место</th>
             <th>Клиент</th>
             <th>Задача</th>
             <th>Заведён</th>
@@ -254,7 +254,11 @@ export function BoxesFeature() {
               <Td>
                 <Checkbox checked={selected.has(c.id)} onChange={() => toggle(c.id)} />
               </Td>
-              <Td><span className="mono">{c.doc_number}</span></Td>
+              <Td>
+                <button className="btn ghost sm mono" onClick={() => navigate(`/inventory/boxes/${c.id}`)}>
+                  {c.doc_number}
+                </button>
+              </Td>
               <Td>
                 <Badge tone={containerStatusTone(c.status) as BadgeTone} dot>
                   {CONTAINER_STATUS_LABELS[c.status]}
