@@ -105,7 +105,7 @@ function Main() {
     case 'supplyPick': screen = <SupplyPickScreen supplyId={route.id} />; break
     case 'putawayBox': screen = <PutawayBoxScreen shipmentId={route.id} boxId={route.boxId} />; break
     case 'putawayAside': screen = <PutawayAsideScreen shipmentId={route.id} />; break
-    case 'place': screen = <PlaceScreen source={route.source} />; break
+    case 'place': screen = <PlaceScreen init={route.init} />; break
     case 'scanBox': screen = <ScanBoxScreen containerId={route.containerId} />; break
   }
   return (

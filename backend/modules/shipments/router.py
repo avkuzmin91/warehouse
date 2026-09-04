@@ -93,6 +93,8 @@ from modules.shipments.schemas import (
     ShipmentReturnToPackingPayload,
     StoreBarcodeSuggestion,
     StoreBarcodesApply,
+    StoreBarcodesDraftApply,
+    StoreBarcodesDraftPreview,
     StoreBarcodesResponse,
 )
 from modules.shipments.service import (
@@ -120,6 +122,7 @@ from modules.shipments.service import (
     line_placed_qty,
     line_store_barcodes,
     store_barcode_items,
+    store_barcode_items_for_lines,
     list_packing_entries,
     list_task_boxes,
     list_productivity_entries,
@@ -1132,9 +1135,8 @@ def update_shipment_line_store(doc_id: str, line_id: str, body: ShipmentLineStor
     return {"message": "ok"}
 
 
-def _store_barcode_suggestions(conn, doc_id: str) -> tuple[list[dict], list[dict]]:
-    """Позиции задачи + предложение по каждой: ШК из кабинета магазина строки."""
-    items = store_barcode_items(conn, doc_id)
+def _decorate_store_barcode_suggestions(conn, items: list[dict]) -> list[dict]:
+    """Предложение по каждой позиции: ШК из кабинета её магазина."""
     by_key = {str(i["key"]): i for i in items}
     out: list[dict] = []
     for suggestion in suggest_store_barcodes(conn, items):
@@ -1149,7 +1151,22 @@ def _store_barcode_suggestions(conn, doc_id: str) -> tuple[list[dict], list[dict
             # Для UI «что запишется» — и новые коды, и дозаполнение магазина у своих.
             "new_barcodes": list(suggestion["new_barcodes"]) + list(suggestion.get("adopt_barcodes") or []),
         })
-    return items, out
+    return out
+
+
+def _draft_store_barcode_items(conn, body: StoreBarcodesDraftPreview) -> list[dict]:
+    """Позиции ещё не сохранённой задачи: магазин проверяется по клиенту формы."""
+    lines: list[dict] = []
+    for line in body.lines:
+        store_id, _ = _resolve_line_store(conn, body.client_id, line.store_id)
+        lines.append({
+            "key": line.key,
+            "product_id": line.product_id,
+            "color_id": line.color_id,
+            "size_id": line.size_id,
+            "store_id": store_id,
+        })
+    return store_barcode_items_for_lines(conn, lines)
 
 
 @router.get("/shipments/{doc_id}/store-barcodes", response_model=StoreBarcodesResponse)
@@ -1162,7 +1179,7 @@ def get_store_barcodes(doc_id: str, user=Depends(_get_manager)):
         ).fetchone()
         if not doc:
             raise HTTPException(status_code=404, detail="Документ не найден")
-        _, suggestions = _store_barcode_suggestions(conn, doc_id)
+        suggestions = _decorate_store_barcode_suggestions(conn, store_barcode_items(conn, doc_id))
     return StoreBarcodesResponse(items=[StoreBarcodeSuggestion(**s) for s in suggestions])
 
 
@@ -1201,6 +1218,45 @@ def apply_store_barcodes_to_lines(
              f"Подтянуты ШК маркетплейса: {stats['written']} шт. по {stats['lines']} позициям",
              _now(), uid),
         )
+        result = {"message": f"Записано ШК: {stats['written']}"}
+        finish_idempotent(conn, x_request_id, result)
+        conn.commit()
+    return result
+
+
+@router.post("/shipments/store-barcodes/preview", response_model=StoreBarcodesResponse)
+def preview_draft_store_barcodes(body: StoreBarcodesDraftPreview, user=Depends(_get_manager)):
+    """Предпросмотр подтягивания ШК по составу формы создания — документа ещё нет."""
+    ensure_shipment_planning_access(user)
+    with get_connection() as conn:
+        suggestions = _decorate_store_barcode_suggestions(conn, _draft_store_barcode_items(conn, body))
+    return StoreBarcodesResponse(items=[StoreBarcodeSuggestion(**s) for s in suggestions])
+
+
+@router.post("/shipments/store-barcodes/apply")
+def apply_draft_store_barcodes(
+    body: StoreBarcodesDraftApply,
+    x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
+    user=Depends(_get_manager),
+):
+    """Записать ШК по выбранным позициям формы создания: ШК принадлежат варианту
+    товара, а не документу, — ждать сохранения задачи незачем."""
+    ensure_shipment_planning_access(user)
+    uid = str(user["id"])
+    keys = {str(x) for x in body.keys if str(x)}
+    if not keys:
+        raise HTTPException(status_code=400, detail="Выберите позиции")
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_store_barcodes_draft")
+        if not proceed:
+            return stored
+        items = _draft_store_barcode_items(conn, body)
+        unknown = keys - {str(i["key"]) for i in items}
+        if unknown:
+            raise HTTPException(status_code=404, detail="Позиция не найдена")
+        stats = apply_store_barcodes(conn, items, keys, uid)
+        if not stats["written"]:
+            raise HTTPException(status_code=400, detail="Нечего записывать: ШК не найдены или заняты")
         result = {"message": f"Записано ШК: {stats['written']}"}
         finish_idempotent(conn, x_request_id, result)
         conn.commit()

@@ -2,11 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   getContainer,
   placeContainers,
-  removeContainerItem,
   CONTAINER_STATUS_LABELS,
   containerStatusTone,
 } from '../../../api/containersApi'
 import type { ContainerDetailResponse } from '../../../api/containersApi'
+import { BoxTransferDrawer, type BoxTransferMode } from './BoxTransferDrawer'
 import { getLocations } from '../../../api/locationsApi'
 import type { LocationItem } from '../../../api/locationsApi'
 import { useLookups } from '../../../hooks/useLookups'
@@ -18,7 +18,6 @@ import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
 import { useToast } from '../../feedback/Toast'
-import { useConfirm } from '../../feedback/ConfirmDialog'
 import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 
 function fmtDateTime(iso: string | null): string {
@@ -38,7 +37,6 @@ function fmtDateTime(iso: string | null): string {
  */
 export function BoxDetailFeature({ boxId }: { boxId: string }) {
   const toast = useToast()
-  const confirm = useConfirm()
   const { unloadingZones } = useLookups()
   const [data, setData] = useState<ContainerDetailResponse | null>(null)
   const [locations, setLocations] = useState<LocationItem[]>([])
@@ -46,6 +44,7 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
   const [error, setError] = useState('')
   const [zoneId, setZoneId] = useState('')
   const [busy, setBusy] = useState(false)
+  const [transfer, setTransfer] = useState<BoxTransferMode | null>(null)
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -93,26 +92,6 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
     }
   }
 
-  async function handleRemove(productId: string, label: string, max: number) {
-    if (!box) return
-    const ok = await confirm({
-      title: 'Изъять из короба?',
-      body: `«${label}» — ${max} шт. останутся в месте ${box.zone_name ?? '—'}, но перестанут числиться в коробе.`,
-      confirmLabel: 'Изъять',
-    })
-    if (!ok) return
-    setBusy(true)
-    try {
-      await removeContainerItem(box.id, { product_id: productId, qty: max })
-      toast('Позиция изъята из короба', 'success')
-      await load()
-    } catch (e) {
-      toast(e instanceof Error ? e.message : 'Не удалось изъять позицию', 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   if (loading) {
     return <DetailPage title="Короб" backTo="/inventory/boxes"><Card>Загрузка…</Card></DetailPage>
   }
@@ -139,6 +118,16 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
               <span>Содержимое</span>
               <span style={{ flex: 1 }} />
               <span className="t-sub">{box.items_qty} шт.</span>
+              {box.status === 'placed' && (
+                <button
+                  className="btn sm ghost"
+                  disabled={busy}
+                  title="Со стола или с полки — в этот короб. Короб однороден по качеству."
+                  onClick={() => setTransfer({ kind: 'add' })}
+                >
+                  <Icon name="plus" size={13} /> Доложить товар
+                </button>
+              )}
             </CardHead>
             {contents.length === 0 ? (
               <div className="t-sub" style={{ padding: '8px 2px' }}>Короб пуст.</div>
@@ -160,8 +149,8 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
                         <button
                           className="btn sm ghost"
                           disabled={busy}
-                          title="Пересорт нашли у стеллажа: товар останется в месте, но вне короба"
-                          onClick={() => { void handleRemove(c.product_id, label || (c.product_sku ?? ''), c.qty) }}
+                          title="На эту же полку, в другое место или в другой короб"
+                          onClick={() => setTransfer({ kind: 'remove', line: c })}
                         >
                           Изъять
                         </button>
@@ -230,6 +219,16 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
               </div>
             </div>
           </Card>
+
+          {transfer && (
+            <BoxTransferDrawer
+              box={box}
+              mode={transfer}
+              zoneOptions={zoneOptions}
+              onClose={() => setTransfer(null)}
+              onDone={() => { setTransfer(null); void load() }}
+            />
+          )}
 
           {canPlace && (
             <Card>

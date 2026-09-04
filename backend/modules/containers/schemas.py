@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from config import INV_Q_GOOD
@@ -114,10 +116,35 @@ class ContainerPlaceItemScan(BaseModel):
     from_zone_id: str | None = None
 
 
-class ContainerPlaceRequest(BaseModel):
-    """Пачка коробов и/или товара в одно место хранения (сессия «взял → положил»)."""
+class ContainerPlaceSource(BaseModel):
+    """«Откуда» одной ходки: зона упаковки (корзина «ждёт размещения»), место или размещённый короб.
 
-    zone_id: str = Field(min_length=1)
+    Относится ко всей пачке и имеет приоритет над `from_zone_id` в строках. Без
+    источника товар ищется сам (сначала ждущее размещения, затем полка), а короб
+    решает по статусу; с источником он ещё и сверяется: короб, который числится в
+    другом месте, — ошибка учёта, а не повод молча поправить.
+    """
+
+    kind: Literal["collected", "location", "container"]
+    id: str | None = None
+
+
+class ContainerPlaceTarget(BaseModel):
+    """«Куда»: место хранения либо размещённый короб (только для товара)."""
+
+    kind: Literal["location", "container"]
+    id: str = Field(min_length=1)
+
+
+class ContainerPlaceRequest(BaseModel):
+    """Пачка коробов и/или товара в одно место (сессия «откуда → что → куда»).
+
+    `zone_id` — приёмник-место в старой форме запроса; `target` его заменяет.
+    """
+
+    zone_id: str | None = None
+    source: ContainerPlaceSource | None = None
+    target: ContainerPlaceTarget | None = None
     box_ids: list[str] = []
     items: list[ContainerPlaceItemScan] = []
 
@@ -138,6 +165,8 @@ class ContainerPlacedItem(BaseModel):
 class ContainerPlaceResult(BaseModel):
     zone_id: str
     zone_name: str
+    # Товар доложен в размещённый короб: место — то, где стоит короб.
+    target_container: ContainerItem | None = None
     boxes: list[ContainerItem] = []
     items: list[ContainerPlacedItem] = []
     placed_qty: int = 0

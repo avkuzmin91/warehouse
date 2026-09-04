@@ -846,3 +846,210 @@ def test_partial_delivery_leaves_the_rest_in_queue(api, client_id, product, zone
     detail = api.get(f"/shipments/{doc_id}").json()
     assert detail["status"] == "collected"
     assert detail["lines"][0]["placed_qty"] == 2
+
+
+# ── «Откуда → Что → Куда»: источник назван явно и сверяется с учётом ─────────
+
+def _transfer(api, *, source, target, box_ids=None, items=None):
+    return api.post("/containers/place", json={
+        "source": source,
+        "target": target,
+        "box_ids": list(box_ids or []),
+        "items": list(items or []),
+    })
+
+
+def _loc(zone_id: str) -> dict:
+    return {"kind": "location", "id": zone_id}
+
+
+def _box(box_id: str) -> dict:
+    return {"kind": "container", "id": box_id}
+
+
+_COLLECTED = {"kind": "collected"}
+
+
+def test_source_collected_rejects_box_already_on_shelf(api, client_id, product, zones):
+    """Сверка учёта: короб, который стоит на полке, из зоны упаковки не берут."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    r = _transfer(api, source=_COLLECTED, target=_loc(zones["special_id"]), box_ids=[box_id])
+    assert r.status_code == 400, r.text
+    assert "уже стоит" in r.json()["detail"]
+
+
+def test_source_location_must_match_where_box_is_registered(api, client_id, product, zones):
+    """Короб числится в A, кладовщик назвал B — ошибка, а не молчаливая правка учёта."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    wrong = _transfer(api, source=_loc(zones["special_id"]), target=_loc(zones["packing_id"]), box_ids=[box_id])
+    assert wrong.status_code == 400, wrong.text
+    assert "числится" in wrong.json()["detail"]
+
+    ok = _transfer(api, source=_loc(zones["cell_id"]), target=_loc(zones["special_id"]), box_ids=[box_id])
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["boxes"][0]["zone_id"] == zones["special_id"]
+
+
+def test_source_location_rejects_box_still_at_the_table(api, client_id, product, zones):
+    """Закрытый, но не размещённый короб — у стола: источник для него «Зона упаковки»."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": _new_box_code(api)}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
+
+    r = _transfer(api, source=_loc(zones["cell_id"]), target=_loc(zones["special_id"]), box_ids=[box_id])
+    assert r.status_code == 400, r.text
+    assert "у стола" in r.json()["detail"]
+
+    ok = _transfer(api, source=_COLLECTED, target=_loc(zones["cell_id"]), box_ids=[box_id])
+    assert ok.status_code == 200, ok.text
+
+
+def test_source_collected_does_not_fall_through_to_shelf(api, client_id, product, zones):
+    """«Зона упаковки» названа явно: товар, лежащий только на полке, оттуда не берётся."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    api.post(f"/containers/{box_id}/items/remove", json={"barcode": product["barcode"], "qty": 1})
+
+    r = _transfer(
+        api, source=_COLLECTED, target=_loc(zones["special_id"]),
+        items=[{"barcode": product["barcode"], "qty": 1}],
+    )
+    assert r.status_code == 400, r.text
+    assert "не ждёт размещения" in r.json()["detail"]
+
+
+def test_source_and_target_location_must_differ(api, client_id, product, zones):
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    api.post(f"/containers/{box_id}/items/remove", json={"barcode": product["barcode"], "qty": 1})
+
+    r = _transfer(
+        api, source=_loc(zones["cell_id"]), target=_loc(zones["cell_id"]),
+        items=[{"barcode": product["barcode"], "qty": 1}],
+    )
+    assert r.status_code == 400, r.text
+    assert "совпадают" in r.json()["detail"]
+
+
+def test_item_goes_from_box_to_another_location_in_one_step(api, client_id, product, zones):
+    """Из короба на другую полку — одна операция вместо «изъять, потом перенести»."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    r = _transfer(
+        api, source=_box(box_id), target=_loc(zones["special_id"]),
+        items=[{"barcode": product["barcode"], "qty": 1}],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["placed_qty"] == 1
+    assert r.json()["items"][0]["from_collected"] is False
+    assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 1
+    # Остаток не изменился, штука переехала: в служебном месте она лежит россыпью.
+    assert _bucket(client_id, product["product_id"], "storage") == 2
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
+            "WHERE product_id = ? AND to_zone_id = ? AND from_container_id = ? AND to_container_id IS NULL",
+            (product["product_id"], zones["special_id"], box_id),
+        ).fetchone()
+    assert int(row["n"]) == 1
+
+    too_many = _transfer(
+        api, source=_box(box_id), target=_loc(zones["special_id"]),
+        items=[{"barcode": product["barcode"], "qty": 5}],
+    )
+    assert too_many.status_code == 400
+    assert "только 1 шт" in too_many.json()["detail"]
+
+
+def test_item_moves_between_placed_boxes(api, client_id, product, zones):
+    """Товар между коробами: ось короба снимается у источника и ставится у приёмника."""
+    _doc_a, box_a = _collect_and_place(api, client_id, product, zones, qty=2)
+    _doc_b, box_b = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    same = _transfer(api, source=_box(box_a), target=_box(box_a), items=[{"barcode": product["barcode"], "qty": 1}])
+    assert same.status_code == 400
+    assert "один и тот же короб" in same.json()["detail"]
+
+    r = _transfer(api, source=_box(box_a), target=_box(box_b), items=[{"barcode": product["barcode"], "qty": 1}])
+    assert r.status_code == 200, r.text
+    assert r.json()["target_container"]["doc_number"].startswith("BOX-")
+    assert api.get(f"/containers/{box_a}").json()["doc"]["items_qty"] == 1
+    detail_b = api.get(f"/containers/{box_b}").json()
+    assert detail_b["doc"]["items_qty"] == 3
+    assert any(op["op_type"] == "item_add" and "Доложено" in (op["comment"] or "") for op in detail_b["ops"])
+    assert _bucket(client_id, product["product_id"], "storage") == 4
+
+
+def test_loose_item_from_shelf_goes_into_placed_box(api, client_id, product, zones):
+    """С полки в короб, стоящий на той же полке: меняется только ось короба."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    api.post(f"/containers/{box_id}/items/remove", json={"barcode": product["barcode"], "qty": 1})
+    assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 1
+
+    r = _transfer(
+        api, source=_loc(zones["cell_id"]), target=_box(box_id),
+        items=[{"barcode": product["barcode"], "qty": 1}],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["zone_id"] == zones["cell_id"]
+    assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 2
+    assert _bucket(client_id, product["product_id"], "storage") == 2
+    # Всё снова в коробе — ручное перемещение россыпи опять запрещено.
+    holdings = api.get(f"/containers/holdings?zone_ids={zones['cell_id']}").json()["items"]
+    mine = [h for h in holdings if h["product_id"] == product["product_id"]]
+    assert mine and mine[0]["qty"] == 2
+
+
+def test_collected_item_goes_straight_into_placed_box(api, client_id, product, zones):
+    """Со стола в размещённый короб: россыпь другой задачи докладывается в чужую тару."""
+    _doc_a, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+    doc_b, _line_id = _create_task(api, client_id, product, qty=1)
+    _as(_WAREHOUSE)
+    api.post(f"/shipments/{doc_b}/putaway/aside", json={"barcode": product["barcode"], "qty": 1})
+    api.post(f"/shipments/{doc_b}/finish-collecting")
+
+    r = _transfer(api, source=_COLLECTED, target=_box(box_id), items=[{"barcode": product["barcode"], "qty": 1}])
+    assert r.status_code == 200, r.text
+    assert r.json()["items"][0]["from_collected"] is True
+    assert api.get(f"/containers/{box_id}").json()["doc"]["items_qty"] == 3
+    assert _bucket(client_id, product["product_id"], "boxed") == 0
+    assert _bucket(client_id, product["product_id"], "storage") == 3
+
+
+def test_box_into_box_is_rejected(api, client_id, product, zones):
+    _doc_a, box_a = _collect_and_place(api, client_id, product, zones, qty=2)
+    _doc_b, box_b = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    r = _transfer(api, source=_loc(zones["cell_id"]), target=_box(box_b), box_ids=[box_a])
+    assert r.status_code == 400, r.text
+    assert "не вкладывается" in r.json()["detail"]
+
+
+def test_placed_box_keeps_one_quality_when_adding(api, client_id, product, zones):
+    """Годный короб брак не принимает — иначе у стеллажа его пришлось бы разбирать."""
+    _doc_a, good_box = _collect_and_place(api, client_id, product, zones, qty=2)
+    doc_b, _line_id = _create_task(api, client_id, product, qty=1)
+    _as(_WAREHOUSE)
+    api.post(f"/shipments/{doc_b}/putaway/aside", json={"barcode": product["barcode"], "qty": 1, "quality": "defect"})
+    api.post(f"/shipments/{doc_b}/finish-collecting")
+
+    r = _transfer(api, source=_COLLECTED, target=_box(good_box), items=[{"barcode": product["barcode"], "qty": 1}])
+    assert r.status_code == 400, r.text
+    assert "набран годным" in r.json()["detail"]
+    assert _bucket(client_id, product["product_id"], "boxed", "defect") == 1
+
+
+def test_unplaced_box_is_not_a_target(api, client_id, product, zones):
+    """Короб у стола приёмником не бывает: его состав меняют в задаче сборки."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=3)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": _new_box_code(api)}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
+    api.post(f"/shipments/{doc_id}/putaway/aside", json={"barcode": product["barcode"], "qty": 1})
+
+    r = _transfer(api, source=_COLLECTED, target=_box(box_id), items=[{"barcode": product["barcode"], "qty": 1}])
+    assert r.status_code == 400, r.text
+    assert "не размещён" in r.json()["detail"]

@@ -1255,8 +1255,13 @@ def create_zone_relocation(connection, payload, user_id: str) -> None:
     connection.commit()
 
 
-def _create_relocation_moves(connection, payload, user_id: str) -> None:
-    """Движения одного перемещения (см. create_zone_relocation). Без commit."""
+def _create_relocation_moves(connection, payload, user_id: str, *, to_container_id: str | None = None) -> None:
+    """Движения одного перемещения (см. create_zone_relocation). Без commit.
+
+    to_container_id — товар с полки докладывается в размещённый короб: тогда место
+    назначения может совпадать с источником (короб стоит на той же полке), меняется
+    лишь ось короба.
+    """
     from fastapi import HTTPException
 
     if payload.quality not in (INV_Q_GOOD, INV_Q_DEFECT):
@@ -1267,7 +1272,7 @@ def _create_relocation_moves(connection, payload, user_id: str) -> None:
     to_id = (payload.to_zone_id or "").strip() or None
     if not from_id:
         raise HTTPException(status_code=400, detail="Укажите место, откуда перемещаете товар")
-    if from_id == to_id:
+    if from_id == to_id and not to_container_id:
         raise HTTPException(status_code=400, detail="Выберите другое место назначения")
 
     _ensure_not_boxed(connection, payload, op=op, quality=payload.quality, zone_id=from_id, action="перемещать")
@@ -1309,6 +1314,7 @@ def _create_relocation_moves(connection, payload, user_id: str) -> None:
             from_zone_id=from_id, from_zone_name=from_name,
             to_zone_id=to_id, to_zone_name=to_name,
             qty=take, user_id=user_id,
+            to_container_id=to_container_id,
             shipment_line_id=shipment_line_id, dispatch_line_id=dispatch_line_id,
             comment=comment,
         )

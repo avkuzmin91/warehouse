@@ -202,8 +202,17 @@ export function ScanBoxScreen({ containerId }: { containerId: string }) {
                 </>
               )}
               {(box.status === 'closed' || box.status === 'placed') && (
-                <button className="btn ghost" disabled={busy} onClick={() => openPlace()}>
-                  <Icon name="layers" size={16} /> Везу пачкой — открыть «Перенос»
+                <button
+                  className="btn ghost"
+                  disabled={busy}
+                  onClick={() => openPlace({
+                    box,
+                    source: box.status === 'placed' && box.zone_id
+                      ? { kind: 'location', id: box.zone_id, code: box.zone_name ?? '' }
+                      : { kind: 'collected' },
+                  })}
+                >
+                  <Icon name="layers" size={16} /> Везу пачкой — открыть «Перемещение»
                 </button>
               )}
             </div>

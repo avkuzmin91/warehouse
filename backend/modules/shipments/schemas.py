@@ -600,3 +600,22 @@ class StoreBarcodesResponse(BaseModel):
 
 class StoreBarcodesApply(BaseModel):
     line_ids: list[str] = []
+
+
+class StoreBarcodeDraftLine(BaseModel):
+    """Позиция ещё не сохранённой задачи: только id — остальное резолвит backend."""
+
+    key:        str = Field(min_length=1)
+    product_id: str = Field(min_length=1)
+    color_id:   str | None = None
+    size_id:    str | None = None
+    store_id:   str | None = None
+
+
+class StoreBarcodesDraftPreview(BaseModel):
+    client_id: str = Field(min_length=1)
+    lines:     list[StoreBarcodeDraftLine] = []
+
+
+class StoreBarcodesDraftApply(StoreBarcodesDraftPreview):
+    keys: list[str] = []

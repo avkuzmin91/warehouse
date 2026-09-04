@@ -453,6 +453,30 @@ export function applyStoreBarcodes(docId: string, lineIds: string[]) {
   })
 }
 
+/** Позиция ещё не сохранённой задачи: ШК подбираются по выбранным в форме значениям. */
+export type StoreBarcodeDraftLine = {
+  key:        string
+  product_id: string
+  color_id:   string | null
+  size_id:    string | null
+  store_id:   string | null
+}
+
+export function previewDraftStoreBarcodes(clientId: string, lines: StoreBarcodeDraftLine[], signal?: AbortSignal) {
+  return request<{ items: StoreBarcodeSuggestion[] }>('/shipments/store-barcodes/preview', {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId, lines }),
+    signal,
+  })
+}
+
+export function applyDraftStoreBarcodes(clientId: string, lines: StoreBarcodeDraftLine[], keys: string[]) {
+  return request<{ message: string }>('/shipments/store-barcodes/apply', {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId, lines, keys }),
+  })
+}
+
 export type PackingPayload = { good_delta?: number; defect_delta?: number; packed_date: string }
 
 export function recordPacking(docId: string, lineId: string, payload: PackingPayload) {

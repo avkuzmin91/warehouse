@@ -96,6 +96,28 @@ export type ContainerPlaceItemScan = {
   from_zone_id?: string | null
 }
 
+/** «Откуда» одной ходки: зона упаковки (корзина «ждёт размещения»), место или размещённый короб.
+ *
+ * Относится ко всей пачке и имеет приоритет над from_zone_id строк. Названный
+ * источник ещё и сверяется с учётом: короб, который числится в другом месте, — ошибка.
+ */
+export type ContainerPlaceSource =
+  | { kind: 'collected' }
+  | { kind: 'location'; id: string }
+  | { kind: 'container'; id: string }
+
+/** «Куда»: место хранения либо размещённый короб (только для товара). */
+export type ContainerPlaceTarget = { kind: 'location' | 'container'; id: string }
+
+export type ContainerPlacePayload = {
+  /** Приёмник-место в старой форме запроса; target его заменяет. */
+  zone_id?: string
+  source?: ContainerPlaceSource
+  target?: ContainerPlaceTarget
+  box_ids?: string[]
+  items?: ContainerPlaceItemScan[]
+}
+
 export type ContainerPlacedItem = {
   product_name: string | null
   product_sku: string | null
@@ -110,6 +132,8 @@ export type ContainerPlacedItem = {
 export type ContainerPlaceResult = {
   zone_id: string
   zone_name: string
+  /** Товар доложен в размещённый короб: место — то, где стоит короб. */
+  target_container: ContainerItem | null
   boxes: ContainerItem[]
   items: ContainerPlacedItem[]
   placed_qty: number
@@ -211,19 +235,15 @@ export function moveContainer(id: string, zoneId: string) {
   })
 }
 
-/** Размещение пачки: сканы коробов и товара, затем скан места хранения.
+/** Перемещение пачки «откуда → что → куда» — одна ходка кладовщика, один запрос.
  *
- * Одна ходка кладовщика = один запрос. Закрытые короба встают на место, уже
- * размещённые переезжают, россыпь мимо коробов уезжает туда же.
+ * Закрытые короба встают на место, размещённые переезжают, товар едет со стола,
+ * с полки или из короба — на полку или в размещённый короб.
  */
-export function placeContainers(payload: {
-  zone_id: string
-  box_ids?: string[]
-  items?: ContainerPlaceItemScan[]
-}) {
+export function placeContainers(payload: ContainerPlacePayload) {
   return request<ContainerPlaceResult>('/containers/place', {
     method: 'POST',
-    body: JSON.stringify({ zone_id: payload.zone_id, box_ids: payload.box_ids ?? [], items: payload.items ?? [] }),
+    body: JSON.stringify({ ...payload, box_ids: payload.box_ids ?? [], items: payload.items ?? [] }),
   })
 }
 

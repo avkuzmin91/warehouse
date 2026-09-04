@@ -2,6 +2,7 @@ import { createContext, useContext, useState, type ReactNode } from 'react'
 import type { BarcodeMatch } from '../api/productsApi'
 import type { LocationMatch } from '../api/locationsApi'
 import type { CisCode } from '../utils/cis'
+import type { PlaceInit } from '../screens/PlaceScreen'
 import { useAuth } from '../auth/AuthContext'
 import { tabsForRole, showScanForRole, type TabDef, type TabName } from './tabs'
 
@@ -23,7 +24,7 @@ export type Route =
   | { name: 'putawayDoc'; id: string }
   | { name: 'putawayBox'; id: string; boxId: string }
   | { name: 'putawayAside'; id: string }
-  | { name: 'place'; source?: { id: string; code: string } }
+  | { name: 'place'; init?: PlaceInit }
   | { name: 'scanBox'; containerId: string }
   | { name: 'mTrips' }
   | { name: 'mWarehouse' }
@@ -79,7 +80,7 @@ type NavState = {
   // возвращает к задаче, а не к предыдущему закрытому коробу.
   openPutawayBox: (id: string, boxId: string, replace?: boolean) => void
   openPutawayAside: (id: string) => void
-  openPlace: (source?: { id: string; code: string }) => void
+  openPlace: (init?: PlaceInit) => void
   openScanBox: (containerId: string) => void
   openScan: () => void
   openScanProduct: (match: BarcodeMatch) => void
@@ -149,7 +150,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
       [...(replace && s.length > 1 ? s.slice(0, -1) : s), { name: 'putawayBox', id, boxId }]
     )),
     openPutawayAside: (id) => setStack((s) => [...s, { name: 'putawayAside', id }]),
-    openPlace: (source) => setStack((s) => [...s, { name: 'place', source }]),
+    openPlace: (init) => setStack((s) => [...s, { name: 'place', init }]),
     openScanBox: (containerId) => setStack((s) => [...s, { name: 'scanBox', containerId }]),
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),
     openScanProduct: (match) => setStack((s) => [...s, { name: 'scanProduct', match }]),

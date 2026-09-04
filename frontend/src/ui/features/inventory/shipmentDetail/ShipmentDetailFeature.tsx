@@ -1151,8 +1151,8 @@ export function ShipmentDetailFeature() {
 
       {storeBarcodesOpen && docId && (
         <StoreBarcodesDrawer
-          docId={docId}
-          docNumber={doc.doc_number}
+          target={{ kind: 'doc', docId }}
+          subtitle={`${doc.doc_number} · поиск в кабинете магазина строки`}
           onClose={() => setStoreBarcodesOpen(false)}
           onDone={refreshAfterLineChange}
         />

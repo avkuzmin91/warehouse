@@ -127,11 +127,12 @@ def place_containers_endpoint(
     x_request_id: str | None = Header(default=None, alias="X-Request-Id"),
     user=Depends(get_current_stock_operator),
 ):
-    """Размещение пачки: сканы коробов и товара, затем скан места хранения.
+    """Перемещение пачки: «откуда → что → куда» одной ходкой кладовщика.
 
-    Одна ходка кладовщика = один запрос: закрытые короба встают на место, уже
-    размещённые переезжают, россыпь мимо коробов уезжает туда же. Статусы задач
-    сборки при этом не двигаются — развозка им не принадлежит.
+    Один запрос на все перемещения по складу: закрытые короба встают на место, уже
+    размещённые переезжают, товар едет со стола, с полки или из короба — на полку
+    или в размещённый короб. Статусы задач сборки при этом не двигаются — развозка
+    им не принадлежит.
     """
     uid = str(user["id"])
     with get_connection() as conn:
@@ -140,6 +141,7 @@ def place_containers_endpoint(
             return stored
         result = place_batch(
             conn, zone_id=payload.zone_id, box_ids=payload.box_ids, items=payload.items, user_id=uid,
+            source=payload.source, target=payload.target,
         )
         finish_idempotent(conn, x_request_id, result.model_dump())
         conn.commit()

@@ -2482,6 +2482,49 @@ def store_barcode_items(connection, doc_id: str) -> list[dict]:
     ]
 
 
+def store_barcode_items_for_lines(connection, lines: list[dict]) -> list[dict]:
+    """То же, что store_barcode_items, но состав ещё не сохранён (форма создания).
+
+    С клиента приходят только id (товар, цвет, размер, магазин) — название, SKU и
+    вариант резолвятся здесь по БД, как и для строк документа."""
+    out: list[dict] = []
+    for line in lines:
+        product_id = str(line.get("product_id") or "")
+        if not product_id:
+            continue
+        row = connection.execute(
+            """
+            SELECT COALESCE(NULLIF(p.name, ''), '') AS product_name,
+                   COALESCE(NULLIF(p.sku, ''), '') AS product_sku,
+                   col.name AS color_name, sz.name AS size_name,
+                   v.id AS variant_id
+            FROM products p
+            LEFT JOIN colors col ON col.id = ?
+            LEFT JOIN sizes sz ON sz.id = ?
+            LEFT JOIN product_variants v ON v.product_id = p.id
+             AND v.color_id IS NOT DISTINCT FROM ?
+             AND v.size_id IS NOT DISTINCT FROM ?
+             AND COALESCE(v.is_deleted, 0) = 0
+            WHERE p.id = ? AND COALESCE(p.is_deleted, 0) = 0
+            """,
+            (line.get("color_id"), line.get("size_id"),
+             line.get("color_id"), line.get("size_id"), product_id),
+        ).fetchone()
+        if not row:
+            continue
+        out.append({
+            "key": str(line["key"]),
+            "store_id": line.get("store_id") or None,
+            "product_id": product_id,
+            "variant_id": row["variant_id"],
+            "product_name": str(row["product_name"] or ""),
+            "product_sku": str(row["product_sku"] or ""),
+            "color_name": row["color_name"],
+            "size_name": row["size_name"],
+        })
+    return out
+
+
 def classify_barcodes_for_variant(connection, codes: list[str], *, product_id: str, variant_id: str | None) -> list[dict]:
     """Статус каждого распознанного кода относительно варианта строки:
     confirmed — привязан к этому варианту; other_variant — другой цвет/размер того же

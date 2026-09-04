@@ -97,7 +97,7 @@ export function ScanLocationScreen({ location }: { location: LocationMatch }) {
         <button
           className="btn"
           style={{ width: '100%' }}
-          onClick={() => openPlace({ id: location.id, code: location.code })}
+          onClick={() => openPlace({ source: { kind: 'location', id: location.id, code: location.code } })}
         >
           <Icon name="layers" size={18} /> Взять отсюда — перенос
         </button>

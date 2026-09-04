@@ -1,19 +1,30 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  applyDraftStoreBarcodes,
   applyStoreBarcodes,
   getStoreBarcodeSuggestions,
+  previewDraftStoreBarcodes,
   STORE_BARCODE_PULL_LABELS,
 } from '../../../../../api/shipmentsApi'
-import type { StoreBarcodeSuggestion, StoreBarcodePullStatus } from '../../../../../api/shipmentsApi'
+import type {
+  StoreBarcodeDraftLine,
+  StoreBarcodeSuggestion,
+  StoreBarcodePullStatus,
+} from '../../../../../api/shipmentsApi'
 import { Drawer } from '../../../../feedback/Drawer'
 import { useToast } from '../../../../feedback/Toast'
 import { Checkbox } from '../../../../primitives/Checkbox'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { Icon } from '../../../../primitives/Icon'
 
+/** Сохранённая задача — по её строкам; форма создания — по выбранным в ней значениям. */
+export type StoreBarcodesTarget =
+  | { kind: 'doc'; docId: string }
+  | { kind: 'draft'; clientId: string; lines: StoreBarcodeDraftLine[] }
+
 type Props = {
-  docId: string
-  docNumber: string
+  target: StoreBarcodesTarget
+  subtitle: string
   onClose: () => void
   onDone: () => void
 }
@@ -50,24 +61,32 @@ function hint(item: StoreBarcodeSuggestion): string {
   }
 }
 
-export function StoreBarcodesDrawer({ docId, docNumber, onClose, onDone }: Props) {
+export function StoreBarcodesDrawer({ target, subtitle, onClose, onDone }: Props) {
   const toast = useToast()
   const [items, setItems] = useState<StoreBarcodeSuggestion[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [picked, setPicked] = useState<Record<string, boolean>>({})
   const [acting, setActing] = useState(false)
 
+  // Состав шторки берётся на момент открытия: цель — объект, и держать её в deps
+  // значило бы перезапрашивать подбор (и сбрасывать галочки) на каждый ререндер родителя.
+  const targetRef = useRef(target)
+  targetRef.current = target
+
   const load = useCallback(async () => {
     setError(null)
     try {
-      const res = await getStoreBarcodeSuggestions(docId)
+      const t = targetRef.current
+      const res = t.kind === 'doc'
+        ? await getStoreBarcodeSuggestions(t.docId)
+        : await previewDraftStoreBarcodes(t.clientId, t.lines)
       setItems(res.items)
       setPicked(Object.fromEntries(res.items.filter((i) => i.status === 'ready').map((i) => [i.line_id, true])))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось получить карточки маркетплейса')
       setItems([])
     }
-  }, [docId])
+  }, [])
 
   useEffect(() => { void load() }, [load])
 
@@ -80,7 +99,11 @@ export function StoreBarcodesDrawer({ docId, docNumber, onClose, onDone }: Props
     if (!chosen.length) return
     setActing(true)
     try {
-      const res = await applyStoreBarcodes(docId, chosen.map((i) => i.line_id))
+      const t = targetRef.current
+      const keys = chosen.map((i) => i.line_id)
+      const res = t.kind === 'doc'
+        ? await applyStoreBarcodes(t.docId, keys)
+        : await applyDraftStoreBarcodes(t.clientId, t.lines, keys)
       toast(res.message, 'success')
       onDone()
       onClose()
@@ -96,7 +119,7 @@ export function StoreBarcodesDrawer({ docId, docNumber, onClose, onDone }: Props
       open
       onClose={onClose}
       title="Подтянуть ШК из маркетплейса"
-      subtitle={`${docNumber} · поиск в кабинете магазина строки`}
+      subtitle={subtitle}
       width={560}
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>

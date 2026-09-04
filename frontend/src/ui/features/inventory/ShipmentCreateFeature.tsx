@@ -9,6 +9,7 @@ import type { DuplicateMatch, ProductFileItem } from '../../../api/domainTypes'
 import { attachShipmentLineFileFromProduct } from '../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { ProductLabelPickerModal } from './shipmentDetail/components/ProductLabelPickerModal'
+import { StoreBarcodesDrawer } from './shipmentDetail/components/StoreBarcodesDrawer'
 import { DuplicateWarnModal } from './shared/DuplicateWarnModal'
 import { ClientActiveDocsPanel, activeDocVariantKey, loadActiveShipments } from './shared/ClientActiveDocsPanel'
 import type { PlannableItem } from '../../../api/balancesApi'
@@ -56,6 +57,7 @@ export function ShipmentCreateFeature(
   const [clientStores, setClientStores] = useState<ClientStoreItem[]>([])
   const [filePreview, setFilePreview] = useState<DraftLineFilePreview | null>(null)
   const [showPicker, setShowPicker] = useState(false)
+  const [storeBarcodesOpen, setStoreBarcodesOpen] = useState(false)
   const [skuLine, setSkuLine] = useState<DraftLine | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -419,9 +421,16 @@ export function ShipmentCreateFeature(
           <PhaseBlock icon="boxes" title="Состав упаковки" role="manager" state="active"
             hint="Товар на остатках и в пути"
             right={
-              <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
-                <Icon name="plus" size={12} />Добавить товар
-              </button>
+              <div className="row gap-8">
+                {lines.length > 0 && (
+                  <button className="btn sm" onClick={() => setStoreBarcodesOpen(true)} disabled={saving}>
+                    <Icon name="barcode" size={12} />Подтянуть ШК
+                  </button>
+                )}
+                <button className="btn sm primary" onClick={() => setShowPicker(true)} disabled={!clientId}>
+                  <Icon name="plus" size={12} />Добавить товар
+                </button>
+              </div>
             }>
 
             {lines.length === 0 ? (
@@ -617,6 +626,25 @@ export function ShipmentCreateFeature(
           onAdd={(b, qty, zoneId, zoneName) => { addFromBalance(b, qty, zoneId, zoneName); setShowPicker(false) }}
           onAddMany={addManyFromBalance}
           onClose={() => setShowPicker(false)}
+        />
+      )}
+
+      {storeBarcodesOpen && clientId && (
+        <StoreBarcodesDrawer
+          target={{
+            kind: 'draft',
+            clientId,
+            lines: lines.map((l) => ({
+              key:        l._uid,
+              product_id: l.product_id,
+              color_id:   l.color_id ?? null,
+              size_id:    l.size_id ?? null,
+              store_id:   l.store_id ?? null,
+            })),
+          }}
+          subtitle="черновик · поиск в кабинете магазина строки"
+          onClose={() => setStoreBarcodesOpen(false)}
+          onDone={() => {}}
         />
       )}
 

@@ -147,6 +147,59 @@ def test_pull_by_offer_and_size(manager_client, task_fixture):
     assert r.json()["items"][0]["status"] == "exists"
 
 
+def test_pull_for_unsaved_form(manager_client, task_fixture):
+    """Форма создания: подбор идёт по выбранным значениям, документа ещё нет."""
+    payload = {
+        "client_id": task_fixture["client_id"],
+        "lines": [{
+            "key": "row-1",
+            "product_id": task_fixture["product_id"],
+            "color_id": None,
+            "size_id": task_fixture["size_id"],
+            "store_id": task_fixture["store_id"],
+        }],
+    }
+    r = manager_client.post("/shipments/store-barcodes/preview", json=payload)
+    assert r.status_code == 200, r.text
+    item = r.json()["items"][0]
+    assert item["line_id"] == "row-1"
+    assert item["status"] == "ready"
+    assert item["new_barcodes"] == [task_fixture["barcode"]]
+
+    r = manager_client.post("/shipments/store-barcodes/apply", json={**payload, "keys": ["row-1"]})
+    assert r.status_code == 200, r.text
+
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT variant_id, store_id FROM product_barcodes "
+            "WHERE barcode = ? AND COALESCE(is_deleted, 0) = 0",
+            (task_fixture["barcode"],),
+        ).fetchone()
+    assert row is not None
+    assert str(row["variant_id"]) == task_fixture["variant_id"]
+    assert str(row["store_id"]) == task_fixture["store_id"]
+
+    # Повтор по тем же значениям уже ничего не пишет.
+    assert manager_client.post(
+        "/shipments/store-barcodes/preview", json=payload
+    ).json()["items"][0]["status"] == "exists"
+
+
+def test_draft_pull_rejects_foreign_store(manager_client, task_fixture):
+    """Магазин чужого клиента с формы не принимается."""
+    r = manager_client.post("/shipments/store-barcodes/preview", json={
+        "client_id": task_fixture["client_id"],
+        "lines": [{
+            "key": "row-1",
+            "product_id": task_fixture["product_id"],
+            "color_id": None,
+            "size_id": task_fixture["size_id"],
+            "store_id": str(uuid.uuid4()),
+        }],
+    })
+    assert r.status_code == 400
+
+
 def test_pull_conflict_not_overwritten(manager_client, task_fixture):
     """ШК карточки уже стоит у другого варианта — не переписываем, показываем конфликт."""
     other_variant = str(uuid.uuid4())
