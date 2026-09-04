@@ -55,7 +55,7 @@ type BoxSection = {
   containerId: string
   docNumber: string
   status: ContainerStatus
-  opStatus: 'storage' | 'boxed'
+  opStatus: 'storage' | 'packed' | 'ready'
   qty: number
   rows: { item: BalanceZoneItem; qty: number }[]
 }
@@ -67,7 +67,6 @@ const OP_TONE: Record<InvOpStatus, BadgeTone> = {
   storage: 'accent',
   packing: 'info',
   packed:  'info',
-  boxed:   'warning',
   picked:  'info',
   ready:   'success',
 }
@@ -1040,7 +1039,7 @@ export function ByZoneView() {
                             <Badge tone={containerStatusTone(box.status) as BadgeTone}>
                               {CONTAINER_STATUS_LABELS[box.status]}
                             </Badge>
-                            {box.opStatus === 'boxed' && (
+                            {box.opStatus === 'packed' && (
                               <span style={{ fontSize: 11, color: 'var(--c-warning)' }}>ждёт развозки</span>
                             )}
                             <div className="flex-1" />

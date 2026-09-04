@@ -1,6 +1,6 @@
 import { request, requestIdHeaders } from './http'
 
-export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'boxed' | 'picked' | 'ready'
+export type InvOpStatus = 'storage' | 'packing' | 'packed' | 'picked' | 'ready'
 export type InvQuality = 'good' | 'defect'
 
 // Остаток по месту хранения: основа экрана «Остатки» (где лежит товар) и выбора
@@ -177,7 +177,6 @@ export const OP_STATUS_LABELS: Record<InvOpStatus, string> = {
   storage: 'На хранении',
   packing: 'На упаковке',
   packed: 'Упакован',
-  boxed: 'Собран в короб',
   picked: 'Собрано под МП',
   ready: 'Готов к отгрузке',
 }
@@ -188,7 +187,6 @@ export const OP_STATUS_TONE: Record<InvOpStatus, string> = {
   storage: 'accent',
   packing: 'info',
   packed: 'info',
-  boxed: 'warning',
   picked: 'info',
   ready: 'success',
 }

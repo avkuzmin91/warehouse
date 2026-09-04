@@ -19,7 +19,6 @@ from config import (
     CONTAINER_STATUS_PLACED,
     EXTRA_INCOME_OP_CREATE,
     EXTRA_INCOME_REPACK_CATEGORY_NAME,
-    INV_OP_BOXED,
     INV_OP_PACKED,
     INV_OP_PACKING,
     INV_OP_READY,
@@ -46,7 +45,6 @@ from config import (
     SHIPMENT_REPACK_KINDS,
     SHIPMENT_REPACK_PAID,
     SHIPMENT_STATUS_CANCELLED,
-    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_LABELS,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKED,
@@ -78,7 +76,7 @@ def normalize_cargo_type(raw: str | None) -> str:
 
 
 def normalize_task_kind(raw: str | None) -> str:
-    """Тип задачи склада: упаковка под отгрузку (по умолчанию) либо размещение по ячейкам."""
+    """Тип задачи склада: упаковка под отгрузку (по умолчанию) либо упаковка с ТСД."""
     s = str(raw or SHIPMENT_TASK_PACKING).strip().lower()
     return s if s in (SHIPMENT_TASK_PACKING, SHIPMENT_TASK_PUTAWAY) else SHIPMENT_TASK_PACKING
 
@@ -548,10 +546,9 @@ def release_line_packing_pool(connection, doc_id: str, line_id: str, user_id: st
 #           списание ready→shipped факт упаковки не меняют — число «упаковано» держится;
 #   defect = конвертации качества good→defect минус обратные. Раскладка брака
 #           (packed→storage с тем же качеством) и списание факт не меняют.
-# `boxed` входит в набор наравне с packed/ready: скан товара в короб — тот же факт
-# упаковки (и та же оплата кладовщику), а размещение короба (boxed → storage) факт
-# не отменяет.
-_PACKED_SET_SQL = ", ".join(f"'{s}'" for s in (INV_OP_PACKED, INV_OP_BOXED, INV_OP_READY))
+# Скан товара в короб (задача с ТСД) — тот же факт упаковки в `packed` (и та же
+# оплата кладовщику), а развозка короба (packed → ready) факт не отменяет.
+_PACKED_SET_SQL = ", ".join(f"'{s}'" for s in (INV_OP_PACKED, INV_OP_READY))
 
 # Сторно прямого размещения (storage → packed) входит в набор «извне» и без отсева
 # компенсаций читалось бы как новая упаковка — отмена вернула бы объём вместо того,
@@ -800,9 +797,9 @@ def record_packing(
 
     Упаковка с ТСД (task_kind=putaway) вносится не разово числом, а поштучно: каждый
     скан — это и есть запись упаковки. Короб в такой задаче просто тара: и годный, и
-    брак уходят в корзину `boxed` («Ждёт размещения») — в коробе (container_id) или
-    мимо него (габарит, брак). Место хранения этому товару назначает отдельный процесс
-    размещения, поэтому к отгрузке он станет доступен только после него.
+    брак уходят в ту же корзину `packed` — в коробе (ось container_id) или без него
+    (габарит, брак). Упакованное доступно отгрузке сразу; в зону отгрузки (`ready`)
+    короба и россыпь везёт отдельный процесс развозки.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
 
@@ -824,7 +821,6 @@ def record_packing(
         raise HTTPException(status_code=400, detail="Упаковку можно вносить только в статусе «На упаковке»")
 
     is_putaway = normalize_task_kind(doc_row["task_kind"]) == SHIPMENT_TASK_PUTAWAY
-    pack_to_op = INV_OP_BOXED if is_putaway else INV_OP_PACKED
 
     # Задача на переупаковке: новые pack-записи штампуются её видом — free не попадает
     # в деньги производительности, paid тарифицируется клиенту при завершении задачи.
@@ -868,20 +864,17 @@ def record_packing(
 
     pack_entry_id = str(uuid4())
     label = line["product_sku"] or line["product_name"]
-    # И годный, и найденный брак уходят одной корзиной: в задаче упаковки — «Упаковано»
-    # (packed), в задаче размещения — «Ждёт размещения» (boxed). Это ещё НЕ «Готов к
-    # отгрузке»: годное переведёт в ready только «Готово к рейсу» (finish_relocation),
-    # брак там же вернётся на хранение; собранное уедет в место хранения размещением.
+    # И годный, и найденный брак уходят одной корзиной «Упаковано» (packed); у задачи с
+    # ТСД — с осью короба. В ready годное переводит раскладка: «Готово к рейсу»
+    # (finish_relocation) либо развозка коробов; брак у задачи упаковки там же
+    # вернётся на хранение.
     # Пул «На упаковке» могли вручную переставить из зоны упаковки по ячейкам —
     # списываем из фактических мест (FIFO, зона упаковки первой). Упакованное
     # складывается в зоне упаковки.
     sources = line_bucket_zone_sources(
         connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
     )
-    for kind, delta, to_op in (
-        (INV_Q_GOOD, good_delta, pack_to_op),
-        (INV_Q_DEFECT, defect_delta, pack_to_op),
-    ):
+    for kind, delta in ((INV_Q_GOOD, good_delta), (INV_Q_DEFECT, defect_delta)):
         if delta <= 0:
             continue
         kind_ru = "годный" if kind == INV_Q_GOOD else "брак"
@@ -894,15 +887,15 @@ def record_packing(
                 color_id=line["color_id"], color_name=line["color_name"],
                 size_id=line["size_id"], size_name=line["size_name"],
                 client_id=client_id, client_name=None,
-                from_op=INV_OP_PACKING, to_op=to_op,
+                from_op=INV_OP_PACKING, to_op=INV_OP_PACKED,
                 from_quality=INV_Q_GOOD, to_quality=kind,
                 from_zone_id=src_zone_id, from_zone_name=src_zone_name,
                 to_zone_id=packing_id, to_zone_name=packing_name,
                 qty=take, user_id=user_id, shipment_line_id=line_id,
-                to_container_id=container_id if to_op == INV_OP_BOXED else None,
+                to_container_id=container_id,
                 comment=(
                     f"Упаковка в короб ({kind_ru}): +{take} шт." if container_id
-                    else f"Упаковка без короба ({kind_ru}): +{take} шт." if to_op == INV_OP_BOXED
+                    else f"Упаковка без короба ({kind_ru}): +{take} шт." if is_putaway
                     else f"Упаковка ({kind_ru}): +{take} шт."
                 ),
                 packed_date=packed_date, pack_entry_id=pack_entry_id,
@@ -1932,13 +1925,17 @@ def return_to_packing(connection, doc_id: str, user_id: str, force: bool = False
     журнале. Нужен, когда отгрузка корректна, но годное/брак по остатку размечены неверно.
     """
     doc = connection.execute(
-        "SELECT status, cargo_type, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
+        "SELECT status, cargo_type, task_kind, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0",
         (doc_id,),
     ).fetchone()
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не найден")
     if normalize_cargo_type(doc["cargo_type"]) == SHIPMENT_CARGO_DEFECT:
         raise HTTPException(status_code=400, detail="Брак-отгрузка минует упаковку — вернуть на упаковку нельзя")
+    # Откат раскладки не знает оси короба: развезённый короб вернулся бы на стол
+    # россыпью, а короб на бумаге остался бы полным.
+    if normalize_task_kind(doc["task_kind"]) == SHIPMENT_TASK_PUTAWAY:
+        raise HTTPException(status_code=400, detail="Для задачи «Упаковка с ТСД» возврат на упаковку пока недоступен")
     status = str(doc["status"])
     if status not in (SHIPMENT_STATUS_RELOCATING, SHIPMENT_STATUS_PACKED):
         raise HTTPException(status_code=400, detail="Вернуть на упаковку можно только из «Перемещение» или «Упаковано»")
@@ -2272,7 +2269,7 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
     is_defect_cargo = normalize_cargo_type(row["cargo_type"]) == SHIPMENT_CARGO_DEFECT
     is_putaway = normalize_task_kind(row["task_kind"]) == SHIPMENT_TASK_PUTAWAY
     if is_putaway:
-        # Размещение по ячейкам: on_packing → placed делает finish_putaway.
+        # Упаковка с ТСД: on_packing → packed делает finish_collecting.
         transitions, roles = SHIPMENT_TRANSITIONS_PUTAWAY, SHIPMENT_TRANSITION_ROLES_PUTAWAY
     elif is_defect_cargo:
         transitions, roles = SHIPMENT_TRANSITIONS_DEFECT, SHIPMENT_TRANSITION_ROLES_DEFECT
@@ -2298,7 +2295,7 @@ def advance_shipment(connection, doc_id: str, user_id: str, user_role: str) -> s
         if not str(row["ship_date"] or "").strip():
             raise HTTPException(
                 status_code=400,
-                detail="Укажите дату размещения (план)" if is_putaway else "Укажите дату упаковки (план)",
+                detail="Укажите дату упаковки (план)",
             )
         if not is_putaway and not str(row["comment"] or "").strip():
             raise HTTPException(status_code=400, detail="Заполните техническое задание")
@@ -2552,10 +2549,10 @@ def classify_barcodes_for_variant(connection, codes: list[str], *, product_id: s
     return out
 
 
-# ── Задача «Размещение по ячейкам»: короба и раскладка ────────────────────────
+# ── Задача «Упаковка с ТСД»: короба и сборка ──────────────────────────────────
 
 def _require_putaway_doc(connection, doc_id: str, *, status: str | None = SHIPMENT_STATUS_ON_PACKING):
-    """Задача размещения в рабочем статусе. 404/400 с русским detail."""
+    """Задача с ТСД в рабочем статусе. 404/400 с русским detail."""
     doc = connection.execute(
         "SELECT id, doc_number, status, client_id, client_name, task_kind "
         "FROM shipment_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
@@ -2564,7 +2561,7 @@ def _require_putaway_doc(connection, doc_id: str, *, status: str | None = SHIPME
     if not doc:
         raise HTTPException(status_code=404, detail="Документ не найден")
     if normalize_task_kind(doc["task_kind"]) != SHIPMENT_TASK_PUTAWAY:
-        raise HTTPException(status_code=400, detail="Короба собираются только в задаче «Размещение по ячейкам»")
+        raise HTTPException(status_code=400, detail="Короба собираются только в задаче «Упаковка с ТСД»")
     if status and str(doc["status"]) != status:
         raise HTTPException(
             status_code=400,
@@ -2590,40 +2587,27 @@ def _box_label(row) -> str:
 
 
 def line_boxed_qty(connection, line_id: str) -> int:
-    """Сколько по строке собрано и ждёт размещения (нетто корзины boxed).
+    """Сколько по строке упаковано сканом и ещё стоит у стола (нетто корзины packed).
 
-    Считает и короба, и россыпь мимо коробов: короб — просто тара, ось контейнера
+    Считает и короба, и россыпь без короба: короб — просто тара, ось контейнера
     на доступность товара не влияет.
     """
-    row = connection.execute(
-        f"""SELECT
-              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' THEN qty ELSE 0 END), 0)
-            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' THEN qty ELSE 0 END), 0) AS qty
-           FROM zone_relocations WHERE shipment_line_id = ?""",
-        (line_id,),
-    ).fetchone()
-    return int(row["qty"] or 0)
+    pending = line_packed_pending(connection, line_id)
+    return pending["good"] + pending["defect"]
 
 
 def line_boxed_defect_qty(connection, line_id: str) -> int:
-    """Из ждущего размещения — брак (для карточки задачи и ТСД)."""
-    row = connection.execute(
-        f"""SELECT
-              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
-            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS qty
-           FROM zone_relocations WHERE shipment_line_id = ?""",
-        (line_id,),
-    ).fetchone()
-    return int(row["qty"] or 0)
+    """Из стоящего у стола — брак (для карточки задачи и ТСД)."""
+    return line_packed_pending(connection, line_id)["defect"]
 
 
 def line_aside_defect_qty(connection, line_id: str) -> int:
-    """Из собранного мимо коробов — брак: ему обычно нужно своё место хранения."""
+    """Из собранного без короба — брак: ему обычно нужно своё место."""
     row = connection.execute(
         f"""SELECT
-              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_container_id IS NULL
+              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_PACKED}' AND to_container_id IS NULL
                                  AND to_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0)
-            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_container_id IS NULL
+            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_PACKED}' AND from_container_id IS NULL
                                  AND from_quality = '{INV_Q_DEFECT}' THEN qty ELSE 0 END), 0) AS qty
            FROM zone_relocations WHERE shipment_line_id = ?""",
         (line_id,),
@@ -2632,25 +2616,25 @@ def line_aside_defect_qty(connection, line_id: str) -> int:
 
 
 def line_aside_qty(connection, line_id: str) -> int:
-    """Из ждущего размещения — то, что собрано мимо коробов (габарит, брак).
+    """Из стоящего у стола — то, что собрано без короба (габарит, брак).
 
     Отличается осью короба: у россыпи `*_container_id` пуст, поэтому она уезжает в
-    место хранения отдельным сканом товара, а не сканом короба.
+    зону отгрузки отдельным сканом товара, а не сканом короба.
     """
     row = connection.execute(
         f"""SELECT
-              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_BOXED}' AND to_container_id IS NULL THEN qty ELSE 0 END), 0)
-            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_BOXED}' AND from_container_id IS NULL THEN qty ELSE 0 END), 0) AS qty
+              COALESCE(SUM(CASE WHEN to_op = '{INV_OP_PACKED}' AND to_container_id IS NULL THEN qty ELSE 0 END), 0)
+            - COALESCE(SUM(CASE WHEN from_op = '{INV_OP_PACKED}' AND from_container_id IS NULL THEN qty ELSE 0 END), 0) AS qty
            FROM zone_relocations WHERE shipment_line_id = ?""",
         (line_id,),
     ).fetchone()
     return int(row["qty"] or 0)
 
 
-# Движение «размещено по заданию»: собранное уехало в место хранения (boxed → storage)
-# коробом или россыпью. Обратное движение — сторно ошибочного размещения.
-_PLACED_IN_SQL  = f"from_op = '{INV_OP_BOXED}' AND to_op = '{INV_OP_STORAGE}'"
-_PLACED_OUT_SQL = f"from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_BOXED}'"
+# Движение «развезено по заданию»: упакованное уехало со стола в зону отгрузки
+# (packed → ready) коробом или россыпью. Обратное движение — сторно ошибочной развозки.
+_PLACED_IN_SQL  = f"from_op = '{INV_OP_PACKED}' AND to_op = '{INV_OP_READY}'"
+_PLACED_OUT_SQL = f"from_op = '{INV_OP_READY}' AND to_op = '{INV_OP_PACKED}'"
 
 
 def line_placed_qty(connection, line_id: str) -> int:
@@ -3098,7 +3082,7 @@ def add_aside_item(connection, doc_id: str, *, barcode: str, qty: int, quality: 
     """Скан товара мимо короба: габарит не влез либо упаковщик решил не класть в короб.
 
     Запись упаковки такая же, как у скана в короб (объём, дата, заработок), только без
-    оси контейнера: товар ждёт размещения россыпью и уедет в место хранения отдельным
+    оси контейнера: товар ждёт развозки россыпью и уедет в зону отгрузки отдельным
     сканом на ТСД у стеллажа.
     """
     _require_putaway_doc(connection, doc_id)
@@ -3140,7 +3124,7 @@ def undo_aside_item(
     undone = _reverse_pack_entries(
         connection, doc_id, line_id, qty, user_id,
         leg_sql=(
-            f"zr.to_op = '{INV_OP_BOXED}' AND zr.to_container_id IS NULL"
+            f"zr.to_op = '{INV_OP_PACKED}' AND zr.to_container_id IS NULL"
             + ("" if q is None else " AND zr.to_quality = ?")
         ),
         leg_params=() if q is None else (q,),
@@ -3170,12 +3154,12 @@ def log_placement_op(connection, doc_id: str, *, comment: str, user_id: str) -> 
 
 
 def finish_collecting(connection, doc_id: str, user_id: str) -> str:
-    """Сборка завершена: on_packing -> collected. Это конец задачи.
+    """Сборка завершена: on_packing -> packed. Это конец задачи.
 
-    Гейт: открытых коробов с товаром не осталось. Закрытые короба и собранная россыпь
-    задачу не держат — их развозит по местам отдельный процесс размещения, у которого
-    свой темп и своя очередь. Нерешённый пул со стола возвращается на хранение в те же
-    места.
+    Гейт: открытых коробов с товаром не осталось. Упакованное уже в пуле отгрузки;
+    закрытые короба и собранная россыпь задачу не держат — в зону отгрузки их везёт
+    отдельный процесс развозки, у которого свой темп и своя очередь. Нерешённый пул
+    со стола возвращается на хранение в те же места.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
     from modules.containers.service import containers_items_qty
@@ -3236,11 +3220,11 @@ def finish_collecting(connection, doc_id: str, user_id: str) -> str:
     connection.execute(
         "UPDATE shipment_docs SET status = ?, actual_ship_date = COALESCE(actual_ship_date, ?), "
         "updated_at = ? WHERE id = ?",
-        (SHIPMENT_STATUS_COLLECTED, business_today().isoformat(), now, doc_id),
+        (SHIPMENT_STATUS_PACKED, business_today().isoformat(), now, doc_id),
     )
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_COLLECTED,
-         f"Сборка завершена: {collected_total} шт. передано на развозку по местам", now, user_id),
+         f"Упаковка завершена: {collected_total} шт. упаковано, короба и товар без короба ждут развозки", now, user_id),
     )
-    return SHIPMENT_STATUS_COLLECTED
+    return SHIPMENT_STATUS_PACKED

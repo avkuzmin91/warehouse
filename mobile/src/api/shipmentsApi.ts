@@ -7,13 +7,12 @@ export type ShipmentStatus =
   | 'on_packing'
   | 'relocating'
   | 'packed'
-  | 'collected'
   | 'completed_no_goods'
   | 'cancelled'
 
 export type ShipmentPlacement = { kind: 'good' | 'defect'; zone_id: string | null; zone_name: string | null; qty: number }
 
-/** Тип задачи склада: упаковка под отгрузку или размещение по ячейкам. */
+/** Тип задачи склада: упаковка под отгрузку (числом) или упаковка с ТСД (сканом в короба). */
 export type ShipmentTaskKind = 'packing' | 'putaway'
 
 export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
@@ -49,7 +48,7 @@ export type ShipmentLine = {
   // частичным «Разместить готовое» сюда не входит — оно уже доступно к отгрузке.
   packed_pending_good: number
   packed_pending_defect: number
-  // Задача размещения: лежит в коробах на столе / уже уехало в ячейки.
+  // Задача с ТСД: упаковано и стоит у стола / уже развезено в зону отгрузки.
   boxed_qty: number
   boxed_defect_qty: number
   aside_qty: number
@@ -91,7 +90,7 @@ export type ShipmentDetail = {
   repack_reason: string | null
   repack_active: boolean
   lines: ShipmentLine[]
-  /** Короба задачи размещения (у задачи упаковки список пуст). */
+  /** Короба задачи с ТСД (у задачи упаковки список пуст). */
   boxes: ShipmentBox[]
 }
 
@@ -470,12 +469,11 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   on_packing: 'На упаковке',
   relocating: 'Перемещение',
   packed: 'Упакован',
-  collected: 'Собрано',
   completed_no_goods: 'Завершён',
   cancelled: 'Аннулирован',
 }
 
-// --- Задача «Размещение по ячейкам»: короба ---
+// --- Задача «Упаковка с ТСД»: короба ---
 
 export type ShipmentBoxStatus = 'open' | 'closed' | 'placed'
 
@@ -569,7 +567,7 @@ export function releaseShipmentBox(docId: string, boxId: string, requestId: stri
   })
 }
 
-/** Итог поштучной операции ТСД в задаче размещения. */
+/** Итог поштучной операции ТСД в задаче с ТСД. */
 export type PutawayItemResult = {
   line_id: string
   product_name: string | null

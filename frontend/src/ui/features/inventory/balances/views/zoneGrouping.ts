@@ -46,7 +46,7 @@ export function hasSizeMatrix(g: ZoneProductGroup): boolean {
 }
 
 // Порядок корзин в карточке места: сначала хранение, процессные — следом.
-const OP_ORDER: Record<string, number> = { storage: 0, boxed: 1, packing: 2, packed: 3, picked: 4, ready: 5 }
+const OP_ORDER: Record<string, number> = { storage: 0, packing: 1, packed: 2, picked: 3, ready: 4 }
 
 export function groupZoneRowsByProduct(rows: ZoneRow[]): ZoneProductGroup[] {
   const map = new Map<string, ZoneProductGroup>()

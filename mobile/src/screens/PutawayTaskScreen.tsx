@@ -136,7 +136,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const unclosedBoxes = boxes.filter((b) => b.status === 'open' && b.items_qty > 0)
   const waitingBoxes = boxes.filter((b) => b.status === 'closed')
   const onPacking = doc?.status === 'on_packing'
-  const collected = doc?.status === 'collected'
+  const collected = doc?.status === 'packed'
   // Виртуальная тара «Без короба»: на сборке она нужна всегда (иначе непонятно, куда
   // девать габарит), после — только пока в ней что-то ждёт развозки.
   const showAside = onPacking || asideTotal > 0
@@ -195,7 +195,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
               <>
                 <div className="alert ok">
                   <Icon name="check" size={15} />
-                  Сборка завершена, задача закрыта. В очереди на развозку: коробов{' '}
+                  Упаковка завершена, задача закрыта — товар доступен отгрузке. В очереди на развозку: коробов{' '}
                   {waitingBoxes.length}
                   {asideTotal > 0 ? `, без короба ${asideTotal} шт.` : ''}
                 </div>

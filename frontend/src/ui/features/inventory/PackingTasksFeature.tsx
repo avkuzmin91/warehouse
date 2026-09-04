@@ -272,9 +272,7 @@ export function PackingTasksFeature() {
             options={[
               { value: '', label: 'Все статусы' },
               { value: 'overdue', label: 'Просрочка' },
-              // `collected`/`placed` — статусы задачи размещения по ячейкам, в маршрут
-              // упаковки не входят, но фильтровать список по ним нужно.
-              ...([...SHIPMENT_STATUS_ORDER, 'collected', 'cancelled'] as ShipmentStatus[])
+              ...([...SHIPMENT_STATUS_ORDER, 'cancelled'] as ShipmentStatus[])
                 .map((s) => ({ value: s, label: SHIPMENT_STATUS_LABELS[s] })),
             ]}
             onChange={(v) => setStatusFilter(v)}
@@ -379,7 +377,7 @@ export function PackingTasksFeature() {
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                           {item.doc_number}
                           {item.cargo_type === 'defect' && <Badge tone="warning">Брак</Badge>}
-                          {item.task_kind === 'putaway' && <Badge tone="accent">Размещение</Badge>}
+                          {item.task_kind === 'putaway' && <Badge tone="accent">ТСД</Badge>}
                         </span>
                         {overdue && (
                           <div style={{ fontSize: 11, color: 'var(--c-danger)', fontWeight: 500, marginTop: 2 }}>

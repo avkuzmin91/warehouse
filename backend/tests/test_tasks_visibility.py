@@ -30,6 +30,9 @@ class _FakeConn:
         self._shipments = shipments or []
 
     def execute(self, sql, params=()):
+        # Очередь развозки читает журнал с подзапросом по shipment_docs — это не документы.
+        if "zone_relocations" in sql:
+            return _Result([])
         if "trip_docs" in sql:
             return _Result(self._trips)
         if "receipt_docs" in sql:

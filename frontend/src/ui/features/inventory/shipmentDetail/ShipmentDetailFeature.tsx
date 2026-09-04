@@ -190,12 +190,12 @@ export function ShipmentDetailFeature() {
   const isOnPacking = status === 'on_packing'
   const isRelocating = status === 'relocating'
   const isPacked = status === 'packed'
-  const isCollected = status === 'collected'
   const isCompletedNoGoods = status === 'completed_no_goods'
-  // Задача размещения по ячейкам: вместо «Перемещения» к рейсу товар собирается в
-  // короба и на этом задача заканчивается («Сборка завершена» → collected). Развозку по
-  // местам ведёт отдельный процесс коробов — статус документа он не двигает.
+  // Задача с ТСД: вместо «Перемещения» к рейсу товар собирается в короба и на этом
+  // задача заканчивается («Сборка завершена» → packed). Развозку коробов ведёт
+  // отдельный процесс — статус документа он не двигает.
   const isPutaway = doc?.task_kind === 'putaway'
+  const isCollected = isPutaway && isPacked
   // Состав и план менеджер правит до передачи на упаковку (черновик, «В плане»).
   const editableComposition = isDraft || isPacking
   const canDelete = canEditPlanning && editableComposition
@@ -952,7 +952,7 @@ export function ShipmentDetailFeature() {
         statusLabel={isPutaway ? putawayStatusLabel(status!) : undefined}
         cargoType={doc.cargo_type as ShipmentCargoType}
         title={doc.doc_number}
-        subtitle={`${isPutaway ? 'Размещение по ячейкам · сборка на ТСД' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
+        subtitle={`${isPutaway ? 'Упаковка с ТСД' : isDefectCargo ? 'Задача упаковки (брак)' : 'Задача упаковки'} · ${doc.client_name ?? '—'}`}
         initiator={{ name: doc.created_by_name, createdAt: doc.created_at }}
         repackKind={doc.repack_kind}
         repackReason={doc.repack_reason}

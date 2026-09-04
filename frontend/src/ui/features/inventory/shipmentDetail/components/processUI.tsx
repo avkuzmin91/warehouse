@@ -14,7 +14,7 @@ export function RailPanel({ status, ops, cargoType = 'good', taskKind = 'packing
   taskKind?: ShipmentTaskKind
 }) {
   return (
-    <Panel icon="truckRoute" title={taskKind === 'putaway' ? 'Маршрут размещения' : 'Маршрут отгрузки'} bodyPad={false}>
+    <Panel icon="truckRoute" title="Маршрут упаковки" bodyPad={false}>
       <div style={{ padding: '12px 14px' }}>
         <ProcessRail steps={buildShipSteps(status, ops, cargoType, taskKind)} />
       </div>
