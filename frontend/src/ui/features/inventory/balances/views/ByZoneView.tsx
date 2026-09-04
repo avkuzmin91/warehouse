@@ -823,13 +823,7 @@ export function ByZoneView() {
                         {boxedFor(item).length > 0 && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
                             {boxedFor(item).map((h) => <BoxChip key={h.container_id} holding={h} />)}
-                            {looseQty(item) > 0 ? (
-                              <LooseChip qty={looseQty(item)} />
-                            ) : (
-                              <span style={{ fontSize: 11, color: 'var(--c-text-subtle)', alignSelf: 'center' }}>
-                                вся позиция в коробе — двигайте короб целиком
-                              </span>
-                            )}
+                            {looseQty(item) > 0 && <LooseChip qty={looseQty(item)} />}
                           </div>
                         )}
                       </Td>

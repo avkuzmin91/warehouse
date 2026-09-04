@@ -73,7 +73,7 @@ export function PendingPlacementPanel({ selectedBoxIds, onPlaced }: Props) {
         <span style={{ fontWeight: 600 }}>Ждут развозки</span>
         <span className="t-sub">
           коробов <b className="num">{data.boxes.length}</b> ({data.boxes_qty} шт.)
-          {data.aside_qty > 0 && <> · мимо коробов <b className="num">{data.aside_qty}</b> шт.</>}
+          {data.aside_qty > 0 && <> · без короба <b className="num">{data.aside_qty}</b> шт.</>}
         </span>
         {data.since && (
           <span className="t-sub" style={{ fontSize: 12 }}>
@@ -109,7 +109,7 @@ export function PendingPlacementPanel({ selectedBoxIds, onPlaced }: Props) {
       {data.aside.length > 0 && (
         <div style={{ marginTop: 10 }}>
           <div className="t-sub" style={{ fontSize: 12, marginBottom: 6 }}>
-            Собрано мимо коробов (габарит, брак) — короба у него нет, размещается позицией
+            Собрано без короба (габарит, брак) — короба у него нет, размещается позицией
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {data.aside.map((i) => (

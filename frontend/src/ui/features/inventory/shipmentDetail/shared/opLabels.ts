@@ -19,7 +19,7 @@ export const OP_LABELS: Record<string, string> = {
   box_close: 'Короб закрыт',
   box_place: 'Короб размещён',
   box_release: 'Короб освобождён',
-  item_place: 'Сборка мимо короба',
+  item_place: 'Сборка без короба',
   relocate: 'Разложено по местам',
 }
 

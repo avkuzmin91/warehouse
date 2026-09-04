@@ -159,7 +159,7 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             if pending.boxes:
                 parts.append(f"коробов {len(pending.boxes)}")
             if pending.aside_qty > 0:
-                parts.append(f"мимо коробов {pending.aside_qty} шт.")
+                parts.append(f"без короба {pending.aside_qty} шт.")
             tasks.append({
                 "kind": "boxes_place",
                 "title": "Развезти по местам",

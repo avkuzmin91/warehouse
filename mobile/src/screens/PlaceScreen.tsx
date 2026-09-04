@@ -66,18 +66,18 @@ function variantKey(v: { product_id: string; color_id: string | null; size_id: s
 
 function sourceLabel(s: PlaceSource): string {
   if (s.kind === 'collected') return 'Зона упаковки'
-  if (s.kind === 'location') return `Место ${s.code}`
+  if (s.kind === 'location') return `Ячейка ${s.code}`
   return `Короб ${s.doc_number}`
 }
 
 function sourceWhere(s: PlaceSource): string {
   if (s.kind === 'collected') return 'у стола'
-  if (s.kind === 'location') return `в месте ${s.code}`
+  if (s.kind === 'location') return `в ячейке ${s.code}`
   return `в коробе ${s.doc_number}`
 }
 
 function targetLabel(t: PlaceTarget): string {
-  return t.kind === 'location' ? `Место ${t.code}` : `Короб ${t.doc_number}`
+  return t.kind === 'location' ? `Ячейка ${t.code}` : `Короб ${t.doc_number}`
 }
 
 function toApiSource(s: PlaceSource): ContainerPlaceSource {
@@ -96,12 +96,12 @@ function boxSourceError(box: ContainerItem, source: PlaceSource): string | null 
   }
   if (source.kind === 'container') return 'Из короба берут только товар — короб в коробе не лежит'
   if (source.kind === 'collected' && box.status === 'placed') {
-    return `Короб ${box.doc_number} уже стоит в месте ${box.zone_name ?? '—'} — укажите это место как источник`
+    return `Короб ${box.doc_number} уже стоит в ячейке ${box.zone_name ?? '—'} — укажите эту ячейку как источник`
   }
   if (source.kind === 'location') {
     if (box.status === 'closed') return `Короб ${box.doc_number} ещё у стола — источник «Зона упаковки»`
     if (box.zone_id !== source.id) {
-      return `Короб ${box.doc_number} числится в месте ${box.zone_name ?? '—'}, а не ${source.code}`
+      return `Короб ${box.doc_number} числится в ячейке ${box.zone_name ?? '—'}, а не ${source.code}`
     }
   }
   return null
@@ -258,13 +258,13 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
     code: string, role: 'source' | 'target', expect: EndpointKind,
   ): Promise<PlaceTarget | string> {
     if (isLocationCode(code)) {
-      if (expect !== 'location') return `Код «${code}» — это место, а нужен короб`
+      if (expect !== 'location') return `Код «${code}» — это ячейка, а нужен короб`
       const loc = await getLocationByCode(code)
-      if (!loc.found || !loc.location) return `Место по коду «${code}» не найдено`
+      if (!loc.found || !loc.location) return `Ячейка по коду «${code}» не найдена`
       return { kind: 'location', id: loc.location.id, code: loc.location.code }
     }
     if (isContainerCode(code)) {
-      if (expect !== 'container') return `Код «${code}» — это короб, а нужно место`
+      if (expect !== 'container') return `Код «${code}» — это короб, а нужна ячейка`
       const found = await getContainerByCode(code)
       const box = found.container
       if (!found.found || !box) return `Короб «${code}» не найден`
@@ -275,7 +275,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
       }
       return { kind: 'container', id: box.id, doc_number: box.doc_number, zone_id: box.zone_id, zone_name: box.zone_name }
     }
-    return expect === 'location' ? `Код «${code}» — не место хранения` : `Код «${code}» — не короб`
+    return expect === 'location' ? `Код «${code}» — не ячейка` : `Код «${code}» — не короб`
   }
 
   /** Шаг 1: один скан по кнопке «Место» или «Короб».
@@ -300,7 +300,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
       }
       if (found.kind === 'container' && source.kind === 'location' && found.zone_id !== source.id) {
         scanNotFoundFeedback()
-        setError(`Короб ${found.doc_number} числится в месте ${found.zone_name ?? '—'}, а не ${source.code}`)
+        setError(`Короб ${found.doc_number} числится в ячейке ${found.zone_name ?? '—'}, а не ${source.code}`)
         return
       }
       scanSuccessFeedback()
@@ -365,7 +365,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
           }
           if (boxBuf.length === 0 && itemBuf.length === 0) {
             scanNotFoundFeedback()
-            setError('Сначала отсканируйте, что переносите, — место назначения идёт третьим шагом')
+            setError('Сначала отсканируйте, что переносите, — ячейка назначения идёт третьим шагом')
             return
           }
           const problem = targetError(found, boxBuf)
@@ -381,7 +381,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
         const found = await getProductByBarcode(code)
         if (!found.found || !found.match) {
           scanNotFoundFeedback()
-          setError(`Код «${code}» не найден — это не короб, не место и не товар`)
+          setError(`Код «${code}» не найден — это не короб, не ячейка и не товар`)
           return
         }
         const m = found.match
@@ -526,7 +526,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
       }
       if (found.zone_id !== target.id) {
         scanNotFoundFeedback()
-        setError(`Короб ${found.doc_number} числится в месте ${found.zone_name ?? '—'}, а не ${target.code}`)
+        setError(`Короб ${found.doc_number} числится в ячейке ${found.zone_name ?? '—'}, а не ${target.code}`)
         return
       }
       const problem = targetError(found, boxes)
@@ -545,10 +545,8 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
     }
   }
 
-  /** Короб, чью ячейку можно сверить на сводке: приёмник, иначе источник. */
-  const cellCheckBox = target?.kind === 'container'
-    ? target
-    : source.kind === 'container' ? source : null
+  /** Сверка ячейки на сводке — только для короба-приёмника: откуда взяли, уже проверено на скане. */
+  const cellCheckBox = target?.kind === 'container' ? target : null
 
   async function checkCell() {
     if (busy || !cellCheckBox) return
@@ -560,12 +558,12 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
       const found = await resolveEndpoint(code, 'target', 'location')
       if (typeof found === 'string' || found.kind !== 'location') {
         scanNotFoundFeedback()
-        setError(typeof found === 'string' ? found : 'Отсканируйте место')
+        setError(typeof found === 'string' ? found : 'Отсканируйте ячейку')
         return
       }
       if (found.id !== cellCheckBox.zone_id) {
         scanNotFoundFeedback()
-        setError(`Короб ${cellCheckBox.doc_number} числится в месте ${cellCheckBox.zone_name ?? '—'}, а отсканировано ${found.code}`)
+        setError(`Короб ${cellCheckBox.doc_number} числится в ячейке ${cellCheckBox.zone_name ?? '—'}, а отсканирована ${found.code}`)
         return
       }
       scanSuccessFeedback()
@@ -624,7 +622,10 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
             {error && (
               <div className="alert">
                 <Icon name="alert" size={15} />
-                {error}
+                <span style={{ flex: 1 }}>{error}</span>
+                <button className="line-undo" onClick={() => setError('')} aria-label="Закрыть">
+                  <Icon name="x" size={13} />
+                </button>
               </div>
             )}
             {target.kind === 'location' && boxes.length === 0 && (
@@ -712,7 +713,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
                 disabled={busy}
                 onClick={() => askOrRun('location')}
               >
-                <Icon name="qr" size={15} /> Место
+                <Icon name="qr" size={15} /> Ячейка
               </button>
               <button
                 className={source.kind === 'container' ? 'btn sm' : 'btn ghost sm'}
@@ -727,7 +728,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
           {source.kind === 'collected' && pending && (pending.boxes.length > 0 || pending.aside_qty > 0) && (
             <div className="line-sub">
               У стола ждут развозки: коробов {pending.boxes.length}
-              {pending.aside_qty > 0 ? `, мимо коробов ${pending.aside_qty} шт.` : ''}
+              {pending.aside_qty > 0 ? `, без короба ${pending.aside_qty} шт.` : ''}
             </div>
           )}
           {source.kind === 'container' && (
@@ -740,7 +741,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
 
         <StepCard n={2} title="Что переносим" value={objectsValue} locked={false}>
           <button className="btn" style={{ width: '100%', marginTop: 10 }} disabled={busy} onClick={() => { void scanObjects() }}>
-            <Icon name="qr" size={18} /> {empty ? 'Сканировать короба и товар' : 'Сканировать дальше'}
+            <Icon name="qr" size={18} /> {empty ? 'Сканировать короба или товар' : 'Сканировать дальше'}
           </button>
           <div className="line-sub" style={{ textAlign: 'center' }}>
             Товар — по одной штуке, каждый скан +1. Сканер не закрывается.
@@ -793,7 +794,7 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
               disabled={busy || empty}
               onClick={() => { void scanTargetStep('location') }}
             >
-              <Icon name="qr" size={18} /> В место
+              <Icon name="qr" size={18} /> В ячейку
             </button>
             <button
               className="btn primary"
@@ -808,15 +809,18 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
             {empty
               ? 'Откроется после шага 2'
               : boxes.length > 0
-                ? 'Короба едут только в место — короб в короб не вкладывается'
-                : 'Скан места или размещённого короба, затем сводка и подтверждение'}
+                ? 'Короба едут только в ячейку — короб в короб не вкладывается'
+                : 'Скан ячейки или размещённого короба, затем сводка и подтверждение'}
           </div>
         </StepCard>
 
         {error && (
           <div className="alert">
             <Icon name="alert" size={15} />
-            {error}
+            <span style={{ flex: 1 }}>{error}</span>
+            <button className="line-undo" onClick={() => setError('')} aria-label="Закрыть">
+              <Icon name="x" size={13} />
+            </button>
           </div>
         )}
       </div>

@@ -67,7 +67,7 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
     const collected = boxedTotal + placedTotal
     const body = [
       collected > 0
-        ? `Собрано ${collected} шт из ${planTotal} шт. Задача закроется: короба и товар мимо коробов уйдут в очередь развозки — их развезёт кладовщик, когда повезёт ходку к стеллажам.`
+        ? `Собрано ${collected} шт из ${planTotal} шт. Задача закроется: короба и товар без короба уйдут в очередь развозки — их развезёт кладовщик, когда повезёт ходку к стеллажам.`
         : 'Собранного товара нет — задача закроется сразу.',
       // Недобор — самое дорогое последствие кнопки, поэтому он в подтверждении, а не
       // только подписью под ней.
@@ -207,7 +207,7 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
       {collected && asideLines.length > 0 && (
         <div style={{ marginTop: 14 }}>
           <div className="t-sub" style={{ fontSize: 12, marginBottom: 6 }}>
-            Собрано мимо коробов
+            Собрано без короба
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {asideLines.map((l) => (
@@ -230,7 +230,7 @@ export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: P
       {collected && (awaitingPlacement.length > 0 || asideTotal > 0) && (
         <div className="t-sub" style={{ marginTop: 12, fontSize: 12 }}>
           Ждут развозки: коробов {awaitingPlacement.length}
-          {asideTotal > 0 ? `, мимо коробов ${asideTotal} шт.` : ''} — развозка идёт на ТСД
+          {asideTotal > 0 ? `, без короба ${asideTotal} шт.` : ''} — развозка идёт на ТСД
           (скан коробов → скан места) или вручную в разделе «Короба».
         </div>
       )}

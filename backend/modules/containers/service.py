@@ -848,7 +848,7 @@ def _place_aside_item(
             comment=(
                 f"Со стола в короб {to_container['doc_number']}: {take} шт → {to_zone_name}"
                 if to_container is not None else
-                f"Размещение мимо короба: {take} шт → {to_zone_name}"
+                f"Размещение без короба: {take} шт → {to_zone_name}"
             ),
         )
         if src["shipment_line_id"]:
@@ -1000,7 +1000,7 @@ def _log_aside_placement(
     for doc_id, qty in sorted(by_doc.items()):
         log_placement_op(
             connection, doc_id, user_id=user_id,
-            comment=f"Размещено мимо короба: {qty} шт. → {zone[1]}",
+            comment=f"Размещено без короба: {qty} шт. → {zone[1]}",
         )
 
 

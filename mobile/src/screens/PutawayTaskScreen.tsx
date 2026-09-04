@@ -197,7 +197,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   <Icon name="check" size={15} />
                   Сборка завершена, задача закрыта. В очереди на развозку: коробов{' '}
                   {waitingBoxes.length}
-                  {asideTotal > 0 ? `, мимо коробов ${asideTotal} шт.` : ''}
+                  {asideTotal > 0 ? `, без короба ${asideTotal} шт.` : ''}
                 </div>
                 <button className="btn" style={{ width: '100%' }} onClick={() => openPlace()}>
                   <Icon name="layers" size={18} /> Развезти по местам
@@ -285,7 +285,7 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   <PlaceMeter placed={l.placed_qty} waiting={l.boxed_qty} />
                 )}
                 {l.aside_qty > 0 && (
-                  <div className="line-sub">Из них мимо коробов {l.aside_qty} шт.</div>
+                  <div className="line-sub">Из них без короба {l.aside_qty} шт.</div>
                 )}
               </div>
             ))}

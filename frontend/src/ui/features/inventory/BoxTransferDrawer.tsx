@@ -214,7 +214,7 @@ export function BoxTransferDrawer({
             />
             <div className="t-sub" style={{ fontSize: 12, marginTop: 4 }}>
               {addSource === 'collected'
-                ? 'Собранное мимо коробов, что ждёт развозки у стола.'
+                ? 'Собранное без короба, что ждёт развозки у стола.'
                 : 'Свободный остаток места: то, что лежит в коробах, едет только коробом.'}
             </div>
           </div>

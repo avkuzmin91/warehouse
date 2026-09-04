@@ -103,7 +103,15 @@ class CameraScanSource implements ScanSource {
       throw new Error('Нет доступа к камере. Разрешите доступ в настройках телефона.')
     }
     await ensureGoogleModule(onModuleProgress)
-    const { barcodes } = await BarcodeScanning.scan({ formats: SCAN_FORMATS, autoZoom: true })
+    let barcodes: Barcode[]
+    try {
+      ({ barcodes } = await BarcodeScanning.scan({ formats: SCAN_FORMATS, autoZoom: true }))
+    } catch (err) {
+      // Плагин отдаёт закрытие сканера как ошибку «scan canceled»; по контракту это null,
+      // иначе каждый экран показывал бы английское сообщение об отмене.
+      if (err instanceof Error && /cancel/i.test(err.message)) return null
+      throw err
+    }
     const first = barcodes.find((b) => (b.rawValue ?? b.displayValue ?? '').trim())
     if (!first) return null
     return String(first.rawValue ?? first.displayValue ?? '').trim() || null

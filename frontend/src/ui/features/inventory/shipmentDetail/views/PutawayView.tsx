@@ -117,7 +117,7 @@ export function PutawayView({
               <ReadRow label="Брак" mono>
                 <span style={{ color: defectTotal > 0 ? 'var(--c-danger)' : undefined }}>{defectTotal} шт</span>
               </ReadRow>
-              {asideTotal > 0 && <ReadRow label="Из них мимо коробов" mono>{asideTotal} шт</ReadRow>}
+              {asideTotal > 0 && <ReadRow label="Из них без короба" mono>{asideTotal} шт</ReadRow>}
               <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
                 <ReadRow label="Осталось на упаковке" mono strong>
                   <span style={{ color: poolTotal > 0 ? 'var(--c-warning)' : 'var(--c-text-subtle)' }}>{poolTotal} шт</span>
@@ -134,7 +134,7 @@ export function PutawayView({
             <div style={{ padding: '0 2px' }}>
               <ReadRow label="Ждут развозки" mono>{boxedTotal} шт</ReadRow>
               <ReadRow label="— в коробах" mono>{boxesWaiting} короб.</ReadRow>
-              {asideTotal > 0 && <ReadRow label="— мимо коробов" mono>{asideTotal} шт</ReadRow>}
+              {asideTotal > 0 && <ReadRow label="— без короба" mono>{asideTotal} шт</ReadRow>}
               <div style={{ borderTop: '1px solid var(--c-border)', marginTop: 4, paddingTop: 6 }}>
                 <ReadRow label="Уже на местах" mono>{placedTotal} шт{boxesPlaced > 0 ? ` · ${boxesPlaced} короб.` : ''}</ReadRow>
               </div>

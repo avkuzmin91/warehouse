@@ -865,7 +865,7 @@ def record_packing(
                 to_container_id=container_id if to_op == INV_OP_BOXED else None,
                 comment=(
                     f"Упаковка в короб ({kind_ru}): +{take} шт." if container_id
-                    else f"Упаковка мимо короба ({kind_ru}): +{take} шт." if to_op == INV_OP_BOXED
+                    else f"Упаковка без короба ({kind_ru}): +{take} шт." if to_op == INV_OP_BOXED
                     else f"Упаковка ({kind_ru}): +{take} шт."
                 ),
                 packed_date=packed_date, pack_entry_id=pack_entry_id,
@@ -3129,7 +3129,7 @@ def add_aside_item(connection, doc_id: str, *, barcode: str, qty: int, quality: 
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_ITEM_PLACE,
-         f"Собрано мимо короба ({kind_ru}): {n} шт. — {label}", _now(), user_id),
+         f"Собрано без короба ({kind_ru}): {n} шт. — {label}", _now(), user_id),
     )
     return _putaway_item_result(connection, doc_id, line, qty=n)
 
@@ -3153,14 +3153,14 @@ def undo_aside_item(
             + ("" if q is None else " AND zr.to_quality = ?")
         ),
         leg_params=() if q is None else (q,),
-        empty_detail=f"По этой позиции нет сборки мимо короба{kind_ru}",
+        empty_detail=f"По этой позиции нет сборки без короба{kind_ru}",
     )
     removed = sum(r["qty"] for r in undone)
     label = line["product_sku"] or line["product_name"]
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_ITEM_PLACE,
-         f"Отмена сборки мимо короба{kind_ru}: -{removed} шт. — {label}", _now(), user_id),
+         f"Отмена сборки без короба{kind_ru}: -{removed} шт. — {label}", _now(), user_id),
     )
     return _putaway_item_result(connection, doc_id, line, qty=removed)
 

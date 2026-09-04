@@ -141,7 +141,7 @@ export function PutawayAsideScreen({ shipmentId }: { shipmentId: string }) {
           <>
             <div className="summary">
               <div className="kv">
-                <span className="k">Собрано мимо коробов</span>
+                <span className="k">Собрано без короба</span>
                 <span className="v">{total} шт.</span>
               </div>
               {defectTotal > 0 && (
