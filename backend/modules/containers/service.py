@@ -22,7 +22,7 @@ from config import (
     INV_Q_DEFECT,
     INV_Q_GOOD,
 )
-from dbconn import ci_like_substring_param
+from dbconn import barcode_variant_exists_sql, ci_like_substring_param, like_substring_param
 from utils import next_doc_number as _next_doc_number, now_iso as _now, qr_svg
 
 from .schemas import (
@@ -239,10 +239,29 @@ def containers_items_qty(connection, container_ids: list[str]) -> dict[str, int]
     return {str(r["container_id"]): int(r["net"] or 0) for r in rows}
 
 
+# Короба, в которых сейчас лежит подходящий товар: нетто оси короба по варианту.
+# Без HAVING > 0 в выдачу попадут короба, из которых товар давно изъяли.
+_CONTENT_MATCH_SQL = """
+    c.id IN (
+        SELECT z.cid FROM (
+            SELECT to_container_id AS cid, product_id, color_id, size_id, qty AS net
+            FROM zone_relocations WHERE to_container_id IS NOT NULL
+            UNION ALL
+            SELECT from_container_id, product_id, color_id, size_id, -qty
+            FROM zone_relocations WHERE from_container_id IS NOT NULL
+        ) z
+        LEFT JOIN products prod ON prod.id = z.product_id
+        WHERE {match}
+        GROUP BY z.cid, z.product_id, z.color_id, z.size_id
+        HAVING SUM(z.net) > 0
+    )"""
+
+
 def list_containers(
     connection, *, page: int, limit: int,
     status: str | None = None, client_id: str | None = None,
     doc_id: str | None = None, zone_id: str | None = None, search: str | None = None,
+    product_id: str | None = None,
 ) -> ContainerListResponse:
     conds = ["COALESCE(c.is_deleted, 0) = 0"]
     params: list[Any] = []
@@ -254,10 +273,22 @@ def list_containers(
         conds.append("c.doc_id = ?"); params.append(doc_id.strip())
     if zone_id and zone_id.strip():
         conds.append("c.zone_id = ?"); params.append(zone_id.strip())
+    if product_id and product_id.strip():
+        conds.append(_CONTENT_MATCH_SQL.format(match="z.product_id = ?"))
+        params.append(product_id.strip())
     if search and search.strip():
         s = ci_like_substring_param(search)
-        conds.append("(fold_ci(c.doc_number) LIKE ? OR fold_ci(c.zone_name) LIKE ? OR fold_ci(c.client_name) LIKE ?)")
-        params += [s, s, s]
+        # Тот же поиск, что в остатках, плюс состав короба: «в каком коробе лежит SKU»
+        # спрашивают и со стороны списка коробов.
+        content = _CONTENT_MATCH_SQL.format(match=(
+            "fold_ci(prod.name) LIKE ? OR fold_ci(prod.sku) LIKE ? OR "
+            + barcode_variant_exists_sql("z.product_id", "z.color_id", "z.size_id")
+        ))
+        conds.append(
+            "(fold_ci(c.doc_number) LIKE ? OR fold_ci(c.zone_name) LIKE ? OR fold_ci(c.client_name) LIKE ?"
+            f" OR {content})"
+        )
+        params += [s, s, s, s, s, like_substring_param(search)]
     where = " AND ".join(conds)
 
     total = int(connection.execute(
@@ -1193,42 +1224,65 @@ def remove_item_from_placed(connection, container_id: str, *, scan, qty: int, us
 
 
 
-def containers_holdings(connection, zone_ids: list[str]) -> ContainerHoldingsResponse:
-    """Что из позиций лежит в коробах в указанных местах — для бейджа в остатках.
+def containers_holdings(
+    connection, zone_ids: list[str], *,
+    product_id: str | None = None, color_id: str | None = None, size_id: str | None = None,
+) -> ContainerHoldingsResponse:
+    """Раскладка позиций по коробам — чем строка остатка отличается от россыпи.
 
-    Одним запросом на страницу остатков: иначе кладовщик видит остаток, жмёт
-    «переместить» и упирается в отказ гейта, не понимая причины.
+    Два режима: по местам (страница «По местам» берёт все места страницы одним
+    запросом) и по варианту (шторка «Где лежит» из «По товарам»). Корзина «Ждёт
+    размещения» идёт наравне с хранением: там короба у стола, и без пометки они
+    неотличимы от собранного мимо короба.
     """
     ids = [str(z).strip() for z in (zone_ids or []) if str(z).strip()]
-    if not ids:
+    pid = (product_id or "").strip()
+    if not ids and not pid:
         return ContainerHoldingsResponse(items=[])
+
+    ops = [INV_OP_STORAGE, INV_OP_BOXED]
+
+    def side(prefix: str, sign: str) -> tuple[str, list[Any]]:
+        conds = [f"{prefix}_container_id IS NOT NULL", f"{prefix}_op = ANY(?)"]
+        params: list[Any] = [ops]
+        if ids:
+            conds.append(f"{prefix}_zone_id = ANY(?)")
+            params.append(ids)
+        if pid:
+            conds += ["product_id = ?", "color_id IS NOT DISTINCT FROM ?", "size_id IS NOT DISTINCT FROM ?"]
+            params += [pid, (color_id or None), (size_id or None)]
+        sql = (
+            f"SELECT {prefix}_container_id AS container_id, {prefix}_zone_id AS zone_id, "
+            f"product_id, color_id, size_id, client_id, {prefix}_quality AS quality, "
+            f"{prefix}_op AS op_status, {sign}qty AS net "
+            "FROM zone_relocations WHERE " + " AND ".join(conds)
+        )
+        return sql, params
+
+    to_sql, to_params = side("to", "")
+    from_sql, from_params = side("from", "-")
     rows = connection.execute(
         f"""
-        SELECT t.zone_id, t.product_id, t.color_id, t.size_id, t.client_id, t.quality,
-               c.doc_number, SUM(t.net) AS net
-        FROM (
-            SELECT to_container_id AS container_id, to_zone_id AS zone_id, product_id, color_id, size_id,
-                   client_id, to_quality AS quality, qty AS net
-            FROM zone_relocations
-            WHERE to_container_id IS NOT NULL AND to_op = '{INV_OP_STORAGE}' AND to_zone_id = ANY(?)
-            UNION ALL
-            SELECT from_container_id, from_zone_id, product_id, color_id, size_id,
-                   client_id, from_quality, -qty
-            FROM zone_relocations
-            WHERE from_container_id IS NOT NULL AND from_op = '{INV_OP_STORAGE}' AND from_zone_id = ANY(?)
-        ) t
+        SELECT t.zone_id, z.name AS zone_name, t.product_id, t.color_id, t.size_id, t.client_id,
+               t.quality, t.op_status, c.id AS container_id, c.doc_number, c.status, SUM(t.net) AS net
+        FROM ({to_sql} UNION ALL {from_sql}) t
         JOIN containers c ON c.id = t.container_id
-        GROUP BY t.zone_id, t.product_id, t.color_id, t.size_id, t.client_id, t.quality, c.doc_number
+        LEFT JOIN unloading_zones z ON z.id = t.zone_id
+        GROUP BY t.zone_id, z.name, t.product_id, t.color_id, t.size_id, t.client_id,
+                 t.quality, t.op_status, c.id, c.doc_number, c.status
         HAVING SUM(t.net) > 0
         ORDER BY c.doc_number
         """,
-        (ids, ids),
+        [*to_params, *from_params],
     ).fetchall()
     return ContainerHoldingsResponse(items=[
         ContainerHoldingRow(
-            zone_id=str(r["zone_id"]), product_id=str(r["product_id"]),
+            zone_id=str(r["zone_id"]), zone_name=r["zone_name"],
+            product_id=str(r["product_id"]),
             color_id=r["color_id"], size_id=r["size_id"], client_id=r["client_id"],
-            quality=str(r["quality"]), doc_number=str(r["doc_number"]), qty=int(r["net"] or 0),
+            quality=str(r["quality"]), op_status=str(r["op_status"]),
+            container_id=str(r["container_id"]), doc_number=str(r["doc_number"]),
+            status=str(r["status"]), qty=int(r["net"] or 0),
         )
         for r in rows
     ])

@@ -164,6 +164,23 @@ export type ContainerPendingPlacement = {
   since: string | null
 }
 
+/** Раскладка позиции по коробам: чем строка остатка отличается от россыпи. */
+export type ContainerHoldingRow = {
+  zone_id: string
+  zone_name: string | null
+  product_id: string
+  color_id: string | null
+  size_id: string | null
+  client_id: string | null
+  quality: 'good' | 'defect'
+  /** Корзина остатка: storage — на месте хранения, boxed — у стола, ждёт развозки. */
+  op_status: 'storage' | 'boxed'
+  container_id: string
+  doc_number: string
+  status: ContainerStatus
+  qty: number
+}
+
 // --- API functions ---
 export function getContainers(params: ContainerListParams = {}, signal?: AbortSignal) {
   const sp = new URLSearchParams()
@@ -176,6 +193,12 @@ export function getContainers(params: ContainerListParams = {}, signal?: AbortSi
   if (params.search) sp.set('search', params.search)
   const q = sp.toString()
   return request<ContainerListResponse>(`/containers${q ? `?${q}` : ''}`, { signal })
+}
+
+/** Что из позиций этих мест лежит в коробах — пометка в остатках и скане места. */
+export function getContainerHoldings(zoneIds: string[], signal?: AbortSignal) {
+  const sp = new URLSearchParams({ zone_ids: zoneIds.join(',') })
+  return request<{ items: ContainerHoldingRow[] }>(`/containers/holdings?${sp.toString()}`, { signal })
 }
 
 export function getPendingPlacement(signal?: AbortSignal) {

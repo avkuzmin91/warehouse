@@ -12,6 +12,7 @@ import {
   type WriteOffReason,
   type ZoneBalance,
 } from '../api/balancesApi'
+import { getContainerHoldings, type ContainerHoldingRow } from '../api/containersApi'
 import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
 import { balanceKey } from '../utils/balanceKey'
@@ -21,6 +22,14 @@ import { Sheet } from '../components/Sheet'
 import { useToast } from '../components/Toast'
 import { ZoneField } from '../components/ZoneField'
 import { PullToRefresh } from '../components/PullToRefresh'
+import { BoxPills } from '../components/BoxPills'
+
+// Ключ раскладки по коробам: та же гранулярность, что у строки остатка.
+const holdingKey = (r: {
+  location_id: string | null; product_id: string; color_id: string | null;
+  size_id: string | null; client_id: string | null; quality: string; op_status: string
+}) => [r.location_id ?? '', r.product_id, r.color_id ?? '', r.size_id ?? '',
+  r.client_id ?? '', r.quality, r.op_status].join('__')
 
 // Место = физическая зона хранения; ∅ — товар без привязки к месту.
 type Place = {
@@ -91,7 +100,7 @@ function groupByProduct(rows: ZoneBalance[]): ProductGroup[] {
 }
 
 export function StockScreen() {
-  const { openPlace } = useNav()
+  const { openPlace, openScanBox } = useNav()
   const toast = useToast()
   const [search, setSearch] = useState('')
   const [items, setItems] = useState<ZoneBalance[]>([])
@@ -102,6 +111,7 @@ export function StockScreen() {
 
   const [selected, setSelected] = useState<string | null>(null)
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
+  const [holdings, setHoldings] = useState<ContainerHoldingRow[]>([])
   const [moveFrom, setMoveFrom] = useState<ZoneBalance | null>(null)
   const [qualFrom, setQualFrom] = useState<ZoneBalance | null>(null)
   const [woffFrom, setWoffFrom] = useState<ZoneBalance | null>(null)
@@ -189,6 +199,33 @@ export function StockScreen() {
   }, [items])
 
   const selectedPlace = places.find((p) => p.key === selected) ?? null
+
+  // Короба грузим только для открытого места: список мест их не показывает.
+  useEffect(() => {
+    const zoneIds = [...new Set((selectedPlace?.rows ?? []).map((r) => r.location_id).filter((v): v is string => !!v))]
+    if (zoneIds.length === 0) {
+      setHoldings([])
+      return
+    }
+    const ac = new AbortController()
+    getContainerHoldings(zoneIds, ac.signal)
+      .then((r) => setHoldings(r.items))
+      // Пометка вспомогательная: без неё экран остаётся рабочим.
+      .catch(() => setHoldings([]))
+    return () => ac.abort()
+  }, [selectedPlace])
+
+  const boxesByKey = useMemo(() => {
+    const map = new Map<string, ContainerHoldingRow[]>()
+    for (const h of holdings) {
+      const key = holdingKey({ ...h, location_id: h.zone_id })
+      const list = map.get(key)
+      if (list) list.push(h)
+      else map.set(key, [h])
+    }
+    return map
+  }, [holdings])
+  const boxesFor = useCallback((r: ZoneBalance) => boxesByKey.get(holdingKey(r)) ?? [], [boxesByKey])
 
   // Внутри места артикулы свёрнуты в группы; при активном поиске раскрываем все —
   // найденный вариант не должен прятаться под свёрнутым артикулом.
@@ -311,6 +348,8 @@ export function StockScreen() {
                     key={`${g.key}__${r.location_id ?? '∅'}__${r.color_id ?? ''}__${r.size_id ?? ''}__${r.op_status}__${r.quality}__${i}`}
                     row={r}
                     hideProduct={hideProduct}
+                    boxes={boxesFor(r)}
+                    onOpenBox={openScanBox}
                     onMove={() => setMoveFrom(r)}
                     onQuality={() => setQualFrom(r)}
                     onWriteOff={() => setWoffFrom(r)}
@@ -385,6 +424,8 @@ export function StockScreen() {
 function RowCard({
   row,
   hideProduct = false,
+  boxes,
+  onOpenBox,
   onMove,
   onQuality,
   onWriteOff,
@@ -392,6 +433,8 @@ function RowCard({
   row: ZoneBalance
   /** Строка внутри группы артикула: имя товара уже в шапке группы — показываем вариант. */
   hideProduct?: boolean
+  boxes: ContainerHoldingRow[]
+  onOpenBox: (containerId: string) => void
   onMove: () => void
   onQuality: () => void
   onWriteOff: () => void
@@ -402,7 +445,9 @@ function RowCard({
     : [row.product_name, variantLabel(row)].filter(Boolean).join(' · ')
   // Действия доступны для любого нетерминального статуса с привязкой к месту
   // (бэк требует зону-источник). Вне «На хранении» качество меняется только good → defect.
-  const actionable = !!row.location_id && row.qty > 0
+  // Короб двигается целиком: поштучно доступна только россыпь.
+  const loose = row.qty - boxes.reduce((sum, h) => sum + h.qty, 0)
+  const actionable = !!row.location_id && row.qty > 0 && (boxes.length === 0 || loose > 0)
   const qualityAllowed = actionable && (row.op_status === 'storage' || row.quality === 'good')
   return (
     <div className="line">
@@ -414,6 +459,10 @@ function RowCard({
             <span className={`pill ${OP_STATUS_TONE[row.op_status]}`}>{OP_STATUS_LABELS[row.op_status]}</span>
             <span className={`pill ${row.quality}`}>{QUALITY_LABELS[row.quality]}</span>
           </div>
+          <BoxPills boxes={boxes} loose={loose} onOpen={onOpenBox} />
+          {boxes.length > 0 && loose <= 0 && (
+            <div className="line-sub">Вся позиция в коробе — двигайте короб целиком</div>
+          )}
         </div>
         <span className="tile-qty">
           {row.qty}

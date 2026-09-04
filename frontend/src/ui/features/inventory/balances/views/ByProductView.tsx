@@ -14,6 +14,8 @@ import { KPI } from '../../../../primitives/KPI'
 import { Icon } from '../../../../primitives/Icon'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
+import { WhereStoredDrawer } from '../WhereStoredDrawer'
+import type { WhereStoredTarget } from '../WhereStoredDrawer'
 import { BucketCell } from '../../../shared/BucketCell'
 import { ProductLink } from '../../../shared/ProductLink'
 import { SizeMatrix } from '../../../shared/SizeMatrix'
@@ -31,6 +33,8 @@ export function ByProductView() {
   const [onlyPositive, setOnlyPositive] = useState(true)
   const [hasDefect, setHasDefect] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // «Где лежит»: обратный разрез — места и короба одного варианта.
+  const [where, setWhere] = useState<WhereStoredTarget | null>(null)
   // Матрица цвет×размер — режим разворота по умолчанию; здесь ключи групп,
   // переключённых пользователем обратно на список.
   const [listKeys, setListKeys] = useState<Set<string>>(new Set())
@@ -297,6 +301,26 @@ export function ByProductView() {
                   </Td>
                   <Td className="num" style={{ borderLeft: '2px solid var(--c-border)', fontWeight: 600, background: 'var(--c-bg-sunken)', color: 'var(--c-text)' }}>
                     <div className="row gap-8" style={{ justifyContent: 'flex-end', alignItems: 'center' }}>
+                      {flat && g.items[0] && (
+                        <button
+                          className="btn ghost sm icon"
+                          title="Где лежит: места и короба"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setWhere({
+                              product_id: g.product_id,
+                              product_name: g.product_name,
+                              product_sku: g.product_sku,
+                              color_id: g.items[0].color_id,
+                              color_name: g.items[0].color_name,
+                              size_id: g.items[0].size_id,
+                              size_name: g.items[0].size_name,
+                            })
+                          }}
+                        >
+                          <Icon name="box" size={13} />
+                        </button>
+                      )}
                       {isOpen && g.sizes_count > 0 && (
                         <button
                           className="btn ghost sm icon"
@@ -339,7 +363,27 @@ export function ByProductView() {
                           <BucketCell good={item.ready_good} defect={item.ready_defect} accent="var(--c-success)" />
                         </Td>
                         <Td className="num" style={{ borderLeft: '2px solid var(--c-border)', color: 'var(--c-text-muted)' }}>
-                          {item.total.toLocaleString('ru-RU')}
+                          <div className="row gap-8" style={{ justifyContent: 'flex-end', alignItems: 'center' }}>
+                            <button
+                              className="btn ghost sm icon"
+                              title="Где лежит: места и короба"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setWhere({
+                                  product_id: g.product_id,
+                                  product_name: g.product_name,
+                                  product_sku: g.product_sku,
+                                  color_id: item.color_id,
+                                  color_name: item.color_name,
+                                  size_id: item.size_id,
+                                  size_name: item.size_name,
+                                })
+                              }}
+                            >
+                              <Icon name="box" size={13} />
+                            </button>
+                            {item.total.toLocaleString('ru-RU')}
+                          </div>
                         </Td>
                       </tr>
                     ))
@@ -350,6 +394,8 @@ export function ByProductView() {
         </tbody>
       </Table>
       <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPage={setPage} />
+
+      <WhereStoredDrawer target={where} onClose={() => setWhere(null)} />
     </>
   )
 }

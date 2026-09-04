@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import {
   getBalancesByZone,
   getBalancesSummary,
@@ -11,8 +12,10 @@ import {
   WRITEOFF_REASON_LABELS,
 } from '../../../../../api/balancesApi'
 import type { BalanceSummary, BalanceZoneItem, InvOpStatus, InvQuality, WriteOffReason } from '../../../../../api/balancesApi'
-import { getContainerHoldings } from '../../../../../api/containersApi'
-import type { ContainerHoldingRow } from '../../../../../api/containersApi'
+import {
+  getContainerHoldings, CONTAINER_STATUS_LABELS, containerStatusTone,
+} from '../../../../../api/containersApi'
+import type { ContainerHoldingRow, ContainerStatus } from '../../../../../api/containersApi'
 import { useLookups } from '../../../../../hooks/useLookups'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../../../hooks/useFilterParams'
 import { Table, Td } from '../../../../data/Table'
@@ -30,6 +33,7 @@ import type { BadgeTone } from '../../../../primitives/Badge'
 import { SkeletonRows } from '../../../../primitives/Skeleton'
 import { EmptyState } from '../../../../primitives/EmptyState'
 import { NumberStep } from '../../shared/NumberStep'
+import { BoxChip, LooseChip } from '../../shared/BoxChip'
 import { ProductLink } from '../../../shared/ProductLink'
 
 type LocationGroup = {
@@ -37,6 +41,16 @@ type LocationGroup = {
   locationName: string
   items: BalanceZoneItem[]
   totalQty: number
+}
+
+/** Место в разрезе тары: короба стеллажа отдельно, россыпь — последней секцией. */
+type BoxSection = {
+  containerId: string
+  docNumber: string
+  status: ContainerStatus
+  opStatus: 'storage' | 'boxed'
+  qty: number
+  rows: { item: BalanceZoneItem; qty: number }[]
 }
 
 // Страница списка остатков по местам = N местоположений (со всеми их строками).
@@ -67,6 +81,7 @@ export function ByZoneView() {
   const [clientId, setClientId] = useFilterParam('client', '')
   const [opFilter, setOpFilter] = useFilterParam('op', '')
   const [qualityFilter, setQualityFilter] = useFilterParam('quality', '')
+  const [tare, setTare] = useFilterParam('tare', '')
   const { clients, unloadingZones } = useLookups()
   const { setMany } = useFilterParamsActions()
   const toast = useToast()
@@ -81,6 +96,8 @@ export function ByZoneView() {
   // Что из показанных позиций лежит в коробах: короб двигается только целиком, и
   // без этой пометки кладовщик жмёт «переместить» и упирается в отказ гейта.
   const [holdings, setHoldings] = useState<ContainerHoldingRow[]>([])
+  // Места, развёрнутые по коробам: так сверяют стеллаж — сначала короба, потом россыпь.
+  const [boxView, setBoxView] = useState<Set<string>>(new Set())
 
   // Перемещение между местоположениями: любой нетерминальный статус — товар можно
   // временно переставить, даже когда он на упаковке или готов к отгрузке.
@@ -370,10 +387,15 @@ export function ByZoneView() {
     return () => { clearTimeout(timer); ctrl.abort() }
   }, [load, search, place])
 
+  const holdingKey = (
+    zoneId: string | null, productId: string, colorId: string | null, sizeId: string | null,
+    clientId: string | null, quality: string, op: string,
+  ) => [zoneId ?? '', productId, colorId ?? '', sizeId ?? '', clientId ?? '', quality, op].join('__')
+
   const boxedByKey = useMemo(() => {
     const map = new Map<string, ContainerHoldingRow[]>()
     for (const h of holdings) {
-      const key = `${h.zone_id}__${h.product_id}__${h.color_id ?? ''}__${h.size_id ?? ''}__${h.quality}`
+      const key = holdingKey(h.zone_id, h.product_id, h.color_id, h.size_id, h.client_id, h.quality, h.op_status)
       const list = map.get(key)
       if (list) list.push(h)
       else map.set(key, [h])
@@ -382,14 +404,50 @@ export function ByZoneView() {
   }, [holdings])
 
   const boxedFor = useCallback((item: BalanceZoneItem): ContainerHoldingRow[] => {
-    if (!item.location_id || item.op_status !== 'storage') return []
-    const key = `${item.location_id}__${item.product_id}__${item.color_id ?? ''}__${item.size_id ?? ''}__${item.quality}`
-    return boxedByKey.get(key) ?? []
+    if (!item.location_id) return []
+    return boxedByKey.get(holdingKey(
+      item.location_id, item.product_id, item.color_id, item.size_id,
+      item.client_id, item.quality, item.op_status,
+    )) ?? []
   }, [boxedByKey])
+
+  // Россыпь = остаток минус короба: только её и двигают поштучно, короб едет целиком.
+  const looseQty = useCallback(
+    (item: BalanceZoneItem) => item.qty - boxedFor(item).reduce((sum, h) => sum + h.qty, 0),
+    [boxedFor],
+  )
+
+  const boxSections = useCallback((group: LocationGroup) => {
+    const boxes = new Map<string, BoxSection>()
+    const loose: { item: BalanceZoneItem; qty: number }[] = []
+    for (const item of group.items) {
+      for (const h of boxedFor(item)) {
+        let sec = boxes.get(h.container_id)
+        if (!sec) {
+          sec = {
+            containerId: h.container_id, docNumber: h.doc_number, status: h.status,
+            opStatus: h.op_status, qty: 0, rows: [],
+          }
+          boxes.set(h.container_id, sec)
+        }
+        sec.qty += h.qty
+        sec.rows.push({ item, qty: h.qty })
+      }
+      const free = looseQty(item)
+      if (free > 0) loose.push({ item, qty: free })
+    }
+    return {
+      boxes: [...boxes.values()].sort((a, b) => a.docNumber.localeCompare(b.docNumber)),
+      loose,
+      looseTotal: loose.reduce((sum, r) => sum + r.qty, 0),
+    }
+  }, [boxedFor, looseQty])
 
   const groups = useMemo<LocationGroup[]>(() => {
     const map = new Map<string, LocationGroup>()
     for (const item of items) {
+      if (tare === 'boxed' && boxedFor(item).length === 0) continue
+      if (tare === 'loose' && looseQty(item) <= 0) continue
       const key = item.location_id ?? '__none__'
       let group = map.get(key)
       if (!group) {
@@ -405,7 +463,7 @@ export function ByZoneView() {
       group.totalQty += item.qty
     }
     return [...map.values()]
-  }, [items])
+  }, [items, tare, boxedFor, looseQty])
 
   useEffect(() => {
     const zoneIds = [...new Set(items.map((i) => i.location_id).filter((v): v is string => !!v))]
@@ -448,7 +506,7 @@ export function ByZoneView() {
   const changeOp = (v: string) => setOpFilter(v)
   const changeQuality = (v: string) => setQualityFilter(v)
   const toggleOp = (op: InvOpStatus) => setOpFilter(opFilter === op ? '' : op)
-  const resetFilters = () => setMany({ client: null, op: null, quality: null, place: null, search: null })
+  const resetFilters = () => setMany({ client: null, op: null, quality: null, place: null, search: null, tare: null })
 
   return (
     <>
@@ -519,7 +577,17 @@ export function ByZoneView() {
             ]}
             onChange={changeQuality}
           />
-          {(clientId || opFilter || qualityFilter || place || search) && (
+          <FilterSelect
+            label="Тара"
+            value={tare}
+            options={[
+              { value: '', label: 'Тара любая' },
+              { value: 'boxed', label: 'Только в коробах' },
+              { value: 'loose', label: 'Только россыпь' },
+            ]}
+            onChange={(v) => setTare(v)}
+          />
+          {(clientId || opFilter || qualityFilter || place || search || tare) && (
             <button className="btn ghost sm" onClick={resetFilters}>
               <Icon name="x" size={12} />Сбросить
             </button>
@@ -586,7 +654,11 @@ export function ByZoneView() {
         <EmptyState title="Остатков нет" sub="Данные появятся после завершения поступлений с указанным местоположением" />
       ) : (
         <div className="col gap-16">
-          {groups.map((group) => (
+          {groups.map((group) => {
+            const groupKey = group.locationId ?? '__none__'
+            const sec = boxSections(group)
+            const inBoxView = boxView.has(groupKey) && sec.boxes.length > 0
+            return (
             <Card key={group.locationId ?? '__none__'}>
               <CardHead>
                 {group.items.some(bulkSelectable) && (() => {
@@ -606,9 +678,111 @@ export function ByZoneView() {
                 <Icon name="boxes" size={15} className="ic-accent" />
                 <span className="card-head-title">{group.locationName}</span>
                 <Badge tone="accent" style={{ marginLeft: 6 }}>{group.items.length}</Badge>
+                {sec.boxes.length > 0 && (
+                  <>
+                    <Badge tone="info">коробов: {sec.boxes.length}</Badge>
+                    <button
+                      className="btn ghost sm"
+                      title={inBoxView ? 'Показать позициями' : 'Разложить место по коробам'}
+                      onClick={() => setBoxView((prev) => {
+                        const next = new Set(prev)
+                        if (next.has(groupKey)) next.delete(groupKey)
+                        else next.add(groupKey)
+                        return next
+                      })}
+                    >
+                      <Icon name={inBoxView ? 'list' : 'box'} size={13} />
+                      {inBoxView ? 'Позиции' : 'Короба'}
+                    </button>
+                  </>
+                )}
                 <div className="flex-1" />
                 <span className="t-sub mono">{group.totalQty.toLocaleString('ru-RU')} шт</span>
               </CardHead>
+              {inBoxView ? (
+              <Table>
+                <thead>
+                  <tr>
+                    <th>Товар</th>
+                    <th>Клиент</th>
+                    <th style={{ width: 100 }}>Качество</th>
+                    <th style={{ textAlign: 'right', width: 110 }}>Количество</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sec.boxes.map((box) => (
+                    <Fragment key={box.containerId}>
+                      <tr>
+                        <Td colSpan={4} style={{ background: 'var(--c-bg-sunken)' }}>
+                          <div className="row gap-8" style={{ alignItems: 'center' }}>
+                            <Icon name="box" size={13} className="ic-accent" />
+                            <Link to={`/inventory/boxes/${box.containerId}`} className="mono" style={{ fontWeight: 600 }}>
+                              {box.docNumber}
+                            </Link>
+                            <Badge tone={containerStatusTone(box.status) as BadgeTone}>
+                              {CONTAINER_STATUS_LABELS[box.status]}
+                            </Badge>
+                            {box.opStatus === 'boxed' && (
+                              <span style={{ fontSize: 11, color: 'var(--c-warning)' }}>ждёт развозки</span>
+                            )}
+                            <div className="flex-1" />
+                            <span className="t-sub mono">{box.qty.toLocaleString('ru-RU')} шт</span>
+                          </div>
+                        </Td>
+                      </tr>
+                      {box.rows.map((r, i) => (
+                        <tr key={`${box.containerId}-${r.item.product_id}-${r.item.color_id}-${r.item.size_id}-${r.item.quality}-${i}`}>
+                          <Td>
+                            <div style={{ fontWeight: 500 }}>
+                              <ProductLink productId={r.item.product_id}>{r.item.product_name}</ProductLink>
+                            </div>
+                            <div className="t-sub mono">
+                              {[r.item.product_sku, r.item.color_name, r.item.size_name].filter(Boolean).join(' · ')}
+                            </div>
+                          </Td>
+                          <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{r.item.client_name ?? '—'}</Td>
+                          <Td>
+                            <Badge tone={QUALITY_TONE[r.item.quality]}>{INV_QUALITY_LABELS[r.item.quality]}</Badge>
+                          </Td>
+                          <Td className="num" style={{ fontWeight: 600 }}>{r.qty.toLocaleString('ru-RU')}</Td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  ))}
+                  {sec.loose.length > 0 && (
+                    <Fragment key="__loose__">
+                      <tr>
+                        <Td colSpan={4} style={{ background: 'var(--c-bg-sunken)' }}>
+                          <div className="row gap-8" style={{ alignItems: 'center' }}>
+                            <Icon name="layers" size={13} style={{ color: 'var(--c-text-subtle)' }} />
+                            <span style={{ fontWeight: 600 }}>Россыпью</span>
+                            <div className="flex-1" />
+                            <span className="t-sub mono">{sec.looseTotal.toLocaleString('ru-RU')} шт</span>
+                          </div>
+                        </Td>
+                      </tr>
+                      {sec.loose.map((r, i) => (
+                        <tr key={`loose-${r.item.product_id}-${r.item.color_id}-${r.item.size_id}-${r.item.op_status}-${r.item.quality}-${i}`}>
+                          <Td>
+                            <div style={{ fontWeight: 500 }}>
+                              <ProductLink productId={r.item.product_id}>{r.item.product_name}</ProductLink>
+                            </div>
+                            <div className="t-sub mono">
+                              {[r.item.product_sku, r.item.color_name, r.item.size_name].filter(Boolean).join(' · ')}
+                            </div>
+                          </Td>
+                          <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>{r.item.client_name ?? '—'}</Td>
+                          <Td>
+                            <Badge tone={QUALITY_TONE[r.item.quality]}>{INV_QUALITY_LABELS[r.item.quality]}</Badge>
+                          </Td>
+                          <Td className="num" style={{ fontWeight: 600 }}>{r.qty.toLocaleString('ru-RU')}</Td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  )}
+                </tbody>
+              </Table>
+              ) : (
               <Table>
                 <thead>
                   <tr>
@@ -646,6 +820,18 @@ export function ByZoneView() {
                         <div className="t-sub mono">
                           {[item.product_sku, item.color_name, item.size_name].filter(Boolean).join(' · ')}
                         </div>
+                        {boxedFor(item).length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                            {boxedFor(item).map((h) => <BoxChip key={h.container_id} holding={h} />)}
+                            {looseQty(item) > 0 ? (
+                              <LooseChip qty={looseQty(item)} />
+                            ) : (
+                              <span style={{ fontSize: 11, color: 'var(--c-text-subtle)', alignSelf: 'center' }}>
+                                вся позиция в коробе — двигайте короб целиком
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </Td>
                       <Td style={{ color: 'var(--c-text-muted)', fontSize: 13 }}>
                         {item.client_name ?? '—'}
@@ -655,11 +841,6 @@ export function ByZoneView() {
                       </Td>
                       <Td>
                         <Badge tone={QUALITY_TONE[item.quality]}>{INV_QUALITY_LABELS[item.quality]}</Badge>
-                        {boxedFor(item).length > 0 && (
-                          <div className="t-sub" style={{ fontSize: 11, marginTop: 3 }}>
-                            в коробе {boxedFor(item).map((h) => h.doc_number).join(', ')}
-                          </div>
-                        )}
                       </Td>
                       <Td className="num" style={{ fontWeight: 600 }}>
                         {entry ? (
@@ -726,8 +907,10 @@ export function ByZoneView() {
                   })}
                 </tbody>
               </Table>
+              )}
             </Card>
-          ))}
+            )
+          })}
         </div>
       )}
 

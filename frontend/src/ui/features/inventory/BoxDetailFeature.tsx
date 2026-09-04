@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   getContainer,
   placeContainers,
@@ -200,7 +201,16 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
               <div className="row gap-8">
                 <span className="t-sub">Место</span>
                 <span style={{ flex: 1 }} />
-                <span>{box.zone_name ?? '—'}</span>
+                {box.zone_id ? (
+                  <Link
+                    to={`/inventory/balances?view=zone&place=${encodeURIComponent(box.zone_name ?? '')}`}
+                    title="Показать остатки этого места"
+                  >
+                    {box.zone_name ?? '—'}
+                  </Link>
+                ) : (
+                  <span>{box.zone_name ?? '—'}</span>
+                )}
               </div>
               <div className="row gap-8">
                 <span className="t-sub">Клиент</span>

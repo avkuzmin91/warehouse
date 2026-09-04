@@ -1053,3 +1053,65 @@ def test_unplaced_box_is_not_a_target(api, client_id, product, zones):
     r = _transfer(api, source=_COLLECTED, target=_box(box_id), items=[{"barcode": product["barcode"], "qty": 1}])
     assert r.status_code == 400, r.text
     assert "не размещён" in r.json()["detail"]
+
+
+def test_holdings_by_variant_answers_where_stored(api, client_id, product, zones):
+    """«Где лежит» спрашивают по товару — без перечисления мест."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    r = api.get(f"/containers/holdings?product_id={product['product_id']}")
+    assert r.status_code == 200, r.text
+    rows = r.json()["items"]
+    assert len(rows) == 1
+    assert rows[0]["container_id"] == box_id
+    assert rows[0]["zone_id"] == zones["cell_id"]
+    assert rows[0]["zone_name"]
+    assert rows[0]["op_status"] == "storage" and rows[0]["status"] == "placed"
+
+
+def test_holdings_show_boxes_waiting_placement(api, client_id, product, zones):
+    """Закрытый короб у стола — тоже короб: в остатках он не должен выглядеть россыпью."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=2)
+    code = _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 2})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
+    api.post(f"/shipments/{doc_id}/finish-collecting")
+
+    r = api.get(f"/containers/holdings?product_id={product['product_id']}")
+    assert r.status_code == 200, r.text
+    rows = r.json()["items"]
+    assert len(rows) == 1
+    assert rows[0]["op_status"] == "boxed" and rows[0]["container_id"] == box_id
+    assert rows[0]["status"] == "closed"
+
+
+def test_holdings_require_place_or_product(api):
+    """Без мест и без товара выборка бессмысленна — просим уточнить."""
+    _as(_WAREHOUSE)
+    assert api.get("/containers/holdings").status_code == 400
+
+
+def test_boxes_search_finds_box_by_product(api, client_id, product, zones):
+    """«В каком коробе лежит SKU» спрашивают и со стороны списка коробов."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    found = api.get(f"/containers?search={product['sku']}")
+    assert found.status_code == 200, found.text
+    assert [c["id"] for c in found.json()["items"]] == [box_id]
+
+    assert api.get("/containers?search=НетТакогоАртикула").json()["items"] == []
+
+    # Товар изъяли — короб больше не «с этим SKU».
+    api.post(f"/containers/{box_id}/items/remove", json={"barcode": product["barcode"], "qty": 2})
+    assert api.get(f"/containers?search={product['sku']}").json()["items"] == []
+
+
+def test_boxes_filter_by_place(api, client_id, product, zones):
+    """Фильтр места в списке коробов: что стоит на этом стеллаже."""
+    _doc_id, box_id = _collect_and_place(api, client_id, product, zones, qty=2)
+
+    in_cell = api.get(f"/containers?zone_id={zones['cell_id']}")
+    assert [c["id"] for c in in_cell.json()["items"]] == [box_id]
+    assert api.get(f"/containers?zone_id={zones['special_id']}").json()["items"] == []

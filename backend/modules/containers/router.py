@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from dbconn import get_connection
 from idempotency import begin_idempotent, finish_idempotent
@@ -54,12 +54,13 @@ def list_containers_endpoint(
     doc_id: str | None = Query(None),
     zone_id: str | None = Query(None),
     search: str | None = Query(None),
+    product_id: str | None = Query(None),
 ):
     _ = user
     with get_connection() as conn:
         return list_containers(
             conn, page=page, limit=limit, status=status, client_id=client_id,
-            doc_id=doc_id, zone_id=zone_id, search=search,
+            doc_id=doc_id, zone_id=zone_id, search=search, product_id=product_id,
         )
 
 
@@ -104,13 +105,20 @@ def lookup_container_endpoint(code: str, user=Depends(get_current_scan_reader)):
 @router.get("/containers/holdings", response_model=ContainerHoldingsResponse)
 def container_holdings_endpoint(
     user=Depends(get_current_shipment_viewer),
-    zone_ids: str = Query(..., description="Список мест через запятую"),
+    zone_ids: str | None = Query(None, description="Список мест через запятую"),
+    product_id: str | None = Query(None, description="Вариант: «Где лежит» по товару"),
+    color_id: str | None = Query(None),
+    size_id: str | None = Query(None),
 ):
-    """Что из позиций лежит в коробах в этих местах: бейдж «в коробе» в остатках."""
+    """Раскладка позиций по коробам: по местам страницы остатков либо по варианту."""
     _ = user
     ids = [z for z in (zone_ids or "").split(",") if z.strip()]
+    if not ids and not (product_id or "").strip():
+        raise HTTPException(status_code=400, detail="Укажите места или товар")
     with get_connection() as conn:
-        return containers_holdings(conn, ids)
+        return containers_holdings(
+            conn, ids, product_id=product_id, color_id=color_id, size_id=size_id,
+        )
 
 
 @router.get("/containers/pending-placement", response_model=ContainerPendingPlacement)

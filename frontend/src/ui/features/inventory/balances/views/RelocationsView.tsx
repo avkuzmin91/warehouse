@@ -162,7 +162,7 @@ export function RelocationsView() {
             <th style={{ width: 170 }}>Операция</th>
             <th style={{ width: 90 }}>Качество</th>
             <th>Откуда → Куда</th>
-            <th style={{ width: 110 }}>Короб</th>
+            <th style={{ width: 150 }}>Короб</th>
             <th style={{ textAlign: 'right', width: 90 }}>Кол-во</th>
             <th>Комментарий</th>
             <th style={{ width: 160 }}>Кто</th>
@@ -193,7 +193,9 @@ export function RelocationsView() {
                   <span style={{ fontWeight: 500 }}>{item.to_zone_name ?? 'Без места'}</span>
                 </Td>
                 <Td className="mono" style={{ fontSize: 12 }}>
-                  {item.to_container ?? item.from_container ?? '—'}
+                  {item.from_container && item.to_container && item.from_container !== item.to_container
+                    ? `${item.from_container} → ${item.to_container}`
+                    : item.to_container ?? item.from_container ?? '—'}
                 </Td>
                 <Td className="num" style={{ fontWeight: 600 }}>{item.qty.toLocaleString('ru-RU')}</Td>
                 <Td style={{ fontSize: 13, color: 'var(--c-text-muted)' }}>{item.comment ?? '—'}</Td>

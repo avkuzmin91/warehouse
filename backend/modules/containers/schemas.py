@@ -222,15 +222,19 @@ class ContainerItemRemoveRequest(BaseModel):
 
 
 class ContainerHoldingRow(BaseModel):
-    """Что из позиции лежит в коробе в этом месте — бейдж «в коробе» в остатках."""
+    """Что из позиции лежит в коробе в этом месте — раскладка строки остатка по таре."""
 
     zone_id: str
+    zone_name: str | None = None
     product_id: str
     color_id: str | None = None
     size_id: str | None = None
     client_id: str | None = None
     quality: str
+    op_status: str
+    container_id: str
     doc_number: str
+    status: str
     qty: int
 
 

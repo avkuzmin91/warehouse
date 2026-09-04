@@ -70,6 +70,7 @@ export type ContainerListParams = {
   doc_id?: string
   zone_id?: string
   search?: string
+  product_id?: string
 }
 
 export type ContainerLabel = {
@@ -181,6 +182,7 @@ export function getContainers(params: ContainerListParams = {}, signal?: AbortSi
   if (params.doc_id) sp.set('doc_id', params.doc_id)
   if (params.zone_id) sp.set('zone_id', params.zone_id)
   if (params.search) sp.set('search', params.search)
+  if (params.product_id) sp.set('product_id', params.product_id)
   const q = sp.toString()
   return request<ContainerListResponse>(`/containers${q ? `?${q}` : ''}`, { signal })
 }
@@ -206,20 +208,36 @@ export function getContainerLabels(ids: string[], signal?: AbortSignal) {
   return request<{ items: ContainerLabel[] }>(`/containers/labels?${sp.toString()}`, { signal })
 }
 
-/** Что из позиций лежит в коробах в этих местах — бейдж «в коробе» в остатках. */
+/** Раскладка позиции по коробам: чем строка остатка отличается от россыпи. */
 export type ContainerHoldingRow = {
   zone_id: string
+  zone_name: string | null
   product_id: string
   color_id: string | null
   size_id: string | null
   client_id: string | null
   quality: 'good' | 'defect'
+  /** Корзина остатка: storage — на месте хранения, boxed — у стола, ждёт развозки. */
+  op_status: 'storage' | 'boxed'
+  container_id: string
   doc_number: string
+  status: ContainerStatus
   qty: number
 }
 
 export function getContainerHoldings(zoneIds: string[], signal?: AbortSignal) {
   const sp = new URLSearchParams({ zone_ids: zoneIds.join(',') })
+  return request<{ items: ContainerHoldingRow[] }>(`/containers/holdings?${sp.toString()}`, { signal })
+}
+
+/** «Где лежит» для одного варианта: короба по всем местам, а не по странице остатков. */
+export function getVariantHoldings(
+  params: { product_id: string; color_id?: string | null; size_id?: string | null },
+  signal?: AbortSignal,
+) {
+  const sp = new URLSearchParams({ product_id: params.product_id })
+  if (params.color_id) sp.set('color_id', params.color_id)
+  if (params.size_id) sp.set('size_id', params.size_id)
   return request<{ items: ContainerHoldingRow[] }>(`/containers/holdings?${sp.toString()}`, { signal })
 }
 

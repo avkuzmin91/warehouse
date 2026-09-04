@@ -5,12 +5,21 @@ import {
   QUALITY_LABELS,
   type ZoneBalance,
 } from '../api/balancesApi'
+import { getContainerHoldings, type ContainerHoldingRow } from '../api/containersApi'
 import type { LocationMatch } from '../api/locationsApi'
 import { useNav } from '../nav/NavContext'
 import { AppBar } from '../components/AppBar'
 import { Icon } from '../components/Icon'
 import { PullToRefresh } from '../components/PullToRefresh'
 import { ScanDocsBlock } from '../components/ScanDocsBlock'
+import { BoxPills } from '../components/BoxPills'
+
+// Ключ раскладки по коробам: та же гранулярность, что у строки остатка.
+const holdingKey = (r: {
+  location_id: string | null; product_id: string; color_id: string | null;
+  size_id: string | null; client_id: string | null; quality: string; op_status: string
+}) => [r.location_id ?? '', r.product_id, r.color_id ?? '', r.size_id ?? '',
+  r.client_id ?? '', r.quality, r.op_status].join('__')
 
 const OP_ORDER: Record<string, number> = { storage: 0, packing: 1, packed: 2, ready: 3 }
 function rowSort(a: ZoneBalance, b: ZoneBalance): number {
@@ -27,8 +36,9 @@ function kindLabel(kind: string): string {
 // Карточка места по отсканированному QR: что это за место + что в нём лежит (остатки,
 // отфильтрованные точно по location_id) + участие в живых документах.
 export function ScanLocationScreen({ location }: { location: LocationMatch }) {
-  const { back, openPlace } = useNav()
+  const { back, openPlace, openScanBox } = useNav()
   const [rows, setRows] = useState<ZoneBalance[]>([])
+  const [holdings, setHoldings] = useState<ContainerHoldingRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -66,6 +76,20 @@ export function ScanLocationScreen({ location }: { location: LocationMatch }) {
     return load(ac.signal, true)
   }, [load])
   useEffect(() => () => refreshAc.current?.abort(), [])
+
+  useEffect(() => {
+    const ac = new AbortController()
+    getContainerHoldings([location.id], ac.signal)
+      .then((r) => setHoldings(r.items))
+      // Пометка вспомогательная: без неё карточка места остаётся рабочей.
+      .catch(() => setHoldings([]))
+    return () => ac.abort()
+  }, [location.id])
+
+  const boxesFor = useCallback(
+    (r: ZoneBalance) => holdings.filter((h) => holdingKey({ ...h, location_id: h.zone_id }) === holdingKey(r)),
+    [holdings],
+  )
 
   const total = useMemo(() => rows.reduce((s, r) => s + r.qty, 0), [rows])
   const sortedRows = useMemo(() => [...rows].sort(rowSort), [rows])
@@ -139,6 +163,11 @@ export function ScanLocationScreen({ location }: { location: LocationMatch }) {
                             <span className="pill">{OP_STATUS_LABELS[r.op_status]}</span>
                             <span className={`pill ${r.quality}`}>{QUALITY_LABELS[r.quality]}</span>
                           </div>
+                          <BoxPills
+                            boxes={boxesFor(r)}
+                            loose={r.qty - boxesFor(r).reduce((sum, h) => sum + h.qty, 0)}
+                            onOpen={openScanBox}
+                          />
                         </div>
                         <span className="tile-qty">
                           {r.qty}

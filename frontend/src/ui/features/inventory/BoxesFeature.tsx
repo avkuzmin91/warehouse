@@ -9,9 +9,10 @@ import {
 } from '../../../api/containersApi'
 import type { ContainerItem, ContainerLabel, ContainerStatus } from '../../../api/containersApi'
 import { useApi } from '../../../hooks/useApi'
+import { useLookups } from '../../../hooks/useLookups'
 import { useFilterParam, useFilterParamsActions, usePageParam } from '../../../hooks/useFilterParams'
 import { ListPage } from '../../layouts/ListPage'
-import { FiltersBar, FilterSelect } from '../../data/FiltersBar'
+import { FiltersBar, FilterCombobox, FilterSelect } from '../../data/FiltersBar'
 import { Pagination } from '../../data/Pagination'
 import { Table, Td } from '../../data/Table'
 import { SkeletonRows } from '../../primitives/Skeleton'
@@ -80,11 +81,13 @@ export function BoxesFeature() {
   const toast = useToast()
   const [search] = useFilterParam('search', '')
   const [status] = useFilterParam('status', '')
+  const [zoneId] = useFilterParam('place', '')
   const [page, setPage] = usePageParam()
   const { setMany } = useFilterParamsActions()
   const [batch, setBatch] = useState('20')
   const [busy, setBusy] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const { unloadingZones } = useLookups()
   // Список перечитывается после заведения пачки — useApi перезапускается по ключу.
   const [reloadKey, setReloadKey] = useState(0)
 
@@ -105,8 +108,9 @@ export function BoxesFeature() {
       limit: PAGE_SIZE,
       search: search.trim() || undefined,
       status: status || undefined,
+      zone_id: zoneId || undefined,
     }, signal),
-    [page, search, status, reloadKey],
+    [page, search, status, zoneId, reloadKey],
   )
 
   const items = useMemo(() => data?.items ?? [], [data])
@@ -126,7 +130,7 @@ export function BoxesFeature() {
   }, [items])
 
   // Выбор живёт в пределах показанной страницы: смена страницы или фильтра его сбрасывает.
-  useEffect(() => { setSelected(new Set()) }, [page, search, status, reloadKey])
+  useEffect(() => { setSelected(new Set()) }, [page, search, status, zoneId, reloadKey])
 
   async function handleCreate() {
     const count = Number(batch)
@@ -195,7 +199,7 @@ export function BoxesFeature() {
             <input
               className="input sm"
               style={{ paddingLeft: 28, width: 220, paddingRight: searchInput ? 26 : undefined }}
-              placeholder="Номер, ячейка, клиент…"
+              placeholder="Номер, ячейка, клиент, товар…"
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
             />
@@ -212,6 +216,16 @@ export function BoxesFeature() {
             options={STATUS_OPTIONS}
             onChange={(v) => setMany({ status: v, page: '' })}
           />
+          <FilterCombobox
+            label="Место"
+            value={zoneId}
+            options={[
+              { value: '', label: 'Все места' },
+              ...unloadingZones.filter((z) => z.is_active && !z.is_deleted).map((z) => ({ value: z.id, label: z.name })),
+            ]}
+            onChange={(v) => setMany({ place: v, page: '' })}
+            placeholder="Поиск места…"
+          />
           {/* Закрытые короба ждут развозки по местам — операционная очередь кладовщика. */}
           <button
             className={`btn sm${status === 'closed' ? ' primary' : ''}`}
@@ -219,8 +233,8 @@ export function BoxesFeature() {
           >
             Ждут размещения
           </button>
-          {(search || status) && (
-            <button className="btn ghost sm" onClick={() => { setSearchInput(''); setMany({ search: '', status: '', page: '' }) }}>
+          {(search || status || zoneId) && (
+            <button className="btn ghost sm" onClick={() => { setSearchInput(''); setMany({ search: '', status: '', place: '', page: '' }) }}>
               <Icon name="x" size={12} />Сбросить
             </button>
           )}
