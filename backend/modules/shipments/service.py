@@ -411,38 +411,23 @@ def move_lines_to_packing(connection, doc_id: str, lines, user_id: str) -> int:
     return _move_items_to_packing(connection, doc_id, items, user_id)
 
 
-def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str, qty: int | None = None) -> int:
-    """Откат передачи: возвращает пул «На упаковке» обратно на хранение в исходные места.
+def _return_line_packing_pool(
+    connection, line, *, client_id, qty: int | None, user_id: str, comment_prefix: str,
+) -> int:
+    """Компенсирующий возврат пула строки: (packing, good) → (storage, good). Без commit.
 
-    Журнал append-only, поэтому пишем компенсирующие обратные движения
-    (packing, good) → (storage, good) в те зоны, откуда товар приходил (из истории
-    движений). Возвращается только нерешённый пул (упакованное не трогаем).
-    qty=None — вернуть весь доступный пул.
+    Журнал append-only, поэтому «забрать со стола» — это обратные движения: физически
+    пул снимается с фактических ячеек корзины `packing` (её могли вручную переставить
+    из зоны упаковки), а адрес назначения берётся из нетто исходных мест передачи.
+    qty=None — вернуть весь нерешённый пул. Возвращает фактически возвращённое кол-во.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
 
-    doc = connection.execute(
-        "SELECT status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
-    ).fetchone()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Документ не найден")
-    if str(doc["status"]) not in (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING):
-        raise HTTPException(status_code=400, detail="Откат передачи доступен только «В плане» или «На упаковке»")
-
-    line = connection.execute(
-        "SELECT id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name "
-        "FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
-        (line_id, doc_id),
-    ).fetchone()
-    if not line:
-        raise HTTPException(status_code=404, detail="Строка не найдена")
-
+    line_id = str(line["id"])
     pool = line_on_packing_qty(connection, line_id)
-    if pool <= 0:
-        raise HTTPException(status_code=400, detail="Нечего возвращать — на упаковке нет нерешённого товара")
     target = pool if qty is None else min(int(qty), pool)
     if target <= 0:
-        raise HTTPException(status_code=400, detail="Укажите количество для возврата")
+        return 0
 
     # Net по исходной зоне = передано из неё − уже возвращённое обратно в неё.
     sources = connection.execute(
@@ -452,7 +437,7 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
                WHERE shipment_line_id = ? AND from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_PACKING}'
                  AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
                UNION ALL
-               SELECT to_zone_id AS zone_id, to_zone_name AS zone_name, -qty AS net
+               SELECT to_zone_id, to_zone_name, -qty
                FROM zone_relocations
                WHERE shipment_line_id = ? AND from_op = '{INV_OP_PACKING}' AND to_op = '{INV_OP_STORAGE}'
                  AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
@@ -463,9 +448,6 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
     ).fetchall()
 
     packing_id, packing_name = get_packing_zone(connection)
-    client_id = doc["client_id"]
-    # Пул могли вручную переставить из зоны упаковки — возврат уходит из фактических
-    # ячеек корзины `packing` (FIFO), а не всегда из зоны упаковки.
     pool_sources = line_bucket_zone_sources(
         connection, line_id, op=INV_OP_PACKING, quality=INV_Q_GOOD, prefer_zone_id=packing_id,
     )
@@ -490,11 +472,43 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
                 from_zone_id=pool_zone_id, from_zone_name=pool_zone_name,
                 to_zone_id=src["zone_id"], to_zone_name=src["zone_name"],
                 qty=part, user_id=user_id, shipment_line_id=line_id,
-                comment=f"Откат передачи: {part} шт → {src['zone_name'] or 'без места'}",
+                comment=f"{comment_prefix}: {part} шт → {src['zone_name'] or 'без места'}",
             )
         remaining -= take
+    return target - remaining
 
-    returned = target - remaining
+
+def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str, qty: int | None = None) -> int:
+    """Откат передачи: возвращает пул «На упаковке» обратно на хранение в исходные места.
+
+    Возвращается только нерешённый пул (упакованное не трогаем). qty=None — весь пул.
+    """
+    doc = connection.execute(
+        "SELECT status, client_id FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+    ).fetchone()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    if str(doc["status"]) not in (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING):
+        raise HTTPException(status_code=400, detail="Откат передачи доступен только «В плане» или «На упаковке»")
+
+    line = connection.execute(
+        "SELECT id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name "
+        "FROM shipment_lines WHERE id = ? AND doc_id = ? AND is_deleted = 0",
+        (line_id, doc_id),
+    ).fetchone()
+    if not line:
+        raise HTTPException(status_code=404, detail="Строка не найдена")
+
+    pool = line_on_packing_qty(connection, str(line["id"]))
+    if pool <= 0:
+        raise HTTPException(status_code=400, detail="Нечего возвращать — на упаковке нет нерешённого товара")
+    if qty is not None and int(qty) <= 0:
+        raise HTTPException(status_code=400, detail="Укажите количество для возврата")
+
+    returned = _return_line_packing_pool(
+        connection, line, client_id=doc["client_id"], qty=qty,
+        user_id=user_id, comment_prefix="Откат передачи",
+    )
     label = line["product_sku"] or line["product_name"]
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
@@ -503,6 +517,29 @@ def return_line_from_packing(connection, doc_id: str, line_id: str, user_id: str
     )
     connection.commit()
     return returned
+
+
+def release_line_packing_pool(connection, doc_id: str, line_id: str, user_id: str) -> int:
+    """Возврат пула строки на хранение перед удалением строки из состава. Без commit.
+
+    Строку можно удалить и «В плане», когда товар уже увезли в зону упаковки: без
+    возврата пул навсегда повисает в корзине «На упаковке» — у удалённой строки его
+    больше нечем откатить (аннулирование документа адресует пул по его строкам).
+    """
+    doc = connection.execute(
+        "SELECT client_id FROM shipment_docs WHERE id = ?", (doc_id,)
+    ).fetchone()
+    line = connection.execute(
+        "SELECT id, product_id, product_name, product_sku, color_id, color_name, size_id, size_name "
+        "FROM shipment_lines WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+        (line_id, doc_id),
+    ).fetchone()
+    if not line:
+        return 0
+    return _return_line_packing_pool(
+        connection, line, client_id=doc["client_id"] if doc else None, qty=None,
+        user_id=user_id, comment_prefix="Удаление строки: возврат с упаковки",
+    )
 
 
 # Net упаковки по журналу (две оси):
@@ -1740,70 +1777,24 @@ def return_packing_pool_to_storage(connection, doc_id: str, user_id: str) -> int
 
     Документ можно аннулировать в статусах «В плане» и «На упаковке» (последний —
     только пока ничего не упаковано), когда товар уже частично передан в зону
-    упаковки; без возврата он навсегда зависает в корзине
-    «На упаковке» у аннулированного документа. Обратные движения
-    packing/good@зона упаковки → storage/good по net исходных мест из журнала
-    передачи. Без commit — коммитит вызывающий (аннулирование).
+    упаковки; без возврата он навсегда зависает в корзине «На упаковке» у
+    аннулированного документа. Пул адресуется по строкам, поэтому **удалённые строки
+    тоже разбираются**: состав правится в тех же статусах, что и передача, и у
+    вычеркнутой строки пул иначе некому вернуть. Без commit — коммитит вызывающий.
     """
-    from modules.balances.service import get_packing_zone, insert_inventory_move
-
     doc = connection.execute(
         "SELECT client_id FROM shipment_docs WHERE id = ?", (doc_id,)
     ).fetchone()
     lines = connection.execute(
-        "SELECT * FROM shipment_lines WHERE doc_id = ? AND is_deleted = 0", (doc_id,)
+        "SELECT * FROM shipment_lines WHERE doc_id = ?", (doc_id,)
     ).fetchall()
 
-    packing_zone: tuple[str, str] | None = None
     total_returned = 0
     for line in lines:
-        line_id = str(line["id"])
-        pool = line_on_packing_qty(connection, line_id)
-        if pool <= 0:
-            continue
-        if packing_zone is None:
-            packing_zone = get_packing_zone(connection)
-        packing_id, packing_name = packing_zone
-
-        sources = connection.execute(
-            f"""SELECT zone_id, MIN(zone_name) AS zone_name, SUM(net) AS net FROM (
-                   SELECT from_zone_id AS zone_id, from_zone_name AS zone_name, qty AS net
-                   FROM zone_relocations
-                   WHERE shipment_line_id = ? AND from_op = '{INV_OP_STORAGE}' AND to_op = '{INV_OP_PACKING}'
-                     AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
-                   UNION ALL
-                   SELECT to_zone_id, to_zone_name, -qty
-                   FROM zone_relocations
-                   WHERE shipment_line_id = ? AND from_op = '{INV_OP_PACKING}' AND to_op = '{INV_OP_STORAGE}'
-                     AND from_quality = '{INV_Q_GOOD}' AND to_quality = '{INV_Q_GOOD}'
-               ) t
-               GROUP BY zone_id HAVING SUM(net) > 0
-               ORDER BY SUM(net) DESC""",
-            (line_id, line_id),
-        ).fetchall()
-
-        remaining = pool
-        for src in sources:
-            if remaining <= 0:
-                break
-            take = min(int(src["net"]), remaining)
-            if take <= 0:
-                continue
-            insert_inventory_move(
-                connection,
-                product_id=str(line["product_id"]), product_name=line["product_name"], product_sku=line["product_sku"],
-                color_id=line["color_id"], color_name=line["color_name"],
-                size_id=line["size_id"], size_name=line["size_name"],
-                client_id=doc["client_id"] if doc else None, client_name=None,
-                from_op=INV_OP_PACKING, to_op=INV_OP_STORAGE,
-                from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
-                from_zone_id=packing_id, from_zone_name=packing_name,
-                to_zone_id=src["zone_id"], to_zone_name=src["zone_name"],
-                qty=take, user_id=user_id, shipment_line_id=line_id,
-                comment=f"Возврат при аннулировании: {take} шт → {src['zone_name'] or 'без места'}",
-            )
-            remaining -= take
-            total_returned += take
+        total_returned += _return_line_packing_pool(
+            connection, line, client_id=doc["client_id"] if doc else None, qty=None,
+            user_id=user_id, comment_prefix="Возврат при аннулировании",
+        )
     return total_returned
 
 

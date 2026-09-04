@@ -23,6 +23,7 @@ from config import (
     SHIPMENT_CANCELLABLE_STATUSES,
     SHIPMENT_CANCELLABLE_STATUSES_DEFECT,
     SHIPMENT_OP_DOC_UPDATE,
+    SHIPMENT_OP_MOVE_RETURN,
     SHIPMENT_OP_PRIORITY_UPDATE,
     SHIPMENT_PRIORITY_LABELS,
     SHIPMENT_REPACK_FREE,
@@ -136,6 +137,7 @@ from modules.shipments.service import (
     packing_productivity,
     record_packing,
     release_box,
+    release_line_packing_pool,
     relocate_packed,
     return_defect_to_storage,
     return_line_from_packing,
@@ -1064,6 +1066,27 @@ def update_shipment_line(doc_id: str, line_id: str, body: ShipmentLineIn, user=D
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
+        # Смена позиции у строки, товар которой уже увезли в зону упаковки: пул привязан
+        # к строке, поэтому сначала возвращаем на хранение прежний товар — иначе он
+        # повиснет на упаковке, а откат вернул бы вместо него новую позицию.
+        prev = conn.execute(
+            "SELECT product_id, color_id, size_id FROM shipment_lines "
+            "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        identity_changed = prev is not None and (
+            str(prev["product_id"]) != str(body.product_id)
+            or (prev["color_id"] or None) != (body.color_id or None)
+            or (prev["size_id"] or None) != (body.size_id or None)
+        )
+        returned = release_line_packing_pool(conn, doc_id, line_id, str(user["id"])) if identity_changed else 0
+        if returned > 0:
+            conn.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, SHIPMENT_OP_MOVE_RETURN,
+                 f"Позиция строки заменена: {returned} шт возвращены с упаковки на хранение",
+                 _now(), str(user["id"])),
+            )
         store_id, store_name = _resolve_line_store(conn, row["client_id"], body.store_id)
         product_sku = assign_product_sku_if_missing(
             conn,
@@ -1447,10 +1470,20 @@ def delete_shipment_line(doc_id: str, line_id: str, user=Depends(_get_manager)):
             raise HTTPException(status_code=404, detail="Документ не найден")
         if str(row["status"]) not in SHIPMENT_EDITABLE_LINE_STATUSES:
             raise HTTPException(status_code=400, detail="Состав отгрузки можно менять только в черновике или в плане")
+        # «В плане» товар мог уже уехать в зону упаковки: вычёркиваем строку — сразу
+        # возвращаем её пул на хранение, иначе он повиснет в «На упаковке» навсегда.
+        returned = release_line_packing_pool(conn, doc_id, line_id, str(user["id"]))
         conn.execute(
             "UPDATE shipment_lines SET is_deleted=1 WHERE id=? AND doc_id=?",
             (line_id, doc_id),
         )
+        if returned > 0:
+            conn.execute(
+                "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+                (str(uuid4()), doc_id, SHIPMENT_OP_MOVE_RETURN,
+                 f"Строка удалена из состава: {returned} шт возвращены с упаковки на хранение",
+                 _now(), str(user["id"])),
+            )
         conn.commit()
     return {"message": "ok"}
 

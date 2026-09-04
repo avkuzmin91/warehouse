@@ -301,6 +301,65 @@ def test_cancel_on_packing_without_packed_returns_pool(api, client_id):
     assert _zone_qty(client_id, pos, intake_zone, "on_review") == 10
 
 
+def test_delete_line_returns_packing_pool(api, client_id):
+    """Строку с уже переданным на упаковку товаром вычеркнули — пул вернулся на место."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    assert _balance(client_id, pos) == (0, 0, 0, 10)
+
+    _as(_MANAGER)
+    r = api.delete(f"/shipments/{doc_id}/lines/{line_id}")
+    assert r.status_code == 200, r.text
+    assert _balance(client_id, pos) == (0, 0, 10, 0)
+    assert _zone_qty(client_id, pos, intake_zone, "on_review") == 10
+
+
+def test_replace_line_position_returns_packing_pool(api, client_id):
+    """Позицию строки заменили на другую — прежний товар вернулся с упаковки на место."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+
+    other = _position()
+    _receive(api, client_id, other, 10, intake_zone)  # гейт «в плане» требует остаток и по новой позиции
+
+    _as(_MANAGER)
+    r = api.patch(f"/shipments/{doc_id}/lines/{line_id}", json={
+        **other, "product_name": "P2", "product_sku": "SKU-2",
+        "color_name": "Blue", "size_name": None, "qty": 10,
+    })
+    assert r.status_code == 200, r.text
+    assert _balance(client_id, pos) == (0, 0, 10, 0)    # прежний товар вернулся на хранение
+    assert _balance(client_id, other) == (0, 0, 10, 0)  # новый на упаковку никто не увозил
+
+
+def test_cancel_returns_pool_of_deleted_line(api, client_id):
+    """Аннулирование разбирает пул и вычеркнутых строк (данные до возврата при удалении)."""
+    pos = _position()
+    intake_zone = str(uuid.uuid4())
+    _receive(api, client_id, pos, 10, intake_zone)
+    doc_id, line_id = _packing_shipment(api, client_id, pos, 10)
+    _as(_WH)
+    api.post(f"/shipments/{doc_id}/lines/{line_id}/move-to-packing", json={"qty": 10})
+    with get_connection() as c:
+        c.execute("UPDATE shipment_lines SET is_deleted = 1 WHERE id = ?", (line_id,))
+        c.commit()
+    assert _balance(client_id, pos) == (0, 0, 0, 10)
+
+    _as(_MANAGER)
+    r = api.post(f"/shipments/{doc_id}/cancel")
+    assert r.status_code == 200, r.text
+    assert _balance(client_id, pos) == (0, 0, 10, 0)
+    assert _zone_qty(client_id, pos, intake_zone, "on_review") == 10
+
+
 def test_cancel_on_packing_blocked_when_packed(api, client_id):
     """«На упаковке» с упакованным товаром (годным или браком) аннулировать нельзя."""
     pos = _position()
