@@ -429,6 +429,30 @@ def test_place_batch_takes_boxes_and_items_at_once(api, client_id, product, zone
     assert api.get(f"/shipments/{doc_id}").json()["status"] == "collected"
 
 
+def test_place_ignores_box_scanned_twice(api, client_id, product, zones):
+    """Один короб, попавший в пачку дважды, размещается один раз, а не ломает ходку."""
+    doc_id, _line_id = _create_task(api, client_id, product, qty=3)
+    code = _new_box_code(api)
+    _as(_WAREHOUSE)
+    box_id = api.post(f"/shipments/{doc_id}/boxes", json={"code": code}).json()["id"]
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/items", json={"barcode": product["barcode"], "qty": 3})
+    api.post(f"/shipments/{doc_id}/boxes/{box_id}/close")
+    api.post(f"/shipments/{doc_id}/finish-collecting")
+
+    placed = _place(api, zone_id=zones["cell_id"], box_ids=[box_id, box_id])
+    assert placed.status_code == 200, placed.text
+    assert placed.json()["placed_qty"] == 3
+    assert len(placed.json()["boxes"]) == 1
+    assert _bucket(client_id, product["product_id"], "boxed") == 0
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(qty), 0) AS n FROM zone_relocations "
+            "WHERE product_id = ? AND to_op = 'storage' AND to_zone_id = ?",
+            (product["product_id"], zones["cell_id"]),
+        ).fetchone()
+    assert int(row["n"]) == 3
+
+
 def test_place_rejects_open_box(api, client_id, product, zones):
     doc_id, _line_id = _create_task(api, client_id, product, qty=2)
     code = _new_box_code(api)

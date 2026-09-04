@@ -896,7 +896,13 @@ def place_batch(
     (ждёт размещения — уезжает на место, лежит на полке — переносится). Статусы задач
     развозка не двигает: задача закончилась на сборке, ходка тележки ей не принадлежит.
     """
-    boxes = [str(b).strip() for b in (box_ids or []) if str(b).strip()]
+    # Один короб в пачке ровно один раз: повтор скана на ТСД иначе положил бы короб на
+    # место, а вторым проходом попытался его же туда перенести — вся ходка падала бы.
+    boxes: list[str] = []
+    for raw in box_ids or []:
+        box_id = str(raw).strip()
+        if box_id and box_id not in boxes:
+            boxes.append(box_id)
     scans = list(items or [])
     if not boxes and not scans:
         raise HTTPException(status_code=400, detail="Отсканируйте короб или товар")

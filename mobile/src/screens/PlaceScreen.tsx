@@ -92,6 +92,10 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
     setBusy(true)
     setError('')
     setNotice('')
+    // Состояние внутри серии читается из локального снимка: setBoxes в этом
+    // замыкании не виден, поэтому по самому `boxes` повторный скан того же короба
+    // не отсеивался бы и пачка уезжала с дублем.
+    let inHand = boxes
     try {
       for (;;) {
         const code = await scanSource.scan()
@@ -109,15 +113,17 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
             setError(`Короб ${box.doc_number} ещё не закрыт — закройте его в задаче сборки`)
             return
           }
-          if (boxes.some((b) => b.id === box.id)) {
+          if (inHand.some((b) => b.id === box.id)) {
+            scanNotFoundFeedback()
             setNotice(`Короб ${box.doc_number} уже в списке`)
             continue
           }
           scanSuccessFeedback()
-          setBoxes((prev) => [
+          inHand = [
             { id: box.id, doc_number: box.doc_number, items_qty: box.items_qty, moving: box.status === 'placed' },
-            ...prev,
-          ])
+            ...inHand,
+          ]
+          setBoxes(inHand)
           continue
         }
         if (isLocationCode(code)) {
