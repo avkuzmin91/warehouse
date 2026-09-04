@@ -30,6 +30,7 @@ from security import (
     ensure_document_create_access,
     ensure_manager_staff,
     ensure_packing_access,
+    ensure_scan_lookup_access,
     ensure_shipment_view_access,
     ensure_stock_write_access,
     ensure_supply_pick_access,
@@ -283,6 +284,12 @@ def get_current_packer(user=Depends(get_current_user)):
 def get_current_stock_operator(user=Depends(get_current_user)):
     """Ручные операции с остатками — складской состав вместе с начальником смены."""
     ensure_stock_write_access(user)
+    return user
+
+
+def get_current_scan_reader(user=Depends(get_current_user)):
+    """Разбор отсканированного QR места/короба (read-only)."""
+    ensure_scan_lookup_access(user)
     return user
 
 

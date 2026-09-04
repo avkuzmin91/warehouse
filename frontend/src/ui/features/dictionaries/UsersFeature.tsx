@@ -22,6 +22,7 @@ const ROLE_LABELS: Record<string, string> = {
   client: 'Клиент',
   warehouse_manager: 'Кладовщик',
   shift_supervisor: 'Начальник смены',
+  picker: 'Сборщик',
   warehouse_head: 'Начальник склада',
 }
 
@@ -30,12 +31,13 @@ const ROLE_TONE: Record<string, 'accent' | 'info' | '' | 'warning' | 'success'> 
   manager: 'info',
   warehouse_manager: 'info',
   shift_supervisor: 'warning',
+  picker: 'info',
   warehouse_head: 'accent',
   client: 'success',
   user: '',
 }
 
-const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'shift_supervisor', 'warehouse_head', 'client'] as const
+const ASSIGNABLE_ROLES = ['user', 'manager', 'warehouse_manager', 'shift_supervisor', 'warehouse_head', 'picker', 'client'] as const
 type AssignableRole = (typeof ASSIGNABLE_ROLES)[number]
 
 function shouldDropUp(triggerEl: HTMLElement | null, menuHeight: number): boolean {
@@ -52,6 +54,7 @@ const ROLE_FILTERS = [
   { role: 'warehouse_head', label: 'Начальники склада', icon: 'shield' },
   { role: 'warehouse_manager', label: 'Кладовщики', icon: 'archive' },
   { role: 'shift_supervisor', label: 'Начальники смены', icon: 'user' },
+  { role: 'picker', label: 'Сборщики', icon: 'user' },
   { role: 'user', label: 'Без доступа', icon: 'user' },
   { role: 'client', label: 'Клиенты', icon: 'box' },
 ] as const

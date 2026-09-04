@@ -17,6 +17,8 @@ export type Route =
   | { name: 'shipments' }
   | { name: 'stock' }
   | { name: 'packing' }
+  | { name: 'pick' }
+  | { name: 'supplyPick'; id: string }
   | { name: 'packDoc'; id: string; focus?: PackFocus }
   | { name: 'putawayDoc'; id: string }
   | { name: 'putawayBox'; id: string; boxId: string }
@@ -71,6 +73,7 @@ type NavState = {
   openDispatchPrepare: (id: string) => void
   openPackDoc: (id: string, focus?: PackFocus) => void
   openPutawayDoc: (id: string) => void
+  openSupplyPick: (id: string) => void
   openPutawayBox: (id: string, boxId: string) => void
   openPlace: (source?: { id: string; code: string }) => void
   openScanBox: (containerId: string) => void
@@ -137,6 +140,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openDispatchPrepare: (id) => setStack((s) => [...s, { name: 'dispatchPrepare', id }]),
     openPackDoc: (id, focus) => setStack((s) => [...s, { name: 'packDoc', id, focus }]),
     openPutawayDoc: (id) => setStack((s) => [...s, { name: 'putawayDoc', id }]),
+    openSupplyPick: (id) => setStack((s) => [...s, { name: 'supplyPick', id }]),
     openPutawayBox: (id, boxId) => setStack((s) => [...s, { name: 'putawayBox', id, boxId }]),
     openPlace: (source) => setStack((s) => [...s, { name: 'place', source }]),
     openScanBox: (containerId) => setStack((s) => [...s, { name: 'scanBox', containerId }]),

@@ -85,6 +85,7 @@ const ROLE_LABELS: Record<string, string> = {
   user: 'Без доступа',
   warehouse_manager: 'Кладовщик',
   shift_supervisor: 'Начальник смены',
+  picker: 'Сборщик',
   warehouse_head: 'Начальник склада',
   client: 'Клиент',
 }

@@ -5,7 +5,7 @@ export function getUsers(signal?: AbortSignal) {
   return request<UserListItem[]>('/users', { signal })
 }
 
-export function updateUserRole(userId: string, role: 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'warehouse_head' | 'client') {
+export function updateUserRole(userId: string, role: 'user' | 'manager' | 'warehouse_manager' | 'shift_supervisor' | 'warehouse_head' | 'picker' | 'client') {
   return request<{ message: string }>(`/users/${userId}/role`, {
     method: 'PATCH',
     body: JSON.stringify({ role }),

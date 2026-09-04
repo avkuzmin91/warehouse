@@ -29,12 +29,16 @@ function taskVisual(kind: string, direction?: string | null): { icon: IconName; 
   if (kind.startsWith('dispatch')) return { icon: 'forklift', tone: 'green' }
   if (kind.startsWith('trip')) return direction === 'outbound' ? { icon: 'truckOut', tone: 'green' } : { icon: 'truckIn', tone: '' }
   if (kind.startsWith('receipt')) return { icon: 'truckIn', tone: '' }
+  if (kind === 'mp_supply_pick') return { icon: 'boxes', tone: 'blue' }
   return { icon: 'list', tone: 'gray' }
 }
 
 export function TasksScreen() {
   const { user } = useAuth()
-  const { openTrip, openShipment, openDispatchPrepare, openPackDoc, openPutawayDoc, openPlace, openReceiptDoc } = useNav()
+  const {
+    openTrip, openShipment, openDispatchPrepare, openPackDoc, openPutawayDoc, openPlace,
+    openReceiptDoc, openSupplyPick,
+  } = useNav()
   const toast = useToast()
   // Сводка дня — только менеджерский состав (контроль склада со смартфона).
   const isManager = canCreateDocuments(user?.role)
@@ -142,7 +146,7 @@ export function TasksScreen() {
             {items.map((t) => {
               // Задачи по поступлениям (закрыть недопоставку) выполняются на менеджерской
               // деталке поступления — остальным ролям она открывается в режиме просмотра.
-              const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment' || t.doc_type === 'dispatch' || t.doc_type === 'receipt'
+              const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment' || t.doc_type === 'dispatch' || t.doc_type === 'receipt' || t.doc_type === 'mp_supply'
               const { icon, tone } = taskVisual(t.kind, t.direction)
               const urgent = t.priority_rank != null && t.priority_rank > 0
               const read = isRead(t)
@@ -158,6 +162,8 @@ export function TasksScreen() {
                   return
                 }
                 if (t.doc_type === 'trip') openTrip(t.doc_id)
+                // «Собрать поставку» — экран сборки FBS: лист подбора и скан по маршруту.
+                else if (t.doc_type === 'mp_supply') openSupplyPick(t.doc_id)
                 // «Упаковать» — внесение годного/брака: экран упаковки, не деталка кладовщика.
                 else if (t.kind === 'shipment_pack') openPackDoc(t.doc_id)
                 // «Собрать короба» — сборка на столе; «Развезти по местам» — развозка,

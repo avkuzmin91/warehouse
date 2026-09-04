@@ -294,6 +294,11 @@ export type MpSupplyBoardItem = {
   unlinked_positions: number
   shortage_positions: number
   no_location_positions: number
+  picked_qty: number
+  remaining_qty: number
+  picker_id: string | null
+  picker_name: string | null
+  claimed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -328,6 +333,8 @@ export type MpSupplyPickItem = {
   offer_id: string | null
   linked: boolean
   need_qty: number
+  picked_qty: number
+  remaining_qty: number
   available_qty: number
   shortage_qty: number
   orders_count: number
@@ -411,6 +418,14 @@ export function dockMpSupplyOrders(supplyId: string, orderIds: string[]) {
     method: 'POST',
     body: JSON.stringify({ order_ids: orderIds }),
   })
+}
+
+/** Снять заказ с поставки, уже стоящей на сборке — разбор недостачи.
+ *  Сборка не закрывается недособранной, поэтому «товара нет» решается составом. */
+export function dropMpSupplyOrder(supplyId: string, orderId: string) {
+  return request<{ message: string }>(
+    `/marketplaces/supplies/${supplyId}/orders/${orderId}/drop`, { method: 'POST' },
+  )
 }
 
 export function advanceMpSupply(supplyId: string) {

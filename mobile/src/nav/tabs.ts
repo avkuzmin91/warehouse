@@ -9,6 +9,8 @@ export type TabName =
   | 'stock'
   // начальник смены
   | 'packing'
+  // сборщик
+  | 'pick'
   // менеджер
   | 'mTrips'
   | 'mWarehouse'
@@ -42,6 +44,13 @@ const SHIFT_LEAD_TABS: TabDef[] = [
   { name: 'packing', label: 'Упаковка', icon: 'box' },
 ]
 
+// Сборщик: только его участок — очередь сборки FBS-поставок и своя очередь задач.
+// Складских списков и остатков у роли нет: она работает сканом по листу подбора.
+const PICKER_TABS: TabDef[] = [
+  { name: 'tasks', label: 'Мои задачи', icon: 'list' },
+  { name: 'pick', label: 'Сборка', icon: 'boxes' },
+]
+
 // Начальник склада: раскладка повторяет менеджерскую (задачи / рейсы / хаб «Склад» /
 // остатки), но без права создавать документы — хаб ведёт к спискам и деталкам в режиме
 // просмотра, а операции (приёмка в рейсе, приёмка упаковки, подготовка отгрузки) идут
@@ -59,11 +68,13 @@ const WAREHOUSE_HEAD_TABS: TabDef[] = [
 const MANAGER_ROLES = new Set(['manager', 'admin'])
 const SHIFT_LEAD_ROLES = new Set(['shift_supervisor'])
 const WAREHOUSE_HEAD_ROLES = new Set(['warehouse_head'])
+const PICKER_ROLES = new Set(['picker'])
 
 export function tabsForRole(role: string): TabDef[] {
   if (MANAGER_ROLES.has(role)) return MANAGER_TABS
   if (SHIFT_LEAD_ROLES.has(role)) return SHIFT_LEAD_TABS
   if (WAREHOUSE_HEAD_ROLES.has(role)) return WAREHOUSE_HEAD_TABS
+  if (PICKER_ROLES.has(role)) return PICKER_TABS
   return WAREHOUSE_TABS
 }
 

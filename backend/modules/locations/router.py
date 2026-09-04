@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from modules.auth.service import get_current_admin, get_current_warehouse
+from modules.auth.service import get_current_admin, get_current_scan_reader
 from modules.dictionaries.schemas import MessageResponse
 
 from .schemas import (
@@ -73,8 +73,8 @@ def location_labels_endpoint(
 
 
 @router.get("/locations/by-code/{code}", response_model=LocationLookupResponse)
-def lookup_location_endpoint(code: str, user=Depends(get_current_warehouse)):
-    """Сканер кладовщика: QR/код места → запись справочника. found=false, если не найдено."""
+def lookup_location_endpoint(code: str, user=Depends(get_current_scan_reader)):
+    """Сканер склада: QR/код места → запись справочника. found=false, если не найдено."""
     _ = user
     return lookup_location(code)
 

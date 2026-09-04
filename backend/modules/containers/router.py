@@ -6,6 +6,7 @@ from dbconn import get_connection
 from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import (
     get_current_manager,
+    get_current_scan_reader,
     get_current_shipment_viewer,
     get_current_stock_operator,
 )
@@ -91,7 +92,7 @@ def container_labels_endpoint(
 
 
 @router.get("/containers/by-code/{code}", response_model=ContainerLookupResponse)
-def lookup_container_endpoint(code: str, user=Depends(get_current_stock_operator)):
+def lookup_container_endpoint(code: str, user=Depends(get_current_scan_reader)):
     """Скан этикетки короба: QR/номер → короб. found=false, если не найден."""
     _ = user
     with get_connection() as conn:

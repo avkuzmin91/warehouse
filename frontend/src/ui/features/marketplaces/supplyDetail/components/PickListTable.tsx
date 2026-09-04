@@ -18,6 +18,7 @@ export function PickListTable({ items }: { items: MpSupplyPickItem[] }) {
           <th style={{ width: 150 }}>Цвет / размер</th>
           <th style={{ width: 150 }}>Ячейка · маршрут</th>
           <th style={{ width: 76, textAlign: 'right' }}>Нужно</th>
+          <th style={{ width: 90, textAlign: 'right' }}>Собрано</th>
           <th style={{ width: 90, textAlign: 'right' }}>Свободно</th>
           <th style={{ width: 90 }}>Заказов</th>
         </tr>
@@ -51,6 +52,16 @@ export function PickListTable({ items }: { items: MpSupplyPickItem[] }) {
               className="num"
               style={{
                 textAlign: 'right',
+                color: item.linked && item.remaining_qty === 0 ? 'var(--c-success)' : undefined,
+                fontWeight: item.linked && item.remaining_qty === 0 ? 600 : undefined,
+              }}
+            >
+              {item.linked ? item.picked_qty : '—'}
+            </Td>
+            <Td
+              className="num"
+              style={{
+                textAlign: 'right',
                 color: item.shortage_qty > 0 ? 'var(--c-danger)' : undefined,
                 fontWeight: item.shortage_qty > 0 ? 600 : undefined,
               }}
@@ -69,7 +80,10 @@ export function PickListTable({ items }: { items: MpSupplyPickItem[] }) {
  *  величины, по которым видно, влезет ли это в оставшееся время. */
 export function PickListTotals({ items, ordersTotal }: { items: MpSupplyPickItem[]; ordersTotal: number }) {
   const need = items.reduce((n, i) => n + i.need_qty, 0)
-  const collectable = items.reduce((n, i) => n + Math.min(i.need_qty, i.linked ? i.available_qty : 0), 0)
+  const picked = items.reduce((n, i) => n + i.picked_qty, 0)
+  const collectable = items.reduce(
+    (n, i) => n + Math.min(i.remaining_qty, i.linked ? i.available_qty : 0), 0,
+  )
   const cells = new Set(items.flatMap((i) => i.cells)).size
   const noLocation = items.filter((i) => i.linked && i.cells.length === 0).length
   return (
@@ -81,7 +95,10 @@ export function PickListTotals({ items, ordersTotal }: { items: MpSupplyPickItem
       }}
     >
       <span>Итого к подбору: <b style={{ color: 'var(--c-text)' }}>{need} шт.</b></span>
-      <span>Собирается: <b style={{ color: 'var(--c-text)' }}>{collectable} шт.</b></span>
+      {picked > 0 && (
+        <span>Собрано: <b style={{ color: 'var(--c-success)' }}>{picked} шт.</b></span>
+      )}
+      <span>Ещё собирается: <b style={{ color: 'var(--c-text)' }}>{collectable} шт.</b></span>
       <span>Проходов по складу: <b style={{ color: 'var(--c-text)' }}>{items.length}</b> вместо {ordersTotal}</span>
       <span>Ячеек: <b style={{ color: 'var(--c-text)' }}>{cells}</b></span>
       {noLocation > 0 && <span>Без места: <b style={{ color: 'var(--c-warning)' }}>{noLocation} поз.</b></span>}

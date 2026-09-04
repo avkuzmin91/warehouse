@@ -176,6 +176,17 @@ def ensure_marketplace_access(user: Mapping[str, Any]) -> None:
         )
 
 
+def ensure_scan_lookup_access(user: Mapping[str, Any]) -> None:
+    """Разбор отсканированного QR (место хранения, короб) — read-only.
+
+    Сборщик сканирует место и короб на каждой позиции листа подбора, поэтому
+    lookup ему открыт, хотя операции с остатками и содержимым короба — нет.
+    """
+    if user["role"] in MP_SUPPLY_PICK_ROLES:
+        return
+    ensure_stock_write_access(user)
+
+
 def ensure_supply_pick_access(user: Mapping[str, Any]) -> None:
     """Сборка FBS-поставки на ТСД: сборщик, кладовщик и начальник склада.
 
