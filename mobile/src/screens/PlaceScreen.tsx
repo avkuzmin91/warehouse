@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
 import {
   getContainerByCode,
+  getPendingPlacement,
   isContainerCode,
   placeContainers,
+  type ContainerPendingPlacement,
   type ContainerPlaceItemScan,
 } from '../api/containersApi'
 import { getLocationByCode, isLocationCode } from '../api/locationsApi'
@@ -46,6 +48,19 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // Очередь развозки общая на склад: по ней видно, осталось ли что-то у стола.
+  const [pending, setPending] = useState<ContainerPendingPlacement | null>(null)
+
+  const loadPending = useCallback((signal?: AbortSignal) => {
+    getPendingPlacement(signal)
+      .then((r) => { if (!signal?.aborted) setPending(r) })
+      .catch(() => {})
+  }, [])
+  useEffect(() => {
+    const ac = new AbortController()
+    loadPending(ac.signal)
+    return () => ac.abort()
+  }, [loadPending])
 
   const boxQty = boxes.reduce((s, b) => s + b.items_qty, 0)
   const itemQty = items.reduce((s, i) => s + i.qty, 0)
@@ -166,8 +181,8 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
       setBoxes([])
       setItems([])
       setSource(null)
-      const closed = res.closed_tasks.length > 0 ? ` · задача закрыта: ${res.closed_tasks.join(', ')}` : ''
-      setNotice(`${res.placed_qty} шт. → ${res.zone_name}${closed}`)
+      setNotice(`${res.placed_qty} шт. → ${res.zone_name}`)
+      loadPending()
     } catch (err) {
       scanNotFoundFeedback()
       setError(err instanceof Error ? err.message : 'Не удалось разместить')
@@ -192,6 +207,16 @@ export function PlaceScreen({ source: initialSource }: { source?: Source }) {
           Сканер не закрывается — пикайте подряд. Закрытый короб встанет на место, уже
           размещённый переедет. Товар с полки берите после скана места, откуда берёте.
         </div>
+
+        {pending && (pending.boxes.length > 0 || pending.aside_qty > 0) && (
+          <div className="line">
+            <div className="line-name">
+              У стола ждут развозки: коробов {pending.boxes.length}
+              {pending.aside_qty > 0 ? `, мимо коробов ${pending.aside_qty} шт.` : ''}
+            </div>
+            <div className="line-sub">Очередь общая — в ней объекты всех задач сборки</div>
+          </div>
+        )}
 
         {source && (
           <div className="line">

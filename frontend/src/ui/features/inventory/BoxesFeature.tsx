@@ -22,6 +22,7 @@ import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { useToast } from '../../feedback/Toast'
 import { fmtDate } from '../../../utils/format'
+import { PendingPlacementPanel } from './PendingPlacementPanel'
 
 const PAGE_SIZE = 25
 
@@ -226,6 +227,11 @@ export function BoxesFeature() {
         </FiltersBar>
       }
     >
+      <PendingPlacementPanel
+        selectedBoxIds={[...selected]}
+        onPlaced={() => { setSelected(new Set()); setReloadKey((k) => k + 1) }}
+      />
+
       <Table>
         <thead>
           <tr>

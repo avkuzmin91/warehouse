@@ -30,6 +30,7 @@ export type ContainerContentLine = {
   color_name: string | null
   size_id: string | null
   size_name: string | null
+  quality: 'good' | 'defect'
   qty: number
 }
 
@@ -105,7 +106,38 @@ export type ContainerPlaceResult = {
   boxes: ContainerItem[]
   items: ContainerPlacedItem[]
   placed_qty: number
-  closed_tasks: string[] // задачи, закрывшиеся этим размещением
+}
+
+/** Закрытый короб у стола: ждёт, когда его увезут в место хранения. */
+export type ContainerPendingBox = {
+  id: string
+  doc_number: string
+  client_name: string | null
+  items_qty: number
+  closed_at: string | null
+}
+
+/** Собранное мимо короба (габарит, брак): короба у него нет, только корзина boxed. */
+export type ContainerPendingAsideItem = {
+  product_id: string
+  product_name: string | null
+  product_sku: string | null
+  color_id: string | null
+  color_name: string | null
+  size_id: string | null
+  size_name: string | null
+  client_name: string | null
+  quality: 'good' | 'defect'
+  qty: number
+}
+
+/** Очередь развозки: что закрыто у стола и ещё не уехало в место хранения. */
+export type ContainerPendingPlacement = {
+  boxes: ContainerPendingBox[]
+  boxes_qty: number
+  aside: ContainerPendingAsideItem[]
+  aside_qty: number
+  since: string | null
 }
 
 // --- API functions ---
@@ -120,6 +152,10 @@ export function getContainers(params: ContainerListParams = {}, signal?: AbortSi
   if (params.search) sp.set('search', params.search)
   const q = sp.toString()
   return request<ContainerListResponse>(`/containers${q ? `?${q}` : ''}`, { signal })
+}
+
+export function getPendingPlacement(signal?: AbortSignal) {
+  return request<ContainerPendingPlacement>('/containers/pending-placement', { signal })
 }
 
 export function getContainer(id: string, signal?: AbortSignal) {

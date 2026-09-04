@@ -6,26 +6,19 @@ import {
   reopenShipmentBox,
   SHIPMENT_BOX_STATUS_LABELS,
 } from '../../../../../api/shipmentsApi'
-import type { ShipmentBox, ShipmentDetail, ShipmentLine } from '../../../../../api/shipmentsApi'
-import { placeContainers } from '../../../../../api/containersApi'
-import { Combobox } from '../../../../data/Combobox'
+import type { ShipmentBox, ShipmentDetail } from '../../../../../api/shipmentsApi'
 import { Icon } from '../../../../primitives/Icon'
 import { Badge } from '../../../../primitives/Badge'
 import { PhaseBlock } from '../../../shared/process/PhaseBlock'
 import { useToast } from '../../../../feedback/Toast'
 import { useConfirm } from '../../../../feedback/ConfirmDialog'
 
-/** Опция места хранения (id + человекочитаемый адрес). */
-export type CellOption = { id: string; name: string }
-
 type Props = {
-  docId:       string
-  doc:         ShipmentDetail
-  canEdit:     boolean
-  readOnly?:   boolean
-  collected?:  boolean
-  zoneOptions: CellOption[]
-  onDone:      () => Promise<void> | void
+  docId:      string
+  doc:        ShipmentDetail
+  canEdit:    boolean
+  collected?: boolean
+  onDone:     () => Promise<void> | void
 }
 
 function boxTone(status: ShipmentBox['status']): 'success' | 'info' | 'warning' {
@@ -34,20 +27,17 @@ function boxTone(status: ShipmentBox['status']): 'success' | 'info' | 'warning' 
   return 'warning'
 }
 
-/** Короба задачи размещения: что собрано, где стоит, что осталось развезти.
+/** Короба задачи размещения: что собрано и где оно теперь.
  *
- * Сборка идёт на ТСД (скан этикетки → скан товара → закрыть короб); развозка по
- * местам — отдельный процесс на ТСД у стеллажа, поэтому здесь её нет: только
- * контроль, разбор ошибок и кнопка «Сборка завершена».
+ * Сборка идёт на ТСД (скан этикетки → скан товара → закрыть короб) и заканчивается
+ * кнопкой «Сборка завершена» — на этом задача закрыта. Развозки по местам здесь нет:
+ * её ведёт очередь коробов («Короба» → «Ждут развозки»), потому что одна ходка
+ * тележки увозит объекты сразу нескольких задач.
  */
-export function BoxesPanel({
-  docId, doc, canEdit, readOnly = false, collected = false, zoneOptions, onDone,
-}: Props) {
+export function BoxesPanel({ docId, doc, canEdit, collected = false, onDone }: Props) {
   const toast = useToast()
   const confirm = useConfirm()
   const [busy, setBusy] = useState<string | null>(null)
-  // Ручная развозка без ТСД: место выбирается из справочника для каждого объекта.
-  const [zoneByKey, setZoneByKey] = useState<Record<string, string>>({})
 
   const boxes = doc.boxes ?? []
   // Пустой открытый короб задачу не держит: при завершении сборки он освобождается сам.
@@ -60,7 +50,6 @@ export function BoxesPanel({
   const asideTotal = doc.lines.reduce((s, l) => s + l.aside_qty, 0)
   const defectTotal = doc.lines.reduce((s, l) => s + l.boxed_defect_qty, 0)
   const asideLines = doc.lines.filter((l) => l.aside_qty > 0)
-  const zoneOpts = zoneOptions.map((z) => ({ value: z.id, label: z.name }))
 
   async function run(key: string, fn: () => Promise<unknown>) {
     setBusy(key)
@@ -78,7 +67,7 @@ export function BoxesPanel({
     const ok = await confirm({
       title: 'Сборка завершена?',
       body: boxedTotal > 0
-        ? `Собрано ${boxedTotal} шт. Задача перейдёт в «Собрано»: короба и товар мимо коробов развозит по местам кладовщик на ТСД. Как только уедет последний — задача закроется сама.`
+        ? `Собрано ${boxedTotal} шт. Задача закроется: короба и товар мимо коробов уйдут в очередь развозки — их развезёт кладовщик, когда повезёт ходку к стеллажам.`
         : 'Собранного товара нет — задача закроется сразу.',
       confirmLabel: 'Завершить сборку',
     })
@@ -86,49 +75,15 @@ export function BoxesPanel({
     await run('finish', () => finishCollecting(docId))
   }
 
-  async function placeBox(box: ShipmentBox) {
-    const zoneId = zoneByKey[box.id]
-    if (!zoneId) return
-    await run(`place-${box.id}`, async () => {
-      const res = await placeContainers({ zone_id: zoneId, box_ids: [box.id] })
-      setZoneByKey((prev) => ({ ...prev, [box.id]: '' }))
-      toast(`Короб ${box.doc_number} → ${res.zone_name}`, 'success')
-    })
-  }
-
-  async function placeAside(line: ShipmentLine, quality: 'good' | 'defect', qty: number) {
-    const key = `${line.id}-${quality}`
-    const zoneId = zoneByKey[key]
-    if (!zoneId || qty <= 0) return
-    await run(`aside-${key}`, async () => {
-      const res = await placeContainers({
-        zone_id: zoneId,
-        items: [{
-          product_id: line.product_id,
-          color_id: line.color_id,
-          size_id: line.size_id,
-          quality,
-          qty,
-        }],
-      })
-      setZoneByKey((prev) => ({ ...prev, [key]: '' }))
-      toast(`${qty} шт. → ${res.zone_name}`, 'success')
-    })
-  }
-
-  const hint = readOnly
-    ? 'товар развезён по местам хранения'
-    : collected
-      ? 'сборка завершена — короба развозит кладовщик на ТСД: скан коробов → скан места'
-      : 'сборка идёт на ТСД: скан короба → скан товара → закрыть короб'
-
   return (
     <PhaseBlock
       icon="box"
       title="Короба"
       role="shift_lead"
-      state={readOnly ? 'done' : 'active'}
-      hint={hint}
+      state={collected ? 'done' : 'active'}
+      hint={collected
+        ? 'сборка завершена — развозка идёт в очереди коробов, задача её не ждёт'
+        : 'сборка идёт на ТСД: скан короба → скан товара → закрыть короб'}
     >
       <div style={{ display: 'flex', gap: 16, padding: '4px 0 10px', fontSize: 13, flexWrap: 'wrap' }}>
         <span className="t-sub">Ждёт размещения: <b className="num">{boxedTotal}</b></span>
@@ -153,12 +108,13 @@ export function BoxesPanel({
               <div className="row gap-8" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
                 <span className="mono" style={{ fontWeight: 600 }}>{b.doc_number}</span>
                 <Badge tone={boxTone(b.status)}>{SHIPMENT_BOX_STATUS_LABELS[b.status]}</Badge>
+                {b.quality === 'defect' && <Badge tone="danger">Брак</Badge>}
                 <span className="t-sub">{b.items_qty} шт.</span>
                 {b.zone_name && (
                   <span className="t-sub"><Icon name="archive" size={13} /> {b.zone_name}</span>
                 )}
                 <span style={{ flex: 1 }} />
-                {!readOnly && !collected && canEdit && b.status === 'open' && (
+                {!collected && canEdit && b.status === 'open' && (
                   b.items_qty === 0 ? (
                     <button
                       className="btn sm ghost"
@@ -178,7 +134,7 @@ export function BoxesPanel({
                     </button>
                   )
                 )}
-                {!readOnly && !collected && canEdit && b.status === 'closed' && (
+                {!collected && canEdit && b.status === 'closed' && (
                   <button
                     className="btn sm ghost"
                     disabled={busy != null}
@@ -188,27 +144,7 @@ export function BoxesPanel({
                     Открыть заново
                   </button>
                 )}
-                {collected && b.status === 'closed' && canEdit && (
-                  <>
-                    <div style={{ minWidth: 200 }}>
-                      <Combobox
-                        options={zoneOpts}
-                        value={zoneByKey[b.id] ?? ''}
-                        onChange={(v) => setZoneByKey((prev) => ({ ...prev, [b.id]: String(v ?? '') }))}
-                        placeholder="Место хранения"
-                      />
-                    </div>
-                    <button
-                      className="btn sm primary"
-                      disabled={busy != null || !zoneByKey[b.id]}
-                      title="Обычно короб развозят сканером; здесь — вручную, если ТСД нет"
-                      onClick={() => { void placeBox(b) }}
-                    >
-                      Разместить
-                    </button>
-                  </>
-                )}
-                {collected && b.status === 'closed' && !canEdit && (
+                {collected && b.status === 'closed' && (
                   <span className="t-sub" style={{ fontSize: 12 }}>ждёт развозки</span>
                 )}
               </div>
@@ -232,7 +168,7 @@ export function BoxesPanel({
         </div>
       )}
 
-      {!readOnly && !collected && canEdit && (
+      {!collected && canEdit && (
         <div style={{ marginTop: 14, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <button
             className="btn primary"
@@ -258,59 +194,31 @@ export function BoxesPanel({
       {collected && asideLines.length > 0 && (
         <div style={{ marginTop: 14 }}>
           <div className="t-sub" style={{ fontSize: 12, marginBottom: 6 }}>
-            Собрано мимо коробов — ждёт места хранения
+            Собрано мимо коробов
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {doc.lines.filter((l) => l.aside_qty > 0).flatMap((l) => {
-              const parts: { quality: 'good' | 'defect'; qty: number }[] = []
-              const defect = l.aside_defect_qty
-              const good = l.aside_qty - defect
-              if (good > 0) parts.push({ quality: 'good', qty: good })
-              if (defect > 0) parts.push({ quality: 'defect', qty: defect })
-              return parts.map(({ quality, qty }) => {
-                const key = `${l.id}-${quality}`
-                return (
-                  <div key={key} className="row gap-8" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span className="mono">{l.product_sku}</span>
-                    <span className="t-sub">
-                      {[l.product_name, l.color_name, l.size_name].filter(Boolean).join(' · ')}
-                    </span>
-                    <span className="num">{qty}</span>
-                    <span style={{ color: quality === 'defect' ? 'var(--c-danger)' : undefined, fontSize: 12 }}>
-                      {quality === 'defect' ? 'брак' : 'годный'}
-                    </span>
-                    <span style={{ flex: 1 }} />
-                    {canEdit && (
-                      <>
-                        <div style={{ minWidth: 200 }}>
-                          <Combobox
-                            options={zoneOpts}
-                            value={zoneByKey[key] ?? ''}
-                            onChange={(v) => setZoneByKey((prev) => ({ ...prev, [key]: String(v ?? '') }))}
-                            placeholder="Место хранения"
-                          />
-                        </div>
-                        <button
-                          className="btn sm"
-                          disabled={busy != null || !zoneByKey[key]}
-                          onClick={() => { void placeAside(l, quality, qty) }}
-                        >
-                          Разместить
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )
-              })
-            })}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {asideLines.map((l) => (
+              <div key={l.id} className="row gap-8" style={{ alignItems: 'center', flexWrap: 'wrap', fontSize: 12 }}>
+                <span className="mono">{l.product_sku}</span>
+                <span className="t-sub">
+                  {[l.product_name, l.color_name, l.size_name].filter(Boolean).join(' · ')}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span className="num">{l.aside_qty}</span>
+                {l.aside_defect_qty > 0 && (
+                  <span style={{ color: 'var(--c-danger)' }}>брак {l.aside_defect_qty}</span>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
 
-      {collected && awaitingPlacement.length > 0 && (
+      {collected && (awaitingPlacement.length > 0 || asideTotal > 0) && (
         <div className="t-sub" style={{ marginTop: 12, fontSize: 12 }}>
-          Ждут развозки коробов: {awaitingPlacement.length}. Задача закроется сама, когда
-          уедет последний.
+          Ждут развозки: коробов {awaitingPlacement.length}
+          {asideTotal > 0 ? `, мимо коробов ${asideTotal} шт.` : ''} — развозка идёт на ТСД
+          (скан коробов → скан места) или вручную в разделе «Короба».
         </div>
       )}
     </PhaseBlock>

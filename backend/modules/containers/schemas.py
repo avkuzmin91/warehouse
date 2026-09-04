@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from config import INV_Q_GOOD
+
 
 class ContainerItem(BaseModel):
     """Короб: тара задачи «Размещение по ячейкам»."""
@@ -33,6 +35,7 @@ class ContainerContentLine(BaseModel):
     color_name: str | None = None
     size_id: str | None = None
     size_name: str | None = None
+    quality: str = INV_Q_GOOD
     qty: int
 
 
@@ -138,8 +141,42 @@ class ContainerPlaceResult(BaseModel):
     boxes: list[ContainerItem] = []
     items: list[ContainerPlacedItem] = []
     placed_qty: int = 0
-    # Номера задач размещения, которые закрылись этим размещением (последний объект).
-    closed_tasks: list[str] = []
+
+
+class ContainerPendingBox(BaseModel):
+    """Закрытый короб у стола: ждёт, когда его увезут в место хранения."""
+
+    id: str
+    doc_number: str
+    client_name: str | None = None
+    items_qty: int = 0
+    closed_at: str | None = None
+
+
+class ContainerPendingAsideItem(BaseModel):
+    """Собранное мимо короба (габарит, брак): короба у него нет, только корзина boxed."""
+
+    product_id: str
+    product_name: str | None = None
+    product_sku: str | None = None
+    color_id: str | None = None
+    color_name: str | None = None
+    size_id: str | None = None
+    size_name: str | None = None
+    client_name: str | None = None
+    quality: str
+    qty: int = 0
+
+
+class ContainerPendingPlacement(BaseModel):
+    """Очередь развозки: что закрыто у стола и ещё не уехало в место хранения."""
+
+    boxes: list[ContainerPendingBox] = []
+    boxes_qty: int = 0
+    aside: list[ContainerPendingAsideItem] = []
+    aside_qty: int = 0
+    # Самый старый объект очереди: по нему видно, что стоит у стола давно.
+    since: str | None = None
 
 
 class ContainerItemRemoveRequest(BaseModel):

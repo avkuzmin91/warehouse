@@ -7,7 +7,6 @@ from config import (
     DISPATCH_STATUS_PREPARING,
     RECEIPT_STATUS_PARTIALLY_RECEIVED,
     SHIPMENT_CARGO_DEFECT,
-    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_RELOCATING,
@@ -17,6 +16,7 @@ from config import (
     TRIP_STATUS_COSTING,
     TRIP_STATUS_UNLOADING,
 )
+from modules.containers.service import pending_placement
 from modules.dispatch.service import list_stuck_partial_dispatches
 from modules.marketplaces.service import list_picking_supplies
 from modules.receipts.service import list_shortage_receipts
@@ -30,6 +30,9 @@ ROLE_WAREHOUSE_HEAD = "warehouse_head"
 # Сборщик FBS-поставок. Роль узкая (только ТСД), но не эксклюзивная: сборку видят
 # и кладовщик с начальником склада — иначе очередь встанет без выделенного человека.
 ROLE_PICKER = "picker"
+
+# Очередь развозки не привязана к документу — у её карточки постоянный ключ.
+PENDING_PLACEMENT_KEY = "pending"
 
 _TRIP_TASKS = {
     TRIP_STATUS_AWAITING_ARRIVAL: (ROLE_WAREHOUSE, "trip_arrival", "Встретить рейс {num}"),
@@ -108,25 +111,19 @@ def list_my_tasks(connection, *, user) -> list[dict]:
         today = today_date.isoformat()
         shipment_rows = connection.execute(
             "SELECT id, doc_number, status, cargo_type, task_kind, ship_date, priority_rank, updated_at, created_at FROM shipment_docs "
-            "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?,?)",
-            (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_RELOCATING,
-             SHIPMENT_STATUS_COLLECTED),
+            "WHERE COALESCE(is_deleted, 0) = 0 AND status IN (?,?,?)",
+            (SHIPMENT_STATUS_PACKING, SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_RELOCATING),
         ).fetchall()
         for r in shipment_rows:
             status = str(r["status"])
             is_defect_cargo = str(r["cargo_type"] or "") == SHIPMENT_CARGO_DEFECT
             is_putaway = str(r.get("task_kind") or "") == SHIPMENT_TASK_PUTAWAY
-            if is_putaway and status in (SHIPMENT_STATUS_ON_PACKING, SHIPMENT_STATUS_COLLECTED):
-                # Сборку коробов и развозку по местам делают и кладовщик, и начальник
-                # смены — карточка одна, роль подставляется под смотрящего, чтобы у тех,
-                # кто видит обе очереди, задача не задваивалась.
+            if is_putaway and status == SHIPMENT_STATUS_ON_PACKING:
+                # Сборку коробов делают и кладовщик, и начальник смены — карточка одна,
+                # роль подставляется под смотрящего, чтобы у тех, кто видит обе очереди,
+                # задача не задваивалась. Развозка — отдельная карточка ниже, общая.
                 task_role = ROLE_WAREHOUSE if ROLE_WAREHOUSE in visible_roles else ROLE_SHIFT
-                if status == SHIPMENT_STATUS_COLLECTED:
-                    kind, title = "shipment_place_boxes", f"Развезти по местам {r['doc_number']}"
-                else:
-                    kind, title = "shipment_putaway", f"Собрать короба {r['doc_number']}"
-            elif status == SHIPMENT_STATUS_COLLECTED:
-                continue  # «Собрано» бывает только у задачи размещения
+                kind, title = "shipment_putaway", f"Собрать короба {r['doc_number']}"
             elif status == SHIPMENT_STATUS_PACKING:
                 ship_date = r["ship_date"]
                 if not ship_date or _prev_working_day(date.fromisoformat(str(ship_date)[:10])) > today_date:
@@ -149,6 +146,29 @@ def list_my_tasks(connection, *, user) -> list[dict]:
                 "doc_number": str(r["doc_number"]), "status": status,
                 "role": task_role, "since": r["updated_at"] or r["created_at"],
                 "priority_rank": int(r["priority_rank"]) if r.get("priority_rank") is not None else None,
+            })
+
+    if ROLE_WAREHOUSE in visible_roles or ROLE_SHIFT in visible_roles:
+        # Развозка по местам — одна общая карточка на склад, а не по задаче: кладовщик
+        # везёт ходку тележки, и одна ходка закрывает объекты сразу нескольких задач.
+        # Ключ карточки постоянный: очередь опустела — отметки «прочитано» снимаются
+        # сами (см. notify_new_tasks), и следующая волна коробов снова станет новой.
+        pending = pending_placement(connection)
+        if pending.boxes or pending.aside_qty > 0:
+            parts = []
+            if pending.boxes:
+                parts.append(f"коробов {len(pending.boxes)}")
+            if pending.aside_qty > 0:
+                parts.append(f"мимо коробов {pending.aside_qty} шт.")
+            tasks.append({
+                "kind": "boxes_place",
+                "title": "Развезти по местам",
+                "doc_type": "containers",
+                "doc_id": PENDING_PLACEMENT_KEY,
+                "doc_number": " · ".join(parts),
+                "status": "pending",
+                "role": ROLE_WAREHOUSE if ROLE_WAREHOUSE in visible_roles else ROLE_SHIFT,
+                "since": pending.since,
             })
 
     if ROLE_WAREHOUSE in visible_roles:

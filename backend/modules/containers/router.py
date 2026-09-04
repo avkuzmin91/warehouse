@@ -22,6 +22,7 @@ from .schemas import (
     ContainerListResponse,
     ContainerLookupResponse,
     ContainerMoveRequest,
+    ContainerPendingPlacement,
     ContainerPlaceRequest,
     ContainerPlaceResult,
 )
@@ -35,6 +36,7 @@ from .service import (
     list_containers,
     lookup_container,
     move_placed_container,
+    pending_placement,
     place_batch,
     remove_item_from_placed,
 )
@@ -111,6 +113,14 @@ def container_holdings_endpoint(
         return containers_holdings(conn, ids)
 
 
+@router.get("/containers/pending-placement", response_model=ContainerPendingPlacement)
+def pending_placement_endpoint(user=Depends(get_current_shipment_viewer)):
+    """Очередь развозки: коробов и товара у стола, что ещё не уехало в места хранения."""
+    _ = user
+    with get_connection() as conn:
+        return pending_placement(conn)
+
+
 @router.post("/containers/place", response_model=ContainerPlaceResult)
 def place_containers_endpoint(
     payload: ContainerPlaceRequest,
@@ -120,8 +130,8 @@ def place_containers_endpoint(
     """Размещение пачки: сканы коробов и товара, затем скан места хранения.
 
     Одна ходка кладовщика = один запрос: закрытые короба встают на место, уже
-    размещённые переезжают, россыпь мимо коробов уезжает туда же. Задача сборки
-    закрывается сама, когда уехал её последний объект.
+    размещённые переезжают, россыпь мимо коробов уезжает туда же. Статусы задач
+    сборки при этом не двигаются — развозка им не принадлежит.
     """
     uid = str(user["id"])
     with get_connection() as conn:

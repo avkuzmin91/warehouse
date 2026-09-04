@@ -26,6 +26,7 @@ import { SupplyPickScreen } from './screens/SupplyPickScreen'
 import { PlaceScreen } from './screens/PlaceScreen'
 import { ScanBoxScreen } from './screens/ScanBoxScreen'
 import { PutawayBoxScreen } from './screens/PutawayBoxScreen'
+import { PutawayAsideScreen } from './screens/PutawayAsideScreen'
 import { ReceiptsListScreen } from './screens/manager/ReceiptsListScreen'
 import { ReceiptFormScreen } from './screens/manager/ReceiptFormScreen'
 import { ReceiptDetailScreen } from './screens/manager/ReceiptDetailScreen'
@@ -103,6 +104,7 @@ function Main() {
     case 'pick':      screen = <PickQueueScreen />; break
     case 'supplyPick': screen = <SupplyPickScreen supplyId={route.id} />; break
     case 'putawayBox': screen = <PutawayBoxScreen shipmentId={route.id} boxId={route.boxId} />; break
+    case 'putawayAside': screen = <PutawayAsideScreen shipmentId={route.id} />; break
     case 'place': screen = <PlaceScreen source={route.source} />; break
     case 'scanBox': screen = <ScanBoxScreen containerId={route.containerId} />; break
   }

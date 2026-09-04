@@ -83,8 +83,7 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
     setBusy(true)
     try {
       const res = await placeContainers({ zone_id: zoneId, box_ids: [box.id] })
-      const closed = res.closed_tasks.length > 0 ? ` Задача закрыта: ${res.closed_tasks.join(', ')}.` : ''
-      toast(`Короб ${box.doc_number} → ${res.zone_name}.${closed}`, 'success')
+      toast(`Короб ${box.doc_number} → ${res.zone_name}`, 'success')
       setZoneId('')
       await load()
     } catch (e) {
@@ -148,10 +147,13 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
                 {contents.map((c) => {
                   const label = [c.product_name, c.color_name, c.size_name].filter(Boolean).join(' · ')
                   return (
-                    <div key={`${c.product_id}-${c.color_id ?? ''}-${c.size_id ?? ''}`}
+                    <div key={`${c.product_id}-${c.color_id ?? ''}-${c.size_id ?? ''}-${c.quality}`}
                       className="row gap-8" style={{ alignItems: 'center' }}>
                       <span className="mono">{c.product_sku ?? '—'}</span>
                       <span className="t-sub">{label}</span>
+                      {c.quality === 'defect' && (
+                        <span style={{ color: 'var(--c-danger)', fontSize: 12 }}>брак</span>
+                      )}
                       <span style={{ flex: 1 }} />
                       <span className="num">{c.qty}</span>
                       {box.status === 'placed' && (

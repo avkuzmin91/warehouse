@@ -24,6 +24,8 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   shipment_defect_prepare: 'forklift',
   dispatch_prepare: 'forklift',
   mp_supply_pick: 'truckOut',
+  shipment_putaway: 'box',
+  boxes_place: 'archive',
 }
 
 const KIND_LABEL: Record<TaskKind, string> = {
@@ -39,6 +41,8 @@ const KIND_LABEL: Record<TaskKind, string> = {
   shipment_defect_prepare: 'Подготовить к отгрузке',
   dispatch_prepare: 'Подготовить отгрузку',
   mp_supply_pick: 'Собрать поставку FBS',
+  shipment_putaway: 'Собрать короба',
+  boxes_place: 'Развезти по местам',
 }
 
 const STATUS_SUB: Record<string, string> = {
@@ -64,6 +68,7 @@ const DOC_TYPE_SUB: Record<TaskItem['doc_type'], string> = {
   shipment: 'Задача упаковки',
   dispatch: 'Отгрузка',
   mp_supply: 'Поставка FBS',
+  containers: 'Короба у стола',
 }
 
 function taskSub(t: TaskItem): string {
@@ -99,7 +104,7 @@ function ageInfo(since: string | null): { label: string; overdue: boolean } {
 
 function isTaskVisibleForRole(task: TaskItem, role: string | undefined): boolean {
   if (role === 'shift_supervisor') {
-    return task.doc_type === 'shipment'
+    return task.doc_type === 'shipment' || task.doc_type === 'containers'
   }
   if (role === 'manager') {
     return task.kind === 'trip_cost' || task.kind === 'receipt_close_short'

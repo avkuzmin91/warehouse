@@ -149,13 +149,11 @@ SHIPMENT_STATUS_PACKED            = "packed"
 # рейс не нужен. Терминальный исход, отдельный от `packed` — иначе попадёт в
 # кандидаты на счёт и в метрику реальных отгрузок.
 SHIPMENT_STATUS_COMPLETED_NO_GOODS = "completed_no_goods"
-# Терминальный исход задачи «Размещение по ячейкам»: весь товар собран в короба и
-# короба разложены по адресным ячейкам. Отдельный статус от `packed`: `packed`
-# означает «упаковано и ждёт отгрузку», а размещённый товар лежит на хранении.
-SHIPMENT_STATUS_PLACED            = "placed"
-# Задача «Размещение по ячейкам», конец сборки: короба закрыты и стоят у стола, товар
-# ждёт перевозки к стеллажам. НЕ терминал — документ уходит в `placed` сам, когда
-# размещён последний его объект (короб или россыпь мимо короба).
+# Терминальный исход задачи «Размещение по ячейкам»: товар собран в короба (и рядом
+# с ними — габарит и брак мимо коробов) и передан на развозку. Развозка по местам —
+# самостоятельная работа кладовщика (`POST /containers/place`), она не принадлежит
+# задаче и потому её статус не двигает: одна ходка тележки закрывает объекты разных
+# задач, а очередь на развозку живёт в коробах, а не в документах.
 SHIPMENT_STATUS_COLLECTED         = "collected"
 SHIPMENT_STATUS_CANCELLED         = "cancelled"
 
@@ -166,7 +164,6 @@ SHIPMENT_STATUSES_ALL: list[str] = [
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_COLLECTED,
-    SHIPMENT_STATUS_PLACED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 ]
@@ -174,7 +171,7 @@ SHIPMENT_STATUSES_ALL: list[str] = [
 # Терминальные статусы отгрузки (документ завершён, дальше не двигается).
 SHIPMENT_TERMINAL_STATUSES: frozenset[str] = frozenset({
     SHIPMENT_STATUS_PACKED,
-    SHIPMENT_STATUS_PLACED,
+    SHIPMENT_STATUS_COLLECTED,
     SHIPMENT_STATUS_COMPLETED_NO_GOODS,
     SHIPMENT_STATUS_CANCELLED,
 })
@@ -186,7 +183,6 @@ SHIPMENT_STATUS_LABELS: dict[str, str] = {
     SHIPMENT_STATUS_RELOCATING:        "Перемещение",
     SHIPMENT_STATUS_PACKED:            "Упакован",
     SHIPMENT_STATUS_COLLECTED:         "Собрано",
-    SHIPMENT_STATUS_PLACED:            "Размещено",
     SHIPMENT_STATUS_COMPLETED_NO_GOODS: "Завершён",
     SHIPMENT_STATUS_CANCELLED:         "Аннулирован",
 }
@@ -285,8 +281,9 @@ SHIPMENT_TASK_KIND_LABELS: dict[str, str] = {
 }
 
 # on_packing → collected делает отдельный эндпоинт finish_collecting (гейт: открытых
-# коробов с товаром не осталось). Дальше документ закрывается сам: collected → placed,
-# когда размещён последний короб/россыпь задачи (см. maybe_close_putaway_doc).
+# коробов с товаром не осталось) — и это конец задачи: `collected` терминален.
+# Развезённое по местам дальше видно в карточке справочно (placed_qty по журналу),
+# но статус документа развозка не трогает.
 SHIPMENT_TRANSITIONS_PUTAWAY: dict[str, str] = {
     SHIPMENT_STATUS_DRAFT:   SHIPMENT_STATUS_PACKING,
     SHIPMENT_STATUS_PACKING: SHIPMENT_STATUS_ON_PACKING,

@@ -34,8 +34,6 @@ import { Drawer } from '../../../feedback/Drawer'
 import { balanceKey } from '../../../../utils/balanceKey'
 import { canEditShipmentFiles, canEditShipmentPlanning, canEditShipmentPriority, canEditShipments, canPackShipments } from '../../../../utils/access'
 import { useCurrentUser } from '../../../../hooks/useCurrentUser'
-import { getLocations } from '../../../../api/locationsApi'
-import type { LocationItem } from '../../../../api/locationsApi'
 import { useLookups } from '../../../../hooks/useLookups'
 import { BalancePicker } from '../../inventory/shared/BalancePicker'
 import { AssignSkuDrawer } from '../../inventory/shared/AssignSkuDrawer'
@@ -76,7 +74,6 @@ export function ShipmentDetailFeature() {
   const toast = useToast()
   const { user } = useCurrentUser()
   const { unloadingZones } = useLookups()
-  const [locations, setLocations] = useState<LocationItem[]>([])
   const canEdit = canEditShipments(user)
   const canEditPlanning = canEditShipmentPlanning(user)
   const canEditPriority = canEditShipmentPriority(user)
@@ -193,11 +190,10 @@ export function ShipmentDetailFeature() {
   const isRelocating = status === 'relocating'
   const isPacked = status === 'packed'
   const isCollected = status === 'collected'
-  const isPlaced = status === 'placed'
   const isCompletedNoGoods = status === 'completed_no_goods'
   // Задача размещения по ячейкам: вместо «Перемещения» к рейсу товар собирается в
-  // короба («Сборка завершена» → collected) и развозится по местам отдельным процессом
-  // на ТСД; в «Размещено» задача уходит сама, когда уедет последний короб.
+  // короба и на этом задача заканчивается («Сборка завершена» → collected). Развозку по
+  // местам ведёт отдельный процесс коробов — статус документа он не двигает.
   const isPutaway = doc?.task_kind === 'putaway'
   // Состав и план менеджер правит до передачи на упаковку (черновик, «В плане»).
   const editableComposition = isDraft || isPacking
@@ -208,7 +204,7 @@ export function ShipmentDetailFeature() {
   // Изменения журналируются, команда упаковки получает пуш.
   const canCorrectOnPacking = canEditPlanning && isOnPacking
   const canEditActualShipDate = false  // дата упаковки (факт) проставляется при передаче кладовщику на размещение (вход в «Перемещение»)
-  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isPlaced && !isCompletedNoGoods
+  const canAttachFiles = canEditShipmentFiles(user) && status !== 'cancelled' && !isPacked && !isCollected && !isCompletedNoGoods
   const canMovePacking = canEdit && (isPacking || isOnPacking)
   // Возврат на хранение — откат передачи, поэтому право то же, что у передачи (Кладовщик/Менеджер).
   // У начальника смены (canPack без canEdit) кнопки возврата нет.
@@ -505,20 +501,6 @@ export function ShipmentDetailFeature() {
   const advanceBlockReasons = showReadiness
     ? advanceChecks.filter((check) => !check.ok).map((check) => check.error)
     : []
-  useEffect(() => {
-    if (!isPutaway) return
-    let live = true
-    getLocations({ limit: 500 })
-      .then((r) => { if (live) setLocations(r.items.filter((i) => i.is_active)) })
-      // Справочник мест доступен не всем ролям склада — тогда остаётся общий список зон.
-      .catch(() => { if (live) setLocations([]) })
-    return () => { live = false }
-  }, [isPutaway])
-
-  // Ручная развозка в вебе (когда ТСД недоступен): любое активное место справочника.
-  const putawayZoneOptions = locations.length > 0
-    ? locations.map((l) => ({ id: l.id, name: l.code }))
-    : unloadingZones
 
   async function refreshAfterLineChange() {
     await load()
@@ -1059,11 +1041,9 @@ export function ShipmentDetailFeature() {
           doc={doc}
           isPacking={isPacking}
           isCollected={isCollected}
-          isPlaced={isPlaced}
           info={infoProps}
           composition={compositionProps}
           packing={packingProps}
-          zoneOptions={putawayZoneOptions}
           canManage={canEdit || canPack}
           checklist={checklistItems}
           onDone={refreshAfterLineChange}

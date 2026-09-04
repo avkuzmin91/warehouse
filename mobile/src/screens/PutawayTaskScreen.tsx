@@ -2,11 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
 import {
-  addPutawayAsideItem,
   finishCollecting,
   getShipment,
   takeShipmentBox,
-  undoPutawayAsideItem,
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
   type ShipmentDetail,
@@ -25,12 +23,68 @@ const BOX_TONE: Record<ShipmentBox['status'], string> = {
   placed: 'success',
 }
 
+// Прогресс сборки: годный (зелёный) + брак (красный) к плану.
+// Остаток берём из пула на столе (available_for_pack), а не из «план − собрано»:
+// часть плана может быть недоступна к сборке.
+function CollectMeter({ good, defect, plan, left }: { good: number; defect: number; plan: number; left: number }) {
+  const gw = plan > 0 ? Math.min(100, (good / plan) * 100) : 0
+  const dw = plan > 0 ? Math.min(100 - gw, (defect / plan) * 100) : 0
+  return (
+    <div className="pmeter">
+      <div className="pmeter-track">
+        {good > 0 && <span className="seg-good" style={{ width: `${gw}%` }} />}
+        {defect > 0 && <span className="seg-defect" style={{ width: `${dw}%` }} />}
+      </div>
+      <div className="pmeter-row">
+        <div className="pmeter-counts">
+          <b className="good">{good}</b> годн <span className="faint">·</span>{' '}
+          <b className={defect > 0 ? 'defect' : 'faint'}>{defect}</b> брак{' '}
+          <span className="faint">· план {plan}</span>
+        </div>
+        {left === 0 ? (
+          <span className="badge success"><Icon name="check" size={12} /> Собрано</span>
+        ) : (
+          <span className="badge warning">на столе {left}</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Прогресс развозки: сколько собранного уже уехало в места хранения.
+function PlaceMeter({ placed, waiting }: { placed: number; waiting: number }) {
+  const total = placed + waiting
+  const done = waiting === 0
+  return (
+    <div className="pack-meter">
+      <div className="pack-meter-top">
+        <div className="pack-meter-count">
+          <b>{placed}</b>
+          <span className="pack-meter-of"> / {total} шт размещено</span>
+        </div>
+        {done ? (
+          <span className="badge success"><Icon name="check" size={12} /> Размещено</span>
+        ) : (
+          <span className="badge info">ждёт {waiting}</span>
+        )}
+      </div>
+      <div className="pack-bar">
+        <div
+          className={`pack-bar-fill${done ? ' done' : ''}`}
+          style={{ width: `${total > 0 ? Math.min(100, Math.round((placed / total) * 100)) : 0}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
 /** Задача «Упаковка с ТСД», фаза сборки: товар пикается в короба у стола.
  *
  * Кладовщик или начальник смены берёт короб сканом этикетки и пикает в него товар
  * поштучно — каждый скан и есть запись упаковки (объём, дата, заработок). Короб —
  * просто тара: в него ложится и годный, и брак. Что в короб не идёт (габарит,
- * особые причины) — пикается «мимо короба».
+ * особые причины) — уходит в «Без короба»: та же тара, только виртуальная, со своим
+ * экраном (PutawayAsideScreen), чтобы способ положить товар был ровно один.
  *
  * Ячейку здесь никто не сканирует: закрытые короба и собранное мимо коробов
  * развозит по местам отдельный процесс на ТСД у стеллажа («Перенос»). Кнопка
@@ -38,15 +92,12 @@ const BOX_TONE: Record<ShipmentBox['status'], string> = {
  * когда уедет её последний объект.
  */
 export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
-  const { back, openPutawayBox, openPlace } = useNav()
+  const { back, openPutawayBox, openPutawayAside, openPlace } = useNav()
   const [doc, setDoc] = useState<ShipmentDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmFinish, setConfirmFinish] = useState(false)
-  const [notice, setNotice] = useState('')
-  // Качество скана мимо короба: липкий переключатель, брак пикают сериями.
-  const [asideQuality, setAsideQuality] = useState<'good' | 'defect'>('good')
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -76,16 +127,19 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
   const planTotal = lines.reduce((s, l) => s + l.qty, 0)
   const poolTotal = lines.reduce((s, l) => s + l.available_for_pack, 0)
   const packedTotal = lines.reduce((s, l) => s + l.packed_good, 0)
+  const packedDefectTotal = lines.reduce((s, l) => s + l.packed_defect, 0)
   const boxedTotal = lines.reduce((s, l) => s + l.boxed_qty, 0)
   const placedTotal = lines.reduce((s, l) => s + l.placed_qty, 0)
   const asideTotal = lines.reduce((s, l) => s + l.aside_qty, 0)
-  const defectTotal = lines.reduce((s, l) => s + l.boxed_defect_qty, 0)
+  const asideDefectTotal = lines.reduce((s, l) => s + l.aside_defect_qty, 0)
   // Сборку держит только набранный, но не закрытый короб: пустой освобождается сам.
   const unclosedBoxes = boxes.filter((b) => b.status === 'open' && b.items_qty > 0)
   const waitingBoxes = boxes.filter((b) => b.status === 'closed')
-  const asideLines = lines.filter((l) => l.aside_qty > 0)
   const onPacking = doc?.status === 'on_packing'
   const collected = doc?.status === 'collected'
+  // Виртуальная тара «Без короба»: на сборке она нужна всегда (иначе непонятно, куда
+  // девать габарит), после — только пока в ней что-то ждёт развозки.
+  const showAside = onPacking || asideTotal > 0
 
   async function onTakeBox() {
     if (busy) return
@@ -100,47 +154,6 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
     } catch (err) {
       scanNotFoundFeedback()
       setError(err instanceof Error ? err.message : 'Короб не принят')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onScanAside() {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      const code = await scanSource.scan()
-      if (!code) return
-      const res = await addPutawayAsideItem(
-        shipmentId, { barcode: code, qty: 1, quality: asideQuality }, newRequestId(),
-      )
-      scanSuccessFeedback()
-      setNotice(
-        `${asideQuality === 'defect' ? 'Брак' : 'Мимо короба'}: `
-        + `${variantTitle(res.product_name ?? '—', [res.color_name, res.size_name])} +${res.qty} шт. — `
-        + 'уедет на место отдельно',
-      )
-      await refresh()
-    } catch (err) {
-      scanNotFoundFeedback()
-      setError(err instanceof Error ? err.message : 'Товар не принят')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function onUndoAside(lineId: string) {
-    if (busy) return
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      await undoPutawayAsideItem(shipmentId, lineId, 1, newRequestId())
-      await refresh()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось отменить')
     } finally {
       setBusy(false)
     }
@@ -174,41 +187,16 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
         ) : (
           <>
             <div className="summary">
-              <div className="kv">
-                <span className="k">Собрано сканом</span>
-                <span className="v">{packedTotal} из {planTotal}</span>
-              </div>
-              <div className="kv">
-                <span className="k">Ждёт размещения</span>
-                <span className="v">{boxedTotal}</span>
-              </div>
-              <div className="kv">
-                <span className="k">Размещено по местам</span>
-                <span className="v">{placedTotal}</span>
-              </div>
-              <div className="kv">
-                <span className="k">Осталось на столе</span>
-                <span className="v">{poolTotal}</span>
-              </div>
-              {asideTotal > 0 && (
-                <div className="kv">
-                  <span className="k">Мимо коробов</span>
-                  <span className="v">{asideTotal}</span>
-                </div>
-              )}
-              {defectTotal > 0 && (
-                <div className="kv">
-                  <span className="k">Брак</span>
-                  <span className="v">{defectTotal}</span>
-                </div>
-              )}
+              <CollectMeter good={packedTotal} defect={packedDefectTotal} plan={planTotal} left={poolTotal} />
+              {boxedTotal + placedTotal > 0 && <PlaceMeter placed={placedTotal} waiting={boxedTotal} />}
             </div>
 
             {collected && (
               <>
                 <div className="alert ok">
                   <Icon name="check" size={15} />
-                  Сборка завершена. Осталось развезти по местам: коробов {waitingBoxes.length}
+                  Сборка завершена, задача закрыта. В очереди на развозку: коробов{' '}
+                  {waitingBoxes.length}
                   {asideTotal > 0 ? `, мимо коробов ${asideTotal} шт.` : ''}
                 </div>
                 <button className="btn" style={{ width: '100%' }} onClick={() => openPlace()}>
@@ -218,8 +206,8 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
             )}
 
             <div className="sec">
-              Короба
-              <span className="sec-count">{boxes.length}</span>
+              Тара
+              <span className="sec-count">{boxes.length + (showAside ? 1 : 0)}</span>
             </div>
             {onPacking && (
               <button className="btn" style={{ width: '100%' }} disabled={busy} onClick={() => { void onTakeBox() }}>
@@ -243,7 +231,10 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
                   onClick={() => openPutawayBox(shipmentId, b.id)}
                 >
                   <div className="tile-body">
-                    <div className="tile-title">{b.doc_number}</div>
+                    <div className="tile-title">
+                      {b.doc_number}
+                      {b.quality === 'defect' && <span className="badge danger" style={{ marginLeft: 6 }}>Брак</span>}
+                    </div>
                     <div className="tile-meta">
                       {b.items_qty} шт.{b.zone_name ? ` · ${b.zone_name}` : ''}
                     </div>
@@ -253,64 +244,28 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
               ))
             )}
 
-            <div className="sec">
-              Мимо коробов
-              {asideLines.length > 0 && <span className="sec-count">{asideLines.length}</span>}
-            </div>
-            {onPacking && (
+            {showAside && (
               <>
-                <div className="line-row" style={{ marginTop: 0 }}>
-                  <button
-                    className={asideQuality === 'good' ? 'btn' : 'btn ghost'}
-                    style={{ flex: 1 }}
-                    disabled={busy}
-                    onClick={() => setAsideQuality('good')}
-                  >
-                    Годный
-                  </button>
-                  <button
-                    className={asideQuality === 'defect' ? 'btn danger' : 'btn ghost'}
-                    style={{ flex: 1 }}
-                    disabled={busy}
-                    onClick={() => setAsideQuality('defect')}
-                  >
-                    Брак
-                  </button>
-                </div>
-                <button className="btn ghost" style={{ width: '100%' }} disabled={busy} onClick={() => { void onScanAside() }}>
-                  <Icon name="qr" size={18} /> В короб не идёт — скан товара
+                <button
+                  className="tile"
+                  style={{ borderStyle: 'dashed', boxShadow: 'none' }}
+                  onClick={() => openPutawayAside(shipmentId)}
+                >
+                  <span className="tile-ico gray"><Icon name="layers" size={20} /></span>
+                  <div className="tile-body">
+                    <div className="tile-title">Без короба</div>
+                    <div className="tile-meta">
+                      {asideTotal} шт.{asideDefectTotal > 0 ? ` · брак ${asideDefectTotal}` : ''}
+                    </div>
+                  </div>
+                  <Icon name="chev" size={18} />
                 </button>
-                <div className="line-sub" style={{ textAlign: 'center' }}>
+                <div className="line-sub" style={{ textAlign: 'center', marginBottom: 10 }}>
                   Габарит не влез или короб не подходит — пикайте сюда. Место такому товару
                   назначит кладовщик у стеллажа, вместе с коробами.
                 </div>
-                {notice && (
-                  <div className="line-sub" style={{ textAlign: 'center', color: 'var(--c-success)' }}>{notice}</div>
-                )}
               </>
             )}
-            {asideLines.map((l) => (
-              <div key={`aside-${l.id}`} className="line">
-                <div className="line-name">{variantTitle(l.product_name, [l.color_name, l.size_name])}</div>
-                <div className="line-sub mono">{l.product_sku}</div>
-                <div className="line-sub">
-                  Ждёт размещения <b>{l.aside_qty}</b> шт.
-                  {l.aside_defect_qty > 0 && (
-                    <> · из них брак <b style={{ color: 'var(--c-danger)' }}>{l.aside_defect_qty}</b></>
-                  )}
-                </div>
-                {onPacking && (
-                  <button
-                    className="btn ghost sm"
-                    style={{ width: '100%', marginTop: 4 }}
-                    disabled={busy}
-                    onClick={() => { void onUndoAside(l.id) }}
-                  >
-                    <Icon name="refresh" size={14} /> Отменить 1 шт.
-                  </button>
-                )}
-              </div>
-            ))}
 
             <div className="sec">
               Состав задания
@@ -320,15 +275,18 @@ export function PutawayTaskScreen({ shipmentId }: { shipmentId: string }) {
               <div key={l.id} className="line">
                 <div className="line-name">{variantTitle(l.product_name, [l.color_name, l.size_name])}</div>
                 <div className="line-sub mono">{l.product_sku}</div>
-                <div className="line-sub">
-                  План {l.qty} · упаковано <b style={{ color: 'var(--c-success)' }}>{l.packed_good}</b>
-                  {l.packed_defect > 0 && <> · брак <b style={{ color: 'var(--c-danger)' }}>{l.packed_defect}</b></>}
-                </div>
-                <div className="line-sub">
-                  Ждёт размещения {l.boxed_qty} · размещено {l.placed_qty}
-                  {l.aside_qty > 0 && ` (из них мимо коробов ${l.aside_qty})`}
-                  {' '}· на столе {l.available_for_pack}
-                </div>
+                <CollectMeter
+                  good={l.packed_good}
+                  defect={l.packed_defect}
+                  plan={l.qty}
+                  left={l.available_for_pack}
+                />
+                {l.boxed_qty + l.placed_qty > 0 && (
+                  <PlaceMeter placed={l.placed_qty} waiting={l.boxed_qty} />
+                )}
+                {l.aside_qty > 0 && (
+                  <div className="line-sub">Из них мимо коробов {l.aside_qty} шт.</div>
+                )}
               </div>
             ))}
 

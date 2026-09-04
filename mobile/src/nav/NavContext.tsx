@@ -22,6 +22,7 @@ export type Route =
   | { name: 'packDoc'; id: string; focus?: PackFocus }
   | { name: 'putawayDoc'; id: string }
   | { name: 'putawayBox'; id: string; boxId: string }
+  | { name: 'putawayAside'; id: string }
   | { name: 'place'; source?: { id: string; code: string } }
   | { name: 'scanBox'; containerId: string }
   | { name: 'mTrips' }
@@ -74,7 +75,10 @@ type NavState = {
   openPackDoc: (id: string, focus?: PackFocus) => void
   openPutawayDoc: (id: string) => void
   openSupplyPick: (id: string) => void
-  openPutawayBox: (id: string, boxId: string) => void
+  // replace — короб за коробом на сборке: экран сменяется, стек не растёт, «Назад»
+  // возвращает к задаче, а не к предыдущему закрытому коробу.
+  openPutawayBox: (id: string, boxId: string, replace?: boolean) => void
+  openPutawayAside: (id: string) => void
   openPlace: (source?: { id: string; code: string }) => void
   openScanBox: (containerId: string) => void
   openScan: () => void
@@ -141,7 +145,10 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openPackDoc: (id, focus) => setStack((s) => [...s, { name: 'packDoc', id, focus }]),
     openPutawayDoc: (id) => setStack((s) => [...s, { name: 'putawayDoc', id }]),
     openSupplyPick: (id) => setStack((s) => [...s, { name: 'supplyPick', id }]),
-    openPutawayBox: (id, boxId) => setStack((s) => [...s, { name: 'putawayBox', id, boxId }]),
+    openPutawayBox: (id, boxId, replace) => setStack((s) => (
+      [...(replace && s.length > 1 ? s.slice(0, -1) : s), { name: 'putawayBox', id, boxId }]
+    )),
+    openPutawayAside: (id) => setStack((s) => [...s, { name: 'putawayAside', id }]),
     openPlace: (source) => setStack((s) => [...s, { name: 'place', source }]),
     openScanBox: (containerId) => setStack((s) => [...s, { name: 'scanBox', containerId }]),
     openScan: () => setStack((s) => [...s, { name: 'scan' }]),

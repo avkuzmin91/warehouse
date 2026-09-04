@@ -17,8 +17,7 @@ export const SH_META: Record<ShipmentStatus, { role: ProcessRole | null; icon: I
   on_packing:    { role: 'shift_lead', icon: 'box',      sub: 'внесение годного и брака' },
   relocating:    { role: 'warehouse',  icon: 'archive',  sub: 'раскладка по местоположениям' },
   packed:        { role: null,         icon: 'check',    sub: 'товар упакован и разложен' },
-  collected:     { role: 'warehouse',  icon: 'archive',  sub: 'развозка коробов по местам' },
-  placed:        { role: null,         icon: 'check',    sub: 'товар размещён по местам' },
+  collected:     { role: null,         icon: 'check',    sub: 'товар собран в короба' },
   completed_no_goods: { role: null,    icon: 'check',    sub: 'завершено без отгрузки: весь товар брак' },
   cancelled:     { role: null,         icon: 'x',        sub: '' },
 }
@@ -33,11 +32,10 @@ function getStepTimestamps(ops: ShipmentOp[]): Partial<Record<ShipmentStatus, st
   const ts: Partial<Record<ShipmentStatus, string>> = {}
   for (const op of [...ops].reverse()) {
     if (op.op_type === 'doc_create' && !ts.draft) ts.draft = op.created_at
-    // Раскладка/подготовка («relocate») переводит документ в «Упаковано» (а в задаче
-    // размещения — закрывает её в «Размещено»), но это не 'advance'-операция — фиксируем
-    // отметку отдельно. Конец сборки коробов («collected») тоже вне advance.
+    // Раскладка/подготовка («relocate») переводит документ в «Упаковано», но это не
+    // 'advance'-операция — фиксируем отметку отдельно. Конец сборки коробов
+    // («collected»), он же конец задачи размещения, тоже вне advance.
     if (op.op_type === 'relocate' && !ts.packed) ts.packed = op.created_at
-    if (op.op_type === 'relocate' && !ts.placed) ts.placed = op.created_at
     if (op.op_type === 'collected' && !ts.collected) ts.collected = op.created_at
     if (op.op_type !== 'advance') continue
     const comment = op.comment ?? ''
@@ -62,8 +60,7 @@ const SH_META_PUTAWAY: Partial<Record<ShipmentStatus, { role: ProcessRole | null
   draft:      { role: 'manager',    icon: 'edit',     sub: 'состав и план размещения' },
   packing:    { role: 'warehouse',  icon: 'forklift', sub: 'передача товара на стол' },
   on_packing: { role: 'shift_lead', icon: 'box',      sub: 'сборка коробов на столе', doneTitle: 'Собрано' },
-  collected:  { role: 'warehouse',  icon: 'archive',  sub: 'развозка коробов по местам', doneTitle: 'Развезено' },
-  placed:     { role: null,         icon: 'check',    sub: 'товар размещён по местам' },
+  collected:  { role: null,         icon: 'check',    sub: 'собрано; развозку ведёт очередь коробов' },
 }
 
 // Брак-отгрузка минует упаковку: укороченный маршрут со своими подсказками.

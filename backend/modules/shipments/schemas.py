@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from config import INV_Q_GOOD
+
 
 class ShipmentLineIn(BaseModel):
     product_id:        str
@@ -406,6 +408,7 @@ class ShipmentBoxContentLine(BaseModel):
     product_sku:  str | None = None
     color_name:   str | None = None
     size_name:    str | None = None
+    quality:      str = INV_Q_GOOD
     qty:          int
 
 
@@ -418,6 +421,8 @@ class ShipmentBoxItem(BaseModel):
     zone_id:    str | None = None
     zone_name:  str | None = None
     items_qty:  int = 0
+    # Чем набран короб: good | defect (пустой — None). Смешивать нельзя.
+    quality:    str | None = None
     contents:   list[ShipmentBoxContentLine] = []
     created_at: str
     closed_at:  str | None = None
@@ -461,10 +466,15 @@ class ShipmentPutawayAsidePayload(BaseModel):
 
 
 class ShipmentPutawayUndoPayload(BaseModel):
-    """Отмена поштучной операции ТСД: строка задания и количество."""
+    """Отмена поштучной операции ТСД: строка задания и количество.
+
+    Собранное мимо коробов разнородно (годный и брак лежат рядом), поэтому отмена
+    адресуется качеством: без него LIFO сторнировал бы последний скан любого качества.
+    """
 
     line_id: str = Field(min_length=1)
     qty:     int = Field(ge=1, default=1)
+    quality: str | None = None
 
 
 class ShipmentPutawayItemResult(BaseModel):

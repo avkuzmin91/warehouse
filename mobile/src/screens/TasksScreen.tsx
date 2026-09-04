@@ -23,7 +23,7 @@ function taskVisual(kind: string, direction?: string | null): { icon: IconName; 
   if (kind === 'shipment_move_in') return { icon: 'box', tone: 'amber' }
   if (kind === 'shipment_relocate') return { icon: 'layers', tone: 'blue' }
   if (kind === 'shipment_putaway') return { icon: 'box', tone: 'blue' }
-  if (kind === 'shipment_place_boxes') return { icon: 'layers', tone: 'blue' }
+  if (kind === 'boxes_place') return { icon: 'layers', tone: 'blue' }
   if (kind === 'shipment_defect_prepare') return { icon: 'box', tone: 'gray' }
   if (kind.startsWith('shipment')) return { icon: 'box', tone: 'gray' }
   if (kind.startsWith('dispatch')) return { icon: 'forklift', tone: 'green' }
@@ -146,7 +146,7 @@ export function TasksScreen() {
             {items.map((t) => {
               // Задачи по поступлениям (закрыть недопоставку) выполняются на менеджерской
               // деталке поступления — остальным ролям она открывается в режиме просмотра.
-              const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment' || t.doc_type === 'dispatch' || t.doc_type === 'receipt' || t.doc_type === 'mp_supply'
+              const actionable = t.doc_type === 'trip' || t.doc_type === 'shipment' || t.doc_type === 'dispatch' || t.doc_type === 'receipt' || t.doc_type === 'mp_supply' || t.doc_type === 'containers'
               const { icon, tone } = taskVisual(t.kind, t.direction)
               const urgent = t.priority_rank != null && t.priority_rank > 0
               const read = isRead(t)
@@ -166,10 +166,10 @@ export function TasksScreen() {
                 else if (t.doc_type === 'mp_supply') openSupplyPick(t.doc_id)
                 // «Упаковать» — внесение годного/брака: экран упаковки, не деталка кладовщика.
                 else if (t.kind === 'shipment_pack') openPackDoc(t.doc_id)
-                // «Собрать короба» — сборка на столе; «Развезти по местам» — развозка,
-                // она идёт сканом коробов и мест, без привязки к одной задаче.
+                // «Собрать короба» — сборка на столе; «Развезти по местам» — общая
+                // очередь коробов: скан коробов и места, без привязки к задаче.
                 else if (t.kind === 'shipment_putaway') openPutawayDoc(t.doc_id)
-                else if (t.kind === 'shipment_place_boxes') openPlace()
+                else if (t.kind === 'boxes_place') openPlace()
                 else if (t.doc_type === 'shipment') openShipment(t.doc_id)
                 else if (t.doc_type === 'dispatch') openDispatchPrepare(t.doc_id)
                 else if (t.doc_type === 'receipt') openReceiptDoc(t.doc_id)

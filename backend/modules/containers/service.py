@@ -34,6 +34,9 @@ from .schemas import (
     ContainerListResponse,
     ContainerLookupResponse,
     ContainerOpItem,
+    ContainerPendingAsideItem,
+    ContainerPendingBox,
+    ContainerPendingPlacement,
     ContainerPlacedItem,
     ContainerPlaceItemScan,
     ContainerPlaceResult,
@@ -181,21 +184,37 @@ def container_stock_rows(connection, container_id: str) -> list[dict]:
 
 
 def container_contents(connection, container_id: str) -> list[ContainerContentLine]:
-    """Содержимое короба, свёрнутое по позициям (для карточки и ТСД)."""
+    """Содержимое короба, свёрнутое по позициям и качеству (для карточки и ТСД).
+
+    Качество в ключе: короб набирается либо годным, либо браком, и на ТСД по нему
+    различаются подписи операций. Смешанный короб возможен только в данных, собранных
+    до этого правила, — тогда позиция покажется двумя строками.
+    """
     agg: dict[tuple, ContainerContentLine] = {}
     for r in container_stock_rows(connection, container_id):
-        key = (r["shipment_line_id"], r["product_id"], r["color_id"], r["size_id"])
+        key = (r["shipment_line_id"], r["product_id"], r["color_id"], r["size_id"], r["quality"])
         line = agg.get(key)
         if line is None:
             agg[key] = ContainerContentLine(
                 line_id=r["shipment_line_id"],
                 product_id=r["product_id"], product_name=r["product_name"], product_sku=r["product_sku"],
                 color_id=r["color_id"], color_name=r["color_name"],
-                size_id=r["size_id"], size_name=r["size_name"], qty=r["net"],
+                size_id=r["size_id"], size_name=r["size_name"],
+                quality=r["quality"], qty=r["net"],
             )
         else:
             line.qty += r["net"]
     return list(agg.values())
+
+
+def container_quality(connection, container_id: str) -> str | None:
+    """Чем набран короб: `good`, `defect`, `mixed` (легаси) или None у пустого."""
+    qualities = {r["quality"] for r in container_stock_rows(connection, container_id) if r["net"] > 0}
+    if not qualities:
+        return None
+    if len(qualities) > 1:
+        return "mixed"
+    return next(iter(qualities))
 
 
 def containers_items_qty(connection, container_ids: list[str]) -> dict[str, int]:
@@ -671,12 +690,13 @@ def _move_from_storage(
 def _place_aside_item(
     connection, *, variant: dict, qty: int, quality: str | None, from_zone_id: str | None,
     zone: tuple[str, str], user_id: str,
-) -> tuple[dict, set[str]]:
+) -> tuple[dict, dict[str, int]]:
     """Скан товара: собранное едет на место, лежащее на полке — переносится.
 
     Что именно взято, решает не режим экрана, а сам товар: сначала смотрим, не ждёт
     ли он размещения (корзина boxed), иначе берём свободный остаток на хранении.
-    Пустой набор задач во втором случае — перенос ничью задачу не закрывает.
+    Второе значение — сколько штук ушло по каждой строке задачи размещения: перенос
+    с полки не относится ни к какой задаче и отдаёт пустой словарь.
     """
     from modules.balances.service import insert_inventory_move
 
@@ -714,7 +734,7 @@ def _place_aside_item(
             raise HTTPException(
                 status_code=400, detail=f"Доступно только {available} шт. этого товара",
             )
-        return _move_from_storage(connection, sources=storage, qty=n, zone=zone, user_id=user_id), set()
+        return _move_from_storage(connection, sources=storage, qty=n, zone=zone, user_id=user_id), {}
 
     available = sum(r["net"] for r in sources)
     if available < n:
@@ -724,7 +744,7 @@ def _place_aside_item(
         )
 
     to_zone_id, to_zone_name = zone
-    lines: set[str] = set()
+    lines: dict[str, int] = {}
     remaining = n
     placed_quality = q or (sources[0]["quality"] if sources else INV_Q_GOOD)
     label = None
@@ -746,7 +766,8 @@ def _place_aside_item(
             comment=f"Размещение мимо короба: {take} шт → {to_zone_name}",
         )
         if src["shipment_line_id"]:
-            lines.add(str(src["shipment_line_id"]))
+            key = str(src["shipment_line_id"])
+            lines[key] = lines.get(key, 0) + take
         label = label or src
         remaining -= take
 
@@ -777,6 +798,94 @@ def _scan_variant(connection, scan) -> dict:
     }
 
 
+def _log_aside_placement(
+    connection, by_line: dict[str, int], *, zone: tuple[str, str], user_id: str,
+) -> None:
+    """След в журнале задачи о собранном мимо короба: у него нет короба со своей историей."""
+    from modules.shipments.service import log_placement_op
+
+    if not by_line:
+        return
+    rows = connection.execute(
+        "SELECT id, doc_id FROM shipment_lines WHERE id = ANY(?)", (list(by_line),)
+    ).fetchall()
+    by_doc: dict[str, int] = {}
+    for r in rows:
+        doc_id = str(r["doc_id"])
+        by_doc[doc_id] = by_doc.get(doc_id, 0) + by_line.get(str(r["id"]), 0)
+    for doc_id, qty in sorted(by_doc.items()):
+        log_placement_op(
+            connection, doc_id, user_id=user_id,
+            comment=f"Размещено мимо короба: {qty} шт. → {zone[1]}",
+        )
+
+
+def pending_placement(connection) -> ContainerPendingPlacement:
+    """Что стоит у стола и ждёт развозки: закрытые короба + собранное мимо коробов.
+
+    Очередь развозки живёт здесь, а не в задачах: кладовщик везёт ходку тележки, а не
+    документ. `since` — самый старый объект в очереди: по нему видно, что забыли.
+    """
+    box_rows = connection.execute(
+        "SELECT id, doc_number, client_name, closed_at, created_at FROM containers "
+        "WHERE COALESCE(is_deleted, 0) = 0 AND status = ? ORDER BY doc_number",
+        (CONTAINER_STATUS_CLOSED,),
+    ).fetchall()
+    box_ids = [str(r["id"]) for r in box_rows]
+    qty_by_box = containers_items_qty(connection, box_ids) if box_ids else {}
+
+    aside_rows = connection.execute(
+        """
+        WITH moves AS (
+            SELECT product_id, color_id, size_id, product_name, product_sku,
+                   color_name, size_name, client_name,
+                   to_quality AS quality, qty AS net, created_at
+            FROM zone_relocations WHERE to_op = ? AND to_container_id IS NULL
+            UNION ALL
+            SELECT product_id, color_id, size_id, product_name, product_sku,
+                   color_name, size_name, client_name,
+                   from_quality, -qty, created_at
+            FROM zone_relocations WHERE from_op = ? AND from_container_id IS NULL
+        )
+        SELECT product_id, color_id, size_id, quality,
+               MIN(product_name) AS product_name, MIN(product_sku) AS product_sku,
+               MIN(color_name) AS color_name, MIN(size_name) AS size_name,
+               MIN(client_name) AS client_name, MIN(created_at) AS since,
+               SUM(net) AS net
+        FROM moves
+        GROUP BY product_id, color_id, size_id, quality
+        HAVING SUM(net) > 0
+        ORDER BY MIN(product_name)
+        """,
+        (INV_OP_BOXED, INV_OP_BOXED),
+    ).fetchall()
+    aside = [
+        ContainerPendingAsideItem(
+            product_id=str(r["product_id"]), product_name=r["product_name"], product_sku=r["product_sku"],
+            color_id=r["color_id"], color_name=r["color_name"],
+            size_id=r["size_id"], size_name=r["size_name"],
+            client_name=r["client_name"], quality=str(r["quality"]), qty=int(r["net"] or 0),
+        )
+        for r in aside_rows
+    ]
+
+    stamps = [str(r["closed_at"] or r["created_at"]) for r in box_rows if (r["closed_at"] or r["created_at"])]
+    stamps += [str(r["since"]) for r in aside_rows if r["since"]]
+    return ContainerPendingPlacement(
+        boxes=[
+            ContainerPendingBox(
+                id=str(r["id"]), doc_number=str(r["doc_number"]), client_name=r["client_name"],
+                items_qty=qty_by_box.get(str(r["id"]), 0), closed_at=r["closed_at"],
+            )
+            for r in box_rows
+        ],
+        boxes_qty=sum(qty_by_box.values()),
+        aside=aside,
+        aside_qty=sum(i.qty for i in aside),
+        since=min(stamps) if stamps else None,
+    )
+
+
 def place_batch(
     connection, *, zone_id: str, box_ids: list[str], items: list[ContainerPlaceItemScan], user_id: str,
 ) -> ContainerPlaceResult:
@@ -784,11 +893,9 @@ def place_batch(
 
     Один экран и один запрос на все перемещения по складу: короб решает сам, что с
     ним делать (закрытый — размещается, размещённый — переезжает), товар — тоже
-    (ждёт размещения — уезжает на место, лежит на полке — переносится). Задачи
-    размещения закрываются автоматически, когда уехал их последний объект.
+    (ждёт размещения — уезжает на место, лежит на полке — переносится). Статусы задач
+    развозка не двигает: задача закончилась на сборке, ходка тележки ей не принадлежит.
     """
-    from modules.shipments.service import maybe_close_putaway_doc
-
     boxes = [str(b).strip() for b in (box_ids or []) if str(b).strip()]
     scans = list(items or [])
     if not boxes and not scans:
@@ -798,8 +905,7 @@ def place_batch(
     placed_qty = 0
     placed_boxes: list[ContainerItem] = []
     placed_items: list[dict] = []
-    doc_ids: set[str] = set()
-    line_ids: set[str] = set()
+    aside_by_line: dict[str, int] = {}
 
     for container_id in boxes:
         box = require_container(connection, container_id)
@@ -814,8 +920,6 @@ def place_batch(
         else:  # уже стоит на месте — это перенос
             moved = move_placed_container(connection, container_id, zone[0], user_id)
             placed_qty += moved.items_qty
-        if box["doc_id"]:
-            doc_ids.add(str(box["doc_id"]))
         placed_boxes.append(container_item(connection, container_id))
 
     for scan in scans:
@@ -825,28 +929,16 @@ def place_batch(
             zone=zone, user_id=user_id,
         )
         placed_items.append(item)
-        line_ids |= lines
+        for line_id, moved in lines.items():
+            aside_by_line[line_id] = aside_by_line.get(line_id, 0) + moved
         placed_qty += int(item["qty"])
 
-    if line_ids:
-        rows = connection.execute(
-            "SELECT DISTINCT doc_id FROM shipment_lines WHERE id = ANY(?)", (list(line_ids),)
-        ).fetchall()
-        doc_ids |= {str(r["doc_id"]) for r in rows}
-
-    closed_tasks: list[str] = []
-    for doc_id in sorted(doc_ids):
-        if maybe_close_putaway_doc(connection, doc_id, user_id):
-            row = connection.execute(
-                "SELECT doc_number FROM shipment_docs WHERE id = ?", (doc_id,)
-            ).fetchone()
-            if row:
-                closed_tasks.append(str(row["doc_number"]))
+    _log_aside_placement(connection, aside_by_line, zone=zone, user_id=user_id)
 
     return ContainerPlaceResult(
         zone_id=zone[0], zone_name=zone[1],
         boxes=placed_boxes, items=[ContainerPlacedItem(**i) for i in placed_items],
-        placed_qty=placed_qty, closed_tasks=closed_tasks,
+        placed_qty=placed_qty,
     )
 
 

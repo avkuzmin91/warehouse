@@ -2011,7 +2011,7 @@ def undo_shipment_aside_item(
         proceed, stored = begin_idempotent(conn, x_request_id, uid, "shipment_putaway_aside_undo")
         if not proceed:
             return stored
-        result = undo_aside_item(conn, doc_id, body.line_id, body.qty, uid)
+        result = undo_aside_item(conn, doc_id, body.line_id, body.qty, uid, quality=body.quality)
         finish_idempotent(conn, x_request_id, result)
         conn.commit()
     return result

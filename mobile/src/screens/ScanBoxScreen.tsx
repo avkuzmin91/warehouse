@@ -74,8 +74,7 @@ export function ScanBoxScreen({ containerId }: { containerId: string }) {
       }
       const res = await placeContainers({ zone_id: loc.location.id, box_ids: [box.id] }, newRequestId())
       scanSuccessFeedback()
-      const closed = res.closed_tasks.length > 0 ? ` · задача закрыта: ${res.closed_tasks.join(', ')}` : ''
-      setNotice(`${res.placed_qty} шт. → ${res.zone_name}${closed}`)
+      setNotice(`${res.placed_qty} шт. → ${res.zone_name}`)
       await refresh()
     } catch (err) {
       scanNotFoundFeedback()

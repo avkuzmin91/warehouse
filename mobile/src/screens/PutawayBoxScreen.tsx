@@ -7,6 +7,7 @@ import {
   getShipmentBoxes,
   releaseShipmentBox,
   reopenShipmentBox,
+  takeShipmentBox,
   undoShipmentBoxItem,
   SHIPMENT_BOX_STATUS_LABELS,
   type ShipmentBox,
@@ -21,22 +22,26 @@ import { variantTitle } from '../utils/format'
 /** Короб задачи «Упаковка с ТСД»: скан товара внутрь и закрытие короба.
  *
  * Каждый скан — это и есть запись упаковки (объём, дата, заработок), поэтому
- * упаковка идёт поштучно в ходе сборки. Короб — просто тара: переключатель
- * «Годный / Брак» решает, чем пишется скан. Товар опознаётся только по ШК —
+ * упаковка идёт поштучно в ходе сборки. Короб однороден: качество задаёт первый скан
+ * (кнопки «Скан годного» / «Скан брака»), дальше оно закреплено — смешанный короб
+ * пришлось бы разбирать у стеллажа. Режима-переключателя здесь нет намеренно: он
+ * невидим после скролла и стоит ошибочных сканов. Товар опознаётся только по ШК —
  * скан неизвестного кода отклоняется. Пустой короб можно освободить: взятая по
  * ошибке этикетка иначе держала бы всю задачу.
+ *
+ * Действия живут в нижней панели: скан повторяется сотни раз и обязан оставаться под
+ * большим пальцем, пока содержимое прокручивается. Закрытый короб сразу предлагает
+ * взять следующий — самый частый переход процесса, иначе он идёт через список задачи.
  *
  * Развозки здесь нет: закрытый короб уезжает на место отдельным процессом
  * (экран «Перенос» или скан короба у стеллажа).
  */
 export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; boxId: string }) {
-  const { back } = useNav()
+  const { back, openPutawayBox } = useNav()
   const [box, setBox] = useState<ShipmentBox | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  // Качество скана: липкий переключатель — брак пикают сериями, а не по одной штуке.
-  const [quality, setQuality] = useState<'good' | 'defect'>('good')
 
   const load = useCallback((signal?: AbortSignal) => {
     setError('')
@@ -49,8 +54,11 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
       .finally(() => { if (!signal?.aborted) setLoading(false) })
   }, [shipmentId, boxId])
 
+  // Переход на следующий короб меняет boxId у того же экрана: спиннер вместо кадра с
+  // содержимым предыдущего короба.
   useEffect(() => {
     const ac = new AbortController()
+    setLoading(true)
     void load(ac.signal)
     return () => ac.abort()
   }, [load])
@@ -59,7 +67,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   // кладовщик не отменит. Одно открытие сканера = ровно одна единица, поэтому
   // дедупликация повторного чтения того же ШК не нужна. Любая ошибка рвёт серию —
   // иначе человек продолжит пикать, не увидев отказа.
-  async function onScanItem() {
+  async function onScanItem(quality: 'good' | 'defect') {
     if (busy) return
     setBusy(true)
     setError('')
@@ -96,6 +104,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   }
 
   async function onClose() {
+    if (busy) return
     setBusy(true)
     setError('')
     try {
@@ -108,6 +117,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   }
 
   async function onRelease() {
+    if (busy) return
     setBusy(true)
     setError('')
     try {
@@ -120,6 +130,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
   }
 
   async function onReopen() {
+    if (busy) return
     setBusy(true)
     setError('')
     try {
@@ -131,8 +142,30 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
     }
   }
 
+  // Закрыли короб — сразу берём следующий: экран заменяется, а не громоздится стеком,
+  // иначе «Назад» пришлось бы жать по разу на каждый закрытый короб смены.
+  async function onNextBox() {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const code = await scanSource.scan()
+      if (!code) return
+      const next = await takeShipmentBox(shipmentId, code, newRequestId())
+      scanSuccessFeedback()
+      openPutawayBox(shipmentId, next.id, true)
+    } catch (err) {
+      scanNotFoundFeedback()
+      setError(err instanceof Error ? err.message : 'Короб не принят')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const status = box?.status
   const total = box?.items_qty ?? 0
+  // Набранный короб уже закреплён за качеством: выбор есть только у пустого.
+  const boxQuality = box?.quality === 'good' || box?.quality === 'defect' ? box.quality : null
 
   return (
     <div className="screen">
@@ -154,6 +187,14 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                 <span className="k">В коробе</span>
                 <span className="v">{total} шт.</span>
               </div>
+              {boxQuality && (
+                <div className="kv">
+                  <span className="k">Содержимое</span>
+                  <span className="v" style={boxQuality === 'defect' ? { color: 'var(--c-danger)' } : undefined}>
+                    {boxQuality === 'defect' ? 'Брак' : 'Годный'}
+                  </span>
+                </div>
+              )}
               {box.zone_name && (
                 <div className="kv">
                   <span className="k">Место</span>
@@ -163,38 +204,13 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
             </div>
 
             {status === 'open' && (
-              <>
-                <div className="line-row" style={{ marginTop: 0 }}>
-                  <button
-                    className={quality === 'good' ? 'btn' : 'btn ghost'}
-                    style={{ flex: 1 }}
-                    disabled={busy}
-                    onClick={() => setQuality('good')}
-                  >
-                    Годный
-                  </button>
-                  <button
-                    className={quality === 'defect' ? 'btn danger' : 'btn ghost'}
-                    style={{ flex: 1 }}
-                    disabled={busy}
-                    onClick={() => setQuality('defect')}
-                  >
-                    Брак
-                  </button>
-                </div>
-                <button
-                  className="btn"
-                  style={{ width: '100%' }}
-                  disabled={busy}
-                  onClick={() => { void onScanItem() }}
-                >
-                  <Icon name="qr" size={18} /> Скан товара в короб{quality === 'defect' ? ' (брак)' : ''}
-                </button>
-                <div className="line-sub" style={{ textAlign: 'center' }}>
-                  Сканер не закрывается — пикайте подряд. «Отмена» в сканере завершает серию.
-                  Качество переключается кнопками выше и держится до смены.
-                </div>
-              </>
+              <div className="line-sub" style={{ textAlign: 'center' }}>
+                Сканер не закрывается — пикайте подряд. «Отмена» в сканере завершает серию.
+                {boxQuality
+                  ? ` Короб набирается ${boxQuality === 'defect' ? 'браком' : 'годным'}: `
+                    + `${boxQuality === 'defect' ? 'годный' : 'брак'} кладите в другой короб.`
+                  : ' Первый скан задаёт качество короба: дальше в него идёт только оно.'}
+              </div>
             )}
 
             <div className="sec">
@@ -210,22 +226,40 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                 </div>
               </div>
             ) : (
-              box.contents.map((c) => (
-                <div key={`${c.line_id ?? ''}-${c.product_id}-${c.color_name ?? ''}-${c.size_name ?? ''}`} className="line">
-                  <div className="line-name">{variantTitle(c.product_name ?? '—', [c.color_name, c.size_name])}</div>
-                  <div className="line-sub mono">{c.product_sku ?? '—'} · {c.qty} шт.</div>
-                  {status === 'open' && c.line_id && (
-                    <button
-                      className="btn ghost sm"
-                      style={{ width: '100%', marginTop: 4 }}
-                      disabled={busy}
-                      onClick={() => { void onRemove(c.line_id, 1) }}
-                    >
-                      <Icon name="refresh" size={14} /> Изъять 1 шт. (отменит упаковку)
-                    </button>
-                  )}
-                </div>
-              ))
+              <>
+                {status === 'open' && (
+                  <div className="line-sub" style={{ marginTop: -2, marginBottom: 10 }}>
+                    Крестик изымает 1 шт. и отменяет запись упаковки за неё.
+                  </div>
+                )}
+                {box.contents.map((c) => (
+                  <div
+                    key={`${c.line_id ?? ''}-${c.product_id}-${c.color_name ?? ''}-${c.size_name ?? ''}-${c.quality}`}
+                    className="line"
+                  >
+                    <div className="line-row" style={{ marginTop: 0, alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div className="line-name">{variantTitle(c.product_name ?? '—', [c.color_name, c.size_name])}</div>
+                        <div className="line-sub mono">
+                          {c.product_sku ?? '—'} · {c.qty} шт.
+                          {c.quality === 'defect' && <span style={{ color: 'var(--c-danger)' }}> · брак</span>}
+                        </div>
+                      </div>
+                      {status === 'open' && c.line_id && (
+                        <button
+                          className="icon-btn danger"
+                          disabled={busy}
+                          onClick={() => { void onRemove(c.line_id, 1) }}
+                          aria-label="Изъять 1 шт."
+                          title="Изъять 1 шт."
+                        >
+                          <Icon name="x" size={18} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </>
             )}
 
             <div className="actionbar">
@@ -236,15 +270,46 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                 </div>
               )}
               {status === 'open' && (
-                total === 0 ? (
-                  <button className="btn ghost" disabled={busy} onClick={() => { void onRelease() }}>
-                    <Icon name="refresh" size={18} /> Освободить короб
-                  </button>
-                ) : (
-                  <button className="btn" disabled={busy} onClick={() => { void onClose() }}>
-                    <Icon name="check" size={18} /> Закрыть короб
-                  </button>
-                )
+                <>
+                  {total === 0 ? (
+                    <button className="btn ghost" disabled={busy} onClick={() => { void onRelease() }}>
+                      <Icon name="trash" size={18} /> Освободить короб
+                    </button>
+                  ) : (
+                    <button className="btn ghost" disabled={busy} onClick={() => { void onClose() }}>
+                      <Icon name="check" size={18} /> Закрыть короб
+                    </button>
+                  )}
+                  {boxQuality ? (
+                    <button
+                      className={boxQuality === 'defect' ? 'btn danger' : 'btn'}
+                      style={{ marginTop: 8 }}
+                      disabled={busy}
+                      onClick={() => { void onScanItem(boxQuality) }}
+                    >
+                      <Icon name="qr" size={18} /> Скан товара{boxQuality === 'defect' ? ' (брак)' : ''}
+                    </button>
+                  ) : (
+                    <div className="line-row" style={{ marginTop: 8 }}>
+                      <button
+                        className="btn"
+                        style={{ flex: 1 }}
+                        disabled={busy}
+                        onClick={() => { void onScanItem('good') }}
+                      >
+                        <Icon name="qr" size={18} /> Скан годного
+                      </button>
+                      <button
+                        className="btn danger"
+                        style={{ flex: 1 }}
+                        disabled={busy}
+                        onClick={() => { void onScanItem('defect') }}
+                      >
+                        <Icon name="qr" size={18} /> Скан брака
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
               {status === 'closed' && (
                 <>
@@ -253,7 +318,15 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                     сканом на ТСД.
                   </div>
                   <button className="btn ghost" disabled={busy} onClick={() => { void onReopen() }}>
-                    Открыть заново
+                    <Icon name="refresh" size={18} /> Открыть заново
+                  </button>
+                  <button
+                    className="btn"
+                    style={{ marginTop: 8 }}
+                    disabled={busy}
+                    onClick={() => { void onNextBox() }}
+                  >
+                    <Icon name="qr" size={18} /> Следующий короб — скан этикетки
                   </button>
                 </>
               )}

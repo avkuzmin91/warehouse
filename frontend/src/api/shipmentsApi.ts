@@ -2,7 +2,7 @@ import { request, requestForm } from './http'
 import { moscowTodayYmd } from '../utils/format'
 import type { DuplicateCheckResponse } from './domainTypes'
 
-export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'collected' | 'placed' | 'completed_no_goods' | 'cancelled'
+export type ShipmentStatus = 'draft' | 'packing' | 'on_packing' | 'relocating' | 'packed' | 'collected' | 'completed_no_goods' | 'cancelled'
 
 export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   draft:             'Черновик',
@@ -11,7 +11,6 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   relocating:        'Перемещение',
   packed:            'Упакован',
   collected:         'Собрано',
-  placed:            'Размещено',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -23,7 +22,6 @@ export const SHIPMENT_STEP_DONE_LABELS: Record<ShipmentStatus, string> = {
   relocating:        'Передан кладовщику',
   packed:            'Упакован',
   collected:         'Собрано в короба',
-  placed:            'Разложено по местам',
   completed_no_goods: 'Завершён',
   cancelled:         'Аннулирован',
 }
@@ -34,8 +32,7 @@ export const SHIPMENT_STATUS_TONES: Record<ShipmentStatus, string> = {
   on_packing:        'info',
   relocating:        'info',
   packed:            'success',
-  collected:         'info',
-  placed:            'success',
+  collected:         'success',
   completed_no_goods: 'warning',
   cancelled:         'danger',
 }
@@ -73,8 +70,8 @@ export const SHIPMENT_TASK_KIND_LABELS: Record<ShipmentTaskKind, string> = {
   putaway: 'Упаковка с ТСД',
 }
 
-/** Маршрут задачи размещения: короба собираются и уезжают в ячейки, отгрузки нет. */
-export const SHIPMENT_PUTAWAY_STATUS_ORDER: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'collected', 'placed']
+/** Маршрут задачи размещения: заканчивается сборкой — развозку ведёт процесс коробов. */
+export const SHIPMENT_PUTAWAY_STATUS_ORDER: ShipmentStatus[] = ['draft', 'packing', 'on_packing', 'collected']
 
 export type ShipmentOpType =
   | 'doc_create' | 'advance' | 'revert' | 'cancel' | 'doc_update' | 'priority_update'
@@ -790,6 +787,7 @@ export type ShipmentBoxContentLine = {
   product_sku:  string | null
   color_name:   string | null
   size_name:    string | null
+  quality:      'good' | 'defect'
   qty:          number
 }
 
@@ -802,6 +800,8 @@ export type ShipmentBox = {
   zone_id:    string | null
   zone_name:  string | null
   items_qty:  number
+  /** Чем набран короб: good | defect. Пустой короб — null, смешивать нельзя. */
+  quality:    'good' | 'defect' | 'mixed' | null
   contents:   ShipmentBoxContentLine[]
   created_at: string
   closed_at:  string | null
@@ -878,11 +878,17 @@ export function addPutawayAsideItem(
   })
 }
 
-/** Отмена ошибочного скана мимо короба: товар возвращается на стол упаковки. */
-export function undoPutawayAsideItem(docId: string, lineId: string, qty: number) {
+/** Отмена ошибочного скана мимо короба: товар возвращается на стол упаковки.
+ *
+ * Качество адресует отмену: россыпь разнородна, и без него сторнируется последний
+ * скан позиции любого качества.
+ */
+export function undoPutawayAsideItem(
+  docId: string, lineId: string, qty: number, quality?: 'good' | 'defect',
+) {
   return request<PutawayItemResult>(`/shipments/${docId}/putaway/aside/undo`, {
     method: 'POST',
-    body: JSON.stringify({ line_id: lineId, qty }),
+    body: JSON.stringify({ line_id: lineId, qty, quality }),
   })
 }
 

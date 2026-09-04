@@ -51,7 +51,6 @@ from config import (
     SHIPMENT_STATUS_ON_PACKING,
     SHIPMENT_STATUS_PACKED,
     SHIPMENT_STATUS_PACKING,
-    SHIPMENT_STATUS_PLACED,
     SHIPMENT_STATUS_RELOCATING,
     SHIPMENT_TASK_PACKING,
     SHIPMENT_TASK_PUTAWAY,
@@ -2637,7 +2636,7 @@ def line_placed_qty(connection, line_id: str) -> int:
 
 def box_detail(connection, container_id: str) -> dict:
     """Короб + содержимое одной структурой (ответ всех операций ТСД)."""
-    from modules.containers.service import container_contents, containers_items_qty
+    from modules.containers.service import container_contents, container_quality, containers_items_qty
 
     row = connection.execute(
         "SELECT id, doc_number, status, zone_id, zone_name, created_at, closed_at, placed_at "
@@ -2653,6 +2652,7 @@ def box_detail(connection, container_id: str) -> dict:
         "zone_id": row["zone_id"],
         "zone_name": row["zone_name"],
         "items_qty": containers_items_qty(connection, [container_id]).get(container_id, 0),
+        "quality": container_quality(connection, container_id),
         "contents": [c.model_dump() for c in container_contents(connection, container_id)],
         "created_at": str(row["created_at"]),
         "closed_at": row["closed_at"],
@@ -2817,18 +2817,28 @@ def add_box_item(
 
     Упаковка в этой задаче идёт поштучно в процессе сборки, поэтому скан пишет обычную
     запись упаковки (объём, дата, заработок), а товар уходит не на стол «Упаковано», а
-    в корзину короба. Короб — просто тара: в него ложится и годный, и брак.
+    в корзину короба. Короб набирается однородно: либо годный, либо брак — смешанный
+    короб пришлось бы разбирать на месте хранения, а брак ещё и уезжает отдельно.
     Гейты — от record_packing: годного не больше плана строки и не больше того,
     что физически передано на стол упаковки.
     """
-    from modules.containers.service import log_container_op
+    from modules.containers.service import container_quality, log_container_op
 
     _require_putaway_doc(connection, doc_id)
-    _require_task_box(connection, doc_id, container_id, status=CONTAINER_STATUS_OPEN)
+    box = _require_task_box(connection, doc_id, container_id, status=CONTAINER_STATUS_OPEN)
     n = int(qty or 0)
     if n <= 0:
         raise HTTPException(status_code=400, detail="Укажите количество больше нуля")
     q = _normalize_quality(quality)
+
+    box_q = container_quality(connection, container_id)
+    if box_q is not None and box_q != q:
+        filled_ru = "браком" if box_q == INV_Q_DEFECT else "годным" if box_q == INV_Q_GOOD else "смешанно"
+        scan_ru = "брак" if q == INV_Q_DEFECT else "годный"
+        raise HTTPException(
+            status_code=400,
+            detail=f"Короб {_box_label(box)} набран {filled_ru} — {scan_ru} кладите в другой короб",
+        )
 
     variant = variant_by_barcode(connection, barcode)
     line = _line_for_variant(connection, doc_id, variant, prefer_boxable=True)
@@ -3081,22 +3091,33 @@ def add_aside_item(connection, doc_id: str, *, barcode: str, qty: int, quality: 
     return _putaway_item_result(connection, doc_id, line, qty=n)
 
 
-def undo_aside_item(connection, doc_id: str, line_id: str, qty: int, user_id: str) -> dict:
-    """Отмена ошибочного скана мимо короба: товар возвращается в пул на столе упаковки."""
+def undo_aside_item(
+    connection, doc_id: str, line_id: str, qty: int, user_id: str, quality: str | None = None,
+) -> dict:
+    """Отмена ошибочного скана мимо короба: товар возвращается в пул на столе упаковки.
+
+    Россыпь разнородна, поэтому качество сужает выбор записи: без него сторнируется
+    последний скан позиции любого качества.
+    """
     _require_putaway_doc(connection, doc_id)
     line = _putaway_line(connection, doc_id, line_id)
+    q = _normalize_quality(quality) if quality else None
+    kind_ru = "" if q is None else " (брак)" if q == INV_Q_DEFECT else " (годный)"
     undone = _reverse_pack_entries(
         connection, doc_id, line_id, qty, user_id,
-        leg_sql=f"zr.to_op = '{INV_OP_BOXED}' AND zr.to_container_id IS NULL",
-        leg_params=(),
-        empty_detail="По этой позиции нет сборки мимо короба",
+        leg_sql=(
+            f"zr.to_op = '{INV_OP_BOXED}' AND zr.to_container_id IS NULL"
+            + ("" if q is None else " AND zr.to_quality = ?")
+        ),
+        leg_params=() if q is None else (q,),
+        empty_detail=f"По этой позиции нет сборки мимо короба{kind_ru}",
     )
     removed = sum(r["qty"] for r in undone)
     label = line["product_sku"] or line["product_name"]
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_ITEM_PLACE,
-         f"Отмена сборки мимо короба: -{removed} шт. — {label}", _now(), user_id),
+         f"Отмена сборки мимо короба{kind_ru}: -{removed} шт. — {label}", _now(), user_id),
     )
     return _putaway_item_result(connection, doc_id, line, qty=removed)
 
@@ -3104,7 +3125,9 @@ def undo_aside_item(connection, doc_id: str, line_id: str, qty: int, user_id: st
 def log_placement_op(connection, doc_id: str, *, comment: str, user_id: str) -> None:
     """Запись о размещении в журнал задачи: развозку ведёт процесс коробов, а не задача.
 
-    Вызывается из `containers`, поэтому знание о `shipment_ops` остаётся здесь.
+    Задача к этому моменту уже закрыта — журнал append-only, поэтому след «куда уехало»
+    дописывается и в закрытый документ: иначе историю короба пришлось бы искать в
+    другом месте. Вызывается из `containers`, поэтому знание о `shipment_ops` живёт здесь.
     """
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
@@ -3112,56 +3135,13 @@ def log_placement_op(connection, doc_id: str, *, comment: str, user_id: str) -> 
     )
 
 
-def maybe_close_putaway_doc(connection, doc_id: str, user_id: str) -> str | None:
-    """Авто-закрытие задачи размещения: collected -> placed, когда всё уехало на места.
-
-    Отдельного «финиша» у развозки нет: кладовщик ставит последний короб (или последнюю
-    россыпь) — и задача закрывается сама. Вызывается после каждого размещения; пока
-    сборка идёт (on_packing), задачу не трогаем.
-    """
-    doc = connection.execute(
-        "SELECT id, status, task_kind FROM shipment_docs WHERE id = ? AND COALESCE(is_deleted, 0) = 0",
-        (doc_id,),
-    ).fetchone()
-    if not doc or normalize_task_kind(doc["task_kind"]) != SHIPMENT_TASK_PUTAWAY:
-        return None
-    if str(doc["status"]) != SHIPMENT_STATUS_COLLECTED:
-        return None
-
-    pending_box = connection.execute(
-        "SELECT 1 FROM containers WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0 AND status IN (?, ?) LIMIT 1",
-        (doc_id, CONTAINER_STATUS_OPEN, CONTAINER_STATUS_CLOSED),
-    ).fetchone()
-    if pending_box:
-        return None
-
-    lines = connection.execute(
-        "SELECT id FROM shipment_lines WHERE doc_id = ? AND COALESCE(is_deleted, 0) = 0", (doc_id,)
-    ).fetchall()
-    if any(line_boxed_qty(connection, str(l["id"])) > 0 for l in lines):
-        return None
-
-    placed_total = sum(line_placed_qty(connection, str(l["id"])) for l in lines)
-    now = _now()
-    connection.execute(
-        "UPDATE shipment_docs SET status = ?, actual_ship_date = COALESCE(actual_ship_date, ?), updated_at = ? "
-        "WHERE id = ?",
-        (SHIPMENT_STATUS_PLACED, business_today().isoformat(), now, doc_id),
-    )
-    connection.execute(
-        "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
-        (str(uuid4()), doc_id, SHIPMENT_OP_RELOCATE,
-         f"Размещено по местам: {placed_total} шт. — задача закрыта", now, user_id),
-    )
-    return SHIPMENT_STATUS_PLACED
-
-
 def finish_collecting(connection, doc_id: str, user_id: str) -> str:
-    """Сборка завершена: on_packing -> collected (или сразу placed, если всё уже уехало).
+    """Сборка завершена: on_packing -> collected. Это конец задачи.
 
     Гейт: открытых коробов с товаром не осталось. Закрытые короба и собранная россыпь
-    задачу не держат — их развозит по местам отдельный процесс размещения. Нерешённый
-    пул со стола возвращается на хранение в те же места.
+    задачу не держат — их развозит по местам отдельный процесс размещения, у которого
+    свой темп и своя очередь. Нерешённый пул со стола возвращается на хранение в те же
+    места.
     """
     from modules.balances.service import get_packing_zone, insert_inventory_move
     from modules.containers.service import containers_items_qty
@@ -3220,13 +3200,13 @@ def finish_collecting(connection, doc_id: str, user_id: str) -> str:
     collected_total = sum(line_boxed_qty(connection, str(l["id"])) for l in lines)
     now = _now()
     connection.execute(
-        "UPDATE shipment_docs SET status = ?, updated_at = ? WHERE id = ?",
-        (SHIPMENT_STATUS_COLLECTED, now, doc_id),
+        "UPDATE shipment_docs SET status = ?, actual_ship_date = COALESCE(actual_ship_date, ?), "
+        "updated_at = ? WHERE id = ?",
+        (SHIPMENT_STATUS_COLLECTED, business_today().isoformat(), now, doc_id),
     )
     connection.execute(
         "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
         (str(uuid4()), doc_id, SHIPMENT_OP_COLLECTED,
-         f"Сборка завершена: {collected_total} шт. ждут размещения по местам", now, user_id),
+         f"Сборка завершена: {collected_total} шт. передано на развозку по местам", now, user_id),
     )
-    # Всё уже успели развезти (или собирать было нечего) — задача закрывается сразу.
-    return maybe_close_putaway_doc(connection, doc_id, user_id) or SHIPMENT_STATUS_COLLECTED
+    return SHIPMENT_STATUS_COLLECTED

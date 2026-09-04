@@ -8,7 +8,6 @@ export type ShipmentStatus =
   | 'relocating'
   | 'packed'
   | 'collected'
-  | 'placed'
   | 'completed_no_goods'
   | 'cancelled'
 
@@ -472,7 +471,6 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   relocating: 'Перемещение',
   packed: 'Упакован',
   collected: 'Собрано',
-  placed: 'Размещено',
   completed_no_goods: 'Завершён',
   cancelled: 'Аннулирован',
 }
@@ -495,6 +493,7 @@ export type ShipmentBoxContentLine = {
   product_sku: string | null
   color_name: string | null
   size_name: string | null
+  quality: 'good' | 'defect'
   qty: number
 }
 
@@ -505,6 +504,8 @@ export type ShipmentBox = {
   zone_id: string | null
   zone_name: string | null
   items_qty: number
+  /** Чем набран короб: good | defect. Пустой короб — null, смешивать нельзя. */
+  quality: 'good' | 'defect' | 'mixed' | null
   contents: ShipmentBoxContentLine[]
   created_at: string
   closed_at: string | null
@@ -592,11 +593,17 @@ export function addPutawayAsideItem(
   })
 }
 
-/** Отмена ошибочного скана мимо короба: товар возвращается на стол упаковки. */
-export function undoPutawayAsideItem(docId: string, lineId: string, qty: number, requestId: string) {
+/** Отмена ошибочного скана мимо короба: товар возвращается на стол упаковки.
+ *
+ * Качество адресует отмену: россыпь разнородна, и без него сторнируется последний
+ * скан позиции любого качества.
+ */
+export function undoPutawayAsideItem(
+  docId: string, lineId: string, qty: number, requestId: string, quality?: 'good' | 'defect',
+) {
   return request<PutawayItemResult>(`/shipments/${docId}/putaway/aside/undo`, {
     method: 'POST',
-    body: JSON.stringify({ line_id: lineId, qty }),
+    body: JSON.stringify({ line_id: lineId, qty, quality }),
     headers: requestIdHeaders(requestId),
   })
 }
