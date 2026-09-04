@@ -226,7 +226,7 @@ export function BarcodeReviewModal({ docId, docNumber, items, canBind, onClose, 
             <div key={it.code} style={{ fontSize: 12.5, color: 'var(--c-danger)', lineHeight: 1.5, marginBottom: 4 }}>
               <span className="mono">{it.code}</span>
               {it.status === 'other_product'
-                ? <> — уже принадлежит «{it.other_product_name}». Проверьте, тот ли файл «{it.fileName}» приложен к строке «{it.productName}».</>
+                ? <> — уже принадлежит «{[it.other_product_name, it.other_variant_label].filter(Boolean).join(' · ')}». Проверьте, тот ли файл «{it.fileName}» приложен к строке «{[it.productName, it.variantLabel].filter(Boolean).join(' · ')}».</>
                 : <> — принадлежит варианту «{it.other_variant_label}» товара «{it.productName}», возможен пересорт.</>}
             </div>
           ))}

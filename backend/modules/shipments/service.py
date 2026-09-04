@@ -2538,14 +2538,14 @@ def classify_barcodes_for_variant(connection, codes: list[str], *, product_id: s
         ).fetchone()
         item = {"code": code, "status": "unknown", "other_product_name": None, "other_variant_label": None}
         if row is not None:
+            variant_label = " · ".join(x for x in (row["color_name"], row["size_name"]) if x)
             if str(row["product_id"]) != product_id:
                 item["status"] = "other_product"
                 item["other_product_name"] = str(row["product_name"])
+                item["other_variant_label"] = variant_label or None
             elif variant_id is not None and row["variant_id"] and str(row["variant_id"]) != variant_id:
                 item["status"] = "other_variant"
-                item["other_variant_label"] = (
-                    " · ".join(x for x in (row["color_name"], row["size_name"]) if x) or "другой вариант"
-                )
+                item["other_variant_label"] = variant_label or "другой вариант"
             else:
                 item["status"] = "confirmed"
         out.append(item)

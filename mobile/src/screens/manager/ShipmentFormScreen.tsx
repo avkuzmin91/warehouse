@@ -648,7 +648,7 @@ export function ShipmentFormScreen({ docId }: { docId?: string } = {}) {
             <p key={f.code} className="line-sub" style={{ fontSize: 13, marginTop: 0 }}>
               Код <span className="mono">{f.code}</span> принадлежит {f.status === 'other_variant'
                 ? `варианту «${f.other_variant_label}» товара «${f.productName}» — возможен пересорт.`
-                : `«${f.other_product_name}» — проверьте, тот ли файл приложен.`}
+                : `«${[f.other_product_name, f.other_variant_label].filter(Boolean).join(' · ')}» — проверьте, тот ли файл приложен.`}
             </p>
           ))}
           {bcOffer.unknown.length > 0 && (
