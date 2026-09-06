@@ -12,13 +12,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 
 if not os.environ.get("DATABASE_URL"):
     pytest.skip("Нужен DATABASE_URL", allow_module_level=True)
 
 from config import (
     CONTAINER_STATUS_PLACED,
-    INV_OP_STORAGE,
+    MP_SUPPLY_PICK_OP,
     INV_Q_GOOD,
     MP_ACCOUNT_STATUS_ACTIVE,
     MP_LINK_SOURCE_MANUAL,
@@ -28,12 +29,15 @@ from config import (
     MP_SUPPLY_ORDER_PENDING,
     MP_SUPPLY_ORDER_SELECTED,
     MP_SUPPLY_STATUS_CHECKING,
-    MP_SUPPLY_STATUS_DRAFT,
+    MP_SUPPLY_STATUS_CORRECTING,
     MP_SUPPLY_STATUS_HANDOVER,
+    MP_SUPPLY_STATUS_PACKING,
     MP_SUPPLY_STATUS_PICKING,
+    MP_WB,
 )
 from dbconn import get_connection
 from modules.balances.service import insert_inventory_move
+from modules.marketplaces import clients as mp_clients
 from modules.marketplaces import service as mp_service
 from tests.conftest import (  # noqa: F401
     cleanup_client,
@@ -108,7 +112,7 @@ def fbs():
             product_id=pid, product_name="Худи оверсайз", product_sku=f"FF-{pid[:8]}",
             color_id=None, color_name=None, size_id=None, size_name=None,
             client_id=cid, client_name="Test Client",
-            from_op="intake", to_op=INV_OP_STORAGE,
+            from_op="intake", to_op=MP_SUPPLY_PICK_OP,
             from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
             from_zone_id=None, from_zone_name=None,
             to_zone_id=cell_id, to_zone_name=cell_name,
@@ -121,6 +125,15 @@ def fbs():
         "type_id": type_id, "barcode": barcode,
     }
     with get_connection() as conn:
+        conn.execute(
+            "DELETE FROM mp_cargo_unit_orders WHERE cargo_unit_id IN (SELECT id FROM mp_cargo_units "
+            "WHERE supply_id IN (SELECT id FROM mp_supplies WHERE account_id = ?))", (account_id,))
+        conn.execute(
+            "DELETE FROM mp_cargo_units WHERE supply_id IN "
+            "(SELECT id FROM mp_supplies WHERE account_id = ?)", (account_id,))
+        conn.execute(
+            "DELETE FROM mp_supply_packs WHERE supply_id IN "
+            "(SELECT id FROM mp_supplies WHERE account_id = ?)", (account_id,))
         conn.execute(
             "DELETE FROM mp_supply_picks WHERE supply_id IN "
             "(SELECT id FROM mp_supplies WHERE account_id = ?)", (account_id,))
@@ -171,13 +184,30 @@ def _add_order(fbs, *, external_id: str, deadline: datetime | None, qty: int = 1
     return order_id
 
 
-def _route(fbs) -> dict:
+def _free_pool_ids(fbs) -> list[str]:
     with get_connection() as conn:
-        account = conn.execute(
-            "SELECT * FROM mp_accounts WHERE id = ?", (fbs["account_id"],)).fetchone()
-        stats = mp_service.route_orders_into_supplies(conn, account)
+        pool = mp_service.free_orders_pool(conn, account_id=fbs["account_id"])
+        if not pool:
+            return []
+        rows = conn.execute(
+            "SELECT o.id FROM mp_orders o WHERE o.account_id = ? AND o.status IN (?, ?) "
+            "AND NOT EXISTS (SELECT 1 FROM mp_supply_orders so "
+            "                WHERE so.order_id = o.id AND so.state IN (?, ?)) "
+            "ORDER BY o.deadline_at ASC NULLS LAST, o.first_seen_at ASC",
+            (fbs["account_id"], "new", "in_progress", "selected", "pending"),
+        ).fetchall()
+    return [str(r["id"]) for r in rows]
+
+
+def _route(fbs, order_ids: list[str] | None = None) -> str:
+    """Завести поставку из пула: весь свободный пул или названные заказы."""
+    picked = order_ids if order_ids is not None else _free_pool_ids(fbs)
+    with get_connection() as conn:
+        supply_id = mp_service.create_supply(
+            conn, account_id=fbs["account_id"], order_ids=picked, user_id="test-admin-id",
+        )
         conn.commit()
-    return stats
+    return supply_id
 
 
 def _supplies(fbs) -> list:
@@ -188,10 +218,18 @@ def _supplies(fbs) -> list:
         ).fetchall()
 
 
-def _pick(conn, fbs, supply_id: str, *, qty: int) -> dict:
+def _transfer(supply_id: str) -> None:
+    """«Передать поставку площадке» — обязательный шаг перед сборкой.
+    Кабинет фикстуры — Ozon, поэтому площадка здесь не вызывается."""
+    with get_connection() as conn:
+        mp_service.transfer_supply_to_marketplace(conn, supply_id, "u")
+        conn.commit()
+
+
+def _pick(conn, fbs, supply_id: str, *, qty: int, user_id: str = "u") -> dict:
     return mp_service.register_pick(
         conn, supply_id, barcode=fbs["barcode"], zone_id=fbs["cell_id"],
-        container_id=None, qty=qty, user_id="u", role="admin",
+        container_id=None, qty=qty, user_id=user_id, role="admin",
     )
 
 
@@ -200,106 +238,323 @@ def _detail(supply_id: str) -> dict:
         return mp_service.supply_detail(conn, supply_id)
 
 
-# ── Волны и маршрутизация ─────────────────────────────────────────────────────
+# ── Пул свободных заказов и набор состава ─────────────────────────────────────
 
 def test_wave_key_floors_to_hour():
     assert mp_service.supply_wave_key("2026-09-03T13:47:12+00:00").startswith("2026-09-03T13:00")
     assert mp_service.supply_wave_key(None) is None
 
 
-def test_orders_of_one_wave_land_in_one_supply(fbs):
-    base = (_now() + timedelta(hours=6)).replace(minute=5, second=0, microsecond=0)
-    _add_order(fbs, external_id="0192-1", deadline=base)
-    _add_order(fbs, external_id="0192-2", deadline=base.replace(minute=45))
-    stats = _route(fbs)
-    assert stats["supplies_created"] == 1
-    assert stats["routed"] == 2
-    supplies = _supplies(fbs)
-    assert len(supplies) == 1
-    assert str(supplies[0]["status"]) == MP_SUPPLY_STATUS_DRAFT
+def test_new_order_waits_in_the_pool(fbs):
+    """Синк только приносит заказ: поставку из него заводит менеджер."""
+    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=6), qty=2)
+    assert _supplies(fbs) == []
+    with get_connection() as conn:
+        pool = mp_service.free_orders_pool(conn, account_id=fbs["account_id"])
+    assert len(pool) == 1
+    assert pool[0]["orders_count"] == 1
+    assert pool[0]["total_qty"] == 2
+
+
+def test_cutoff_follows_the_earliest_deadline_in_the_supply(fbs):
+    """Отсечка — следствие состава: обещать дольше самого срочного заказа нельзя."""
+    early = (_now() + timedelta(hours=4)).replace(minute=45, second=0, microsecond=0)
+    late = _now() + timedelta(hours=20)
+    _add_order(fbs, external_id="0192-1", deadline=late)
+    _add_order(fbs, external_id="0192-2", deadline=early)
+    supply_id = _route(fbs)
+    supply = _supplies(fbs)[0]
+    assert str(supply["cutoff_at"]) == mp_service.supply_wave_key(early.isoformat())
     # Приём закрывается за 30 минут до отсечки — считает система, не человек.
-    assert supplies[0]["intake_closes_at"] < supplies[0]["cutoff_at"]
+    assert supply["intake_closes_at"] < supply["cutoff_at"]
+
+    # Срочный заказ ушёл из состава — отсечка отъезжает к следующему по срочности.
+    with get_connection() as conn:
+        keep = [o["order_id"] for o in mp_service.supply_detail(conn, supply_id)["orders"]
+                if o["external_id"] == "0192-1"]
+        mp_service.set_supply_orders(conn, supply_id, keep, "test-admin-id")
+        conn.commit()
+    assert str(_supplies(fbs)[0]["cutoff_at"]) == mp_service.supply_wave_key(late.isoformat())
 
 
-def test_different_waves_get_different_supplies(fbs):
-    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=4))
-    _add_order(fbs, external_id="0192-2", deadline=_now() + timedelta(hours=9))
-    _route(fbs)
-    assert len(_supplies(fbs)) == 2
+def test_account_can_have_several_open_supplies(fbs):
+    """Поставка = отгрузка FBS: поток делится на столько, на сколько удобно складу."""
+    cutoff = _now() + timedelta(hours=5)
+    first = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    second = _add_order(fbs, external_id="0192-2", deadline=cutoff)
+    third = _add_order(fbs, external_id="0192-3", deadline=cutoff)
+    a = _route(fbs, [first])
+    b = _route(fbs, [second, third])
+    assert a != b
+    supplies = _supplies(fbs)
+    assert len(supplies) == 2
+    assert all(str(x["status"]) == MP_SUPPLY_STATUS_CHECKING for x in supplies)
+    assert _detail(a)["doc"]["orders_total"] == 1
+    assert _detail(b)["doc"]["orders_total"] == 2
+    with get_connection() as conn:
+        assert mp_service.free_orders_pool(conn, account_id=fbs["account_id"]) == []
 
 
-def test_routing_is_idempotent(fbs):
-    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
-    _route(fbs)
-    stats = _route(fbs)
-    assert stats == {"routed": 0, "docked": 0, "supplies_created": 0}
+def test_order_is_taken_by_one_supply_only(fbs):
+    cutoff = _now() + timedelta(hours=5)
+    order_id = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    _route(fbs, [order_id])
+    with pytest.raises(HTTPException) as exc:
+        _route(fbs, [order_id])
+    assert exc.value.status_code == 400
     assert len(_supplies(fbs)) == 1
 
 
-def test_unselected_order_waits_for_next_supply(fbs):
-    """Снятый галочкой заказ не возвращается синком в ту же поставку."""
-    cutoff = _now() + timedelta(hours=5)
-    keep = _add_order(fbs, external_id="0192-1", deadline=cutoff)
-    drop = _add_order(fbs, external_id="0192-2", deadline=cutoff)
-    _route(fbs)
-    supply_id = str(_supplies(fbs)[0]["id"])
-    with get_connection() as conn:
-        mp_service.set_supply_orders(conn, supply_id, [keep], "test-admin-id")
-        conn.commit()
-    _route(fbs)
-    detail = _detail(supply_id)
-    selected = [o for o in detail["orders"] if o["state"] == MP_SUPPLY_ORDER_SELECTED]
-    assert [o["order_id"] for o in selected] == [keep]
-    assert detail["doc"]["orders_total"] == 1
-    assert drop not in [o["order_id"] for o in selected]
+def test_supply_without_orders_is_not_created(fbs):
+    """Пустышек быть не должно: поставку создаёт выбор заказов, а не нажатие кнопки."""
+    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
+    with pytest.raises(HTTPException) as exc:
+        _route(fbs, [])
+    assert exc.value.status_code == 400
+    assert _supplies(fbs) == []
 
 
-def test_order_arriving_during_picking_goes_to_dock(fbs):
-    cutoff = _now() + timedelta(hours=5)
-    _add_order(fbs, external_id="0192-1", deadline=cutoff)
-    _route(fbs)
-    supply_id = str(_supplies(fbs)[0]["id"])
+def test_supply_starts_on_checking_without_a_second_confirmation(fbs):
+    """Состав выбран в пуле — подтверждать тот же список отдельной фазой нечем.
+
+    Заведение и есть принятое обязательство, поэтому следующий шаг сразу отдаёт
+    поставку сборщику, а не открывает второй проход по тем же заказам.
+    """
+    order_id = _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5), qty=2)
+    supply_id = _route(fbs, [order_id])
+    row = _supplies(fbs)[0]
+    assert str(row["status"]) == MP_SUPPLY_STATUS_CHECKING
+    assert row["checking_at"] is not None
+    assert _detail(supply_id)["doc"]["orders_total"] == 1
+    _transfer(supply_id)
     with get_connection() as conn:
-        mp_service.advance_supply(conn, supply_id, "test-admin-id")  # draft → checking
-        mp_service.advance_supply(conn, supply_id, "test-admin-id")  # checking → picking
+        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_PICKING
         conn.commit()
-    late = _add_order(fbs, external_id="0192-late", deadline=cutoff)
-    stats = _route(fbs)
-    assert stats["docked"] == 1
-    assert stats["supplies_created"] == 0
-    detail = _detail(supply_id)
-    assert detail["doc"]["orders_pending"] == 1
+
+
+def test_picking_waits_for_the_transfer_to_the_marketplace(fbs):
+    """В сборку уходит только переданная площадке поставка: у WB задания к этому
+    моменту лежат в поставке продавца, иначе сборщик работает без этикеток."""
+    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
+    supply_id = _route(fbs)
+    with pytest.raises(HTTPException) as exc:
+        with get_connection() as conn:
+            mp_service.advance_supply(conn, supply_id, "u")
+    assert "не передана площадке" in exc.value.detail
+    _transfer(supply_id)
+    row = _supplies(fbs)[0]
+    assert row["mp_transferred_at"] is not None
+    assert str(row["status"]) == MP_SUPPLY_STATUS_CHECKING
     with get_connection() as conn:
-        docked = mp_service.dock_supply_orders(conn, supply_id, [late], "test-admin-id")
+        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_PICKING
+        with pytest.raises(HTTPException):
+            mp_service.transfer_supply_to_marketplace(conn, supply_id, "u")
+
+
+def test_transfer_needs_a_clean_composition(fbs):
+    """После передачи состав не правится, поэтому с блокером площадке не отдаём."""
+    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5), linked=False)
+    supply_id = _route(fbs)
+    with pytest.raises(HTTPException) as exc:
+        with get_connection() as conn:
+            mp_service.transfer_supply_to_marketplace(conn, supply_id, "u")
+    assert exc.value.status_code == 400
+    assert _supplies(fbs)[0]["mp_transferred_at"] is None
+
+
+def test_transfer_to_wb_creates_the_seller_supply_with_all_orders(fbs, monkeypatch):
+    calls: dict[str, list] = {"created": [], "added": []}
+    monkeypatch.setattr(
+        mp_clients, "wb_create_supply",
+        lambda creds, name: calls["created"].append(name) or "WB-GI-77",
+    )
+    monkeypatch.setattr(
+        mp_clients, "wb_add_orders_to_supply",
+        lambda creds, sid, ids: calls["added"].append((sid, sorted(ids))),
+    )
+    with get_connection() as conn:
+        conn.execute("UPDATE mp_accounts SET marketplace = ? WHERE id = ?", (MP_WB, fbs["account_id"]))
         conn.commit()
-    assert docked == 1
+    a = _add_order(fbs, external_id="1001", deadline=_now() + timedelta(hours=5))
+    b = _add_order(fbs, external_id="1002", deadline=_now() + timedelta(hours=5))
+    supply_id = _route(fbs, [a, b])
+    _transfer(supply_id)
+    row = _supplies(fbs)[0]
+    assert row["external_supply_id"] == "WB-GI-77"
+    assert calls["created"] == [row["doc_number"]]
+    assert calls["added"] == [("WB-GI-77", ["1001", "1002"])]
+    with get_connection() as conn:
+        shipped = conn.execute(
+            "SELECT COUNT(*) AS n FROM mp_orders WHERE id IN (?, ?) AND mp_shipped_at IS NOT NULL",
+            (a, b),
+        ).fetchone()["n"]
+    assert shipped == 2
+
+
+def test_transferred_supply_is_locked_for_cancel_and_edits(fbs):
+    """После передачи площадке состав зафиксирован: ни аннулировать, ни перевыбрать."""
+    keep = _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
+    _add_order(fbs, external_id="0192-2", deadline=_now() + timedelta(hours=5))
+    supply_id = _route(fbs)
+    _transfer(supply_id)
+    with get_connection() as conn:
+        for action in (
+            lambda: mp_service.cancel_supply(conn, supply_id, "u"),
+            lambda: mp_service.start_supply_correction(conn, supply_id, "u"),
+            lambda: mp_service.set_supply_orders(conn, supply_id, [keep], "u"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                action()
+            assert exc.value.status_code == 400
     assert _detail(supply_id)["doc"]["orders_total"] == 2
 
 
-def test_closed_intake_frees_the_wave(fbs):
-    """После закрытия приёма новый заказ той же волны заводит следующую поставку."""
-    cutoff = _now() + timedelta(minutes=10)  # приём (−30 мин) уже в прошлом
-    _add_order(fbs, external_id="0192-1", deadline=cutoff)
-    _route(fbs)
+def test_correction_reopens_the_choice_and_applies_it_as_a_whole(fbs):
+    """«Скорректировать» — тот же выбор галочками, что и при заведении: пока он
+    открыт, поставка стоит на «Корректировке» и не двигается; применяется целиком,
+    отмена возвращает прежний состав."""
+    cutoff = _now() + timedelta(hours=5)
+    first = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    second = _add_order(fbs, external_id="0192-2", deadline=cutoff)
+    supply_id = _route(fbs, [first])
     with get_connection() as conn:
+        mp_service.start_supply_correction(conn, supply_id, "u")
+        conn.commit()
+    row = _supplies(fbs)[0]
+    assert str(row["status"]) == MP_SUPPLY_STATUS_CORRECTING
+    assert row["correcting_at"] is not None
+    assert _free_pool_ids(fbs) == [second]
+    with get_connection() as conn:
+        for action in (
+            lambda: mp_service.advance_supply(conn, supply_id, "u"),
+            lambda: mp_service.transfer_supply_to_marketplace(conn, supply_id, "u"),
+            lambda: mp_service.apply_supply_correction(conn, supply_id, [], "u"),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                action()
+            assert exc.value.status_code == 400
+
+    with get_connection() as conn:
+        mp_service.discard_supply_correction(conn, supply_id, "u")
+        conn.commit()
+    assert str(_supplies(fbs)[0]["status"]) == MP_SUPPLY_STATUS_CHECKING
+    assert _detail(supply_id)["doc"]["orders_total"] == 1
+
+    with get_connection() as conn:
+        mp_service.start_supply_correction(conn, supply_id, "u")
+        stats = mp_service.apply_supply_correction(conn, supply_id, [second], "u")
+        conn.commit()
+    assert stats == {"selected": 1, "unselected": 1}
+    assert str(_supplies(fbs)[0]["status"]) == MP_SUPPLY_STATUS_CHECKING
+    detail = _detail(supply_id)
+    assert [o["order_id"] for o in detail["orders"] if o["state"] == "selected"] == [second]
+    assert _free_pool_ids(fbs) == [first]
+    with get_connection() as conn:
+        with pytest.raises(HTTPException):
+            mp_service.discard_supply_correction(conn, supply_id, "u")
+
+
+def test_correction_endpoints_are_for_the_manager(manager_client, warehouse_client, fbs):
+    _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
+    supply_id = _route(fbs)
+    assert warehouse_client.post(f"/marketplaces/supplies/{supply_id}/correct").status_code == 403
+    r = manager_client.post(f"/marketplaces/supplies/{supply_id}/correct")
+    assert r.status_code == 200, r.text
+    assert manager_client.get(f"/marketplaces/supplies/{supply_id}").json()["doc"]["status"] == (
+        MP_SUPPLY_STATUS_CORRECTING
+    )
+    r = manager_client.post(f"/marketplaces/supplies/{supply_id}/correct/discard")
+    assert r.status_code == 200, r.text
+    r = manager_client.post(f"/marketplaces/supplies/{supply_id}/transfer")
+    assert r.status_code == 200, r.text
+    doc = manager_client.get(f"/marketplaces/supplies/{supply_id}").json()["doc"]
+    assert doc["mp_transferred_at"] is not None
+    assert manager_client.post(f"/marketplaces/supplies/{supply_id}/cancel").status_code == 400
+
+
+def test_pool_is_analyzed_before_it_is_taken(fbs, manager_client):
+    """Пул приходит разобранным: состав и готовность видны до выбора."""
+    keep = _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
+    _add_order(fbs, external_id="0192-2", deadline=_now() + timedelta(hours=6), linked=False)
+    supply_id = _route(fbs, [keep])
+
+    r = manager_client.get(f"/marketplaces/supplies/pool?account_id={fbs['account_id']}")
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert [i["external_id"] for i in items] == ["0192-2"]
+    assert items[0]["summary"]
+    assert items[0]["blockers"] == ["unlinked"]
+
+    # Та же выборка в разрезе поставки — то, что она может добрать.
+    r = manager_client.get(f"/marketplaces/supplies/{supply_id}/candidates")
+    assert r.status_code == 200, r.text
+    assert [i["external_id"] for i in r.json()["items"]] == ["0192-2"]
+
+
+def test_unselected_order_returns_to_the_pool(fbs):
+    """Снятый галочкой заказ свободен: его возьмёт эта же или любая другая поставка."""
+    cutoff = _now() + timedelta(hours=5)
+    keep = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    drop = _add_order(fbs, external_id="0192-2", deadline=cutoff)
+    supply_id = _route(fbs)
+    with get_connection() as conn:
+        mp_service.set_supply_orders(conn, supply_id, [keep], "test-admin-id")
+        conn.commit()
+    assert _free_pool_ids(fbs) == [drop]
+
+    other = _route(fbs, [drop])
+    assert _detail(other)["doc"]["orders_total"] == 1
+    with get_connection() as conn:
+        assert mp_service.free_orders_pool(conn, account_id=fbs["account_id"]) == []
+
+
+def test_pool_order_docks_into_a_running_picking(fbs):
+    cutoff = _now() + timedelta(hours=5)
+    first = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    supply_id = _route(fbs, [first])
+    _transfer(supply_id)
+    with get_connection() as conn:
+        mp_service.advance_supply(conn, supply_id, "u")
+        conn.commit()
+    late = _add_order(fbs, external_id="0192-2", deadline=cutoff)
+    with get_connection() as conn:
+        assert mp_service.dock_supply_orders(conn, supply_id, [late], "u") == 1
+        conn.commit()
+    detail = _detail(supply_id)
+    assert detail["doc"]["orders_total"] == 2
+    assert _free_pool_ids(fbs) == []
+
+
+def test_closed_intake_stops_docking(fbs):
+    """После закрытия приёма состав не растёт — новый заказ берёт другая поставка."""
+    cutoff = _now() + timedelta(minutes=10)  # приём (−30 мин) уже в прошлом
+    first = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    supply_id = _route(fbs, [first])
+    _transfer(supply_id)
+    with get_connection() as conn:
+        mp_service.advance_supply(conn, supply_id, "u")
         assert mp_service.close_due_intakes(conn) == 1
         conn.commit()
-    _add_order(fbs, external_id="0192-2", deadline=cutoff)
-    stats = _route(fbs)
-    assert stats["supplies_created"] == 1
-    assert len(_supplies(fbs)) == 2
+    late = _add_order(fbs, external_id="0192-2", deadline=cutoff)
+    with get_connection() as conn:
+        with pytest.raises(HTTPException) as exc:
+            mp_service.dock_supply_orders(conn, supply_id, [late], "u")
+        assert exc.value.status_code == 400
+    assert _free_pool_ids(fbs) == [late]
+    assert _route(fbs, [late]) != supply_id
 
 
 def test_cancelled_order_leaves_supply_while_drafting(fbs):
     order_id = _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
-    _route(fbs)
+    supply_id = _route(fbs)
     with get_connection() as conn:
         conn.execute("UPDATE mp_orders SET status = ? WHERE id = ?",
                      (MP_ORDER_STATUS_CANCELLED, order_id))
         released = mp_service.release_cancelled_orders(conn)
         conn.commit()
     assert released == 1
-    assert _detail(str(_supplies(fbs)[0]["id"]))["doc"]["orders_total"] == 0
+    assert _detail(supply_id)["doc"]["orders_total"] == 0
+    assert _supplies(fbs)[0]["cutoff_at"] is None
 
 
 # ── Лист подбора и ячейки ─────────────────────────────────────────────────────
@@ -334,9 +589,6 @@ def test_shortage_blocks_advance_and_marks_orders(fbs):
     # Жадное распределение по дедлайну: остатка хватает ровно на один заказ.
     assert detail["doc"]["orders_ready"] == 1
     assert any(b["kind"] == "shortage" for b in detail["blockers"])
-    with get_connection() as conn:
-        mp_service.advance_supply(conn, supply_id, "test-admin-id")  # draft → checking
-        conn.commit()
     with pytest.raises(Exception) as exc:
         with get_connection() as conn:
             mp_service.advance_supply(conn, supply_id, "test-admin-id")
@@ -369,17 +621,17 @@ def test_excluding_problem_order_unblocks_the_supply(fbs):
 
 # ── Фазы ──────────────────────────────────────────────────────────────────────
 
-def test_phase_chain_and_intake_close_on_handover(fbs):
+def test_phase_chain_and_intake_close_on_packing(fbs):
     _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5), qty=2)
     _route(fbs)
     supply_id = str(_supplies(fbs)[0]["id"])
+    _transfer(supply_id)
     with get_connection() as conn:
-        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_CHECKING
         assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_PICKING
         # Сборка закрывается только полностью собранным составом — иначе
-        # «Собрано не всё» не пустит поставку в передачу.
+        # «Собрано не всё» не пустит поставку на упаковку.
         _pick(conn, fbs, supply_id, qty=2)
-        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_HANDOVER
+        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_PACKING
         conn.commit()
     row = _supplies(fbs)[0]
     assert row["intake_closed_at"] is not None
@@ -400,32 +652,38 @@ def test_empty_supply_cannot_advance(fbs):
 
 
 def test_pending_dock_blocks_handover(fbs):
+    """Строка дозагрузки от прежней автораскладки не даёт уехать, пока не разобрана."""
     cutoff = _now() + timedelta(hours=5)
-    _add_order(fbs, external_id="0192-1", deadline=cutoff)
-    _route(fbs)
-    supply_id = str(_supplies(fbs)[0]["id"])
+    first = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    supply_id = _route(fbs, [first])
+    _transfer(supply_id)
     with get_connection() as conn:
         mp_service.advance_supply(conn, supply_id, "u")
-        mp_service.advance_supply(conn, supply_id, "u")
         conn.commit()
-    _add_order(fbs, external_id="0192-late", deadline=cutoff)
-    _route(fbs)
+    late = _add_order(fbs, external_id="0192-late", deadline=cutoff)
+    with get_connection() as conn:
+        mp_service._attach_order(conn, supply_id, late, MP_SUPPLY_ORDER_PENDING)
+        conn.commit()
     with pytest.raises(Exception) as exc:
         with get_connection() as conn:
             mp_service.advance_supply(conn, supply_id, "u")
     assert "Дозагрузка не разобрана" in str(getattr(exc.value, "detail", exc.value))
 
+    with get_connection() as conn:
+        assert mp_service.dock_supply_orders(conn, supply_id, [late], "u") == 1
+        conn.commit()
+    assert _detail(supply_id)["doc"]["orders_pending"] == 0
 
-def test_cancel_releases_orders_to_the_next_supply(fbs):
+
+def test_cancel_releases_orders_back_to_the_pool(fbs):
     cutoff = _now() + timedelta(hours=5)
-    _add_order(fbs, external_id="0192-1", deadline=cutoff)
-    _route(fbs)
-    supply_id = str(_supplies(fbs)[0]["id"])
+    order_id = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    supply_id = _route(fbs)
     with get_connection() as conn:
         mp_service.cancel_supply(conn, supply_id, "u")
         conn.commit()
-    stats = _route(fbs)
-    assert stats["supplies_created"] == 1
+    assert _free_pool_ids(fbs) == [order_id]
+    assert _route(fbs) != supply_id
     assert len(_supplies(fbs)) == 2
 
 
@@ -446,6 +704,68 @@ def test_board_groups_by_supply_and_counts_blockers(manager_client, fbs):
     assert items[0]["overdue"] is False
 
 
+def test_board_shows_the_free_pool_with_deadline_alarm(manager_client, fbs):
+    """Пул — рабочая очередь доски: система ничего не собирает сама, но показывает, что горит."""
+    keep = _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=30))
+    _add_order(fbs, external_id="0192-2", deadline=_now() + timedelta(hours=2), qty=3)
+    _add_order(fbs, external_id="0192-3", deadline=_now() - timedelta(hours=1))
+    _route(fbs, [keep])
+
+    r = manager_client.get(f"/marketplaces/supplies/board?account_id={fbs['account_id']}")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["counters"]["free_orders"] == 2
+    pool = body["free_pool"][0]
+    assert pool["account_id"] == fbs["account_id"]
+    assert pool["orders_count"] == 2
+    assert pool["total_qty"] == 4
+    assert pool["overdue_count"] == 1
+    assert pool["urgent_count"] == 1
+
+
+def test_manual_supply_endpoint_takes_the_chosen_orders(manager_client, fbs):
+    cutoff = _now() + timedelta(hours=5)
+    mine = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    other = _add_order(fbs, external_id="0192-2", deadline=cutoff)
+
+    r = manager_client.post("/marketplaces/supplies", json={
+        "account_id": fbs["account_id"], "order_ids": [mine],
+    })
+    assert r.status_code == 200, r.text
+    supply_id = r.json()["message"]
+    selected = [o["order_id"] for o in _detail(supply_id)["orders"]
+                if o["state"] == MP_SUPPLY_ORDER_SELECTED]
+    assert selected == [mine]
+    assert _free_pool_ids(fbs) == [other]
+
+    # Второй поставке того же кабинета и той же волны ничего не мешает.
+    r = manager_client.post("/marketplaces/supplies", json={
+        "account_id": fbs["account_id"], "order_ids": [other],
+    })
+    assert r.status_code == 200, r.text
+    assert r.json()["message"] != supply_id
+    assert len(_supplies(fbs)) == 2
+
+
+def test_manual_supply_rejects_orders_of_another_supply(manager_client, fbs):
+    cutoff = _now() + timedelta(hours=5)
+    taken = _add_order(fbs, external_id="0192-1", deadline=cutoff)
+    _route(fbs, [taken])
+    r = manager_client.post("/marketplaces/supplies", json={
+        "account_id": fbs["account_id"], "order_ids": [taken],
+    })
+    assert r.status_code == 400
+    assert len(_supplies(fbs)) == 1
+
+
+def test_manual_supply_is_forbidden_for_warehouse(warehouse_client, fbs):
+    order_id = _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5))
+    r = warehouse_client.post("/marketplaces/supplies", json={
+        "account_id": fbs["account_id"], "order_ids": [order_id],
+    })
+    assert r.status_code == 403
+
+
 def test_board_is_forbidden_for_warehouse(warehouse_client, fbs):
     r = warehouse_client.get("/marketplaces/supplies/board")
     assert r.status_code == 403
@@ -459,7 +779,7 @@ def test_orders_list_shows_supply_and_no_supply_filter(manager_client, fbs):
     assert r.status_code == 200, r.text
     item = r.json()["items"][0]
     assert item["supply_number"].startswith("FBS-")
-    assert item["supply_status"] == MP_SUPPLY_STATUS_DRAFT
+    assert item["supply_status"] == MP_SUPPLY_STATUS_CHECKING
     r = manager_client.get(
         f"/marketplaces/orders?account_id={fbs['account_id']}&no_supply=true")
     assert r.json()["total"] == 0
@@ -469,8 +789,8 @@ def test_picking_supply_becomes_a_warehouse_task(warehouse_client, fbs):
     _add_order(fbs, external_id="0192-1", deadline=_now() + timedelta(hours=5), qty=2)
     _route(fbs)
     supply_id = str(_supplies(fbs)[0]["id"])
+    _transfer(supply_id)
     with get_connection() as conn:
-        mp_service.advance_supply(conn, supply_id, "u")
         mp_service.advance_supply(conn, supply_id, "u")
         conn.commit()
     r = warehouse_client.get("/tasks")
@@ -489,8 +809,8 @@ def _to_picking(fbs, *, qty: int = 2, orders: int = 1) -> str:
         _add_order(fbs, external_id=f"0192-p{i}", deadline=_now() + timedelta(hours=5), qty=qty)
     _route(fbs)
     supply_id = str(_supplies(fbs)[0]["id"])
+    _transfer(supply_id)
     with get_connection() as conn:
-        mp_service.advance_supply(conn, supply_id, "u")
         mp_service.advance_supply(conn, supply_id, "u")
         conn.commit()
     return supply_id
@@ -563,7 +883,7 @@ def test_pick_moves_stock_from_the_shelf_into_picked(fbs):
         conn.commit()
     assert res["picked_qty"] == 2 and res["remaining_qty"] == 0
     # Собранное ушло с полки: иначе соседняя волна увидела бы обещанный товар свободным.
-    assert _net(fbs, INV_OP_STORAGE, zone_id=fbs["cell_id"]) == 8
+    assert _net(fbs, MP_SUPPLY_PICK_OP, zone_id=fbs["cell_id"]) == 8
     assert _net(fbs, "picked") == 2
     row = _pick_row(fbs, supply_id)
     assert (row["picked_qty"], row["remaining_qty"]) == (2, 0)
@@ -588,7 +908,7 @@ def test_undo_returns_the_stock_to_its_cell(fbs):
     with get_connection() as conn:
         mp_service.undo_pick(conn, supply_id, res["pick_id"], "u", "admin")
         conn.commit()
-    assert _net(fbs, INV_OP_STORAGE, zone_id=fbs["cell_id"]) == 10
+    assert _net(fbs, MP_SUPPLY_PICK_OP, zone_id=fbs["cell_id"]) == 10
     assert _net(fbs, "picked") == 0
     assert _pick_row(fbs, supply_id)["picked_qty"] == 0
 
@@ -630,8 +950,27 @@ def test_dropping_a_stuck_order_unblocks_the_picking(fbs):
         mp_service.drop_supply_order(conn, supply_id, stuck["order_id"], "u")
         conn.commit()
     with get_connection() as conn:
-        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_HANDOVER
+        assert mp_service.advance_supply(conn, supply_id, "u") == MP_SUPPLY_STATUS_PACKING
         conn.commit()
+
+
+def _pack_and_handover(conn, fbs, supply_id: str) -> None:
+    """Упаковка и грузовое место без площадки: этикетка проставляется напрямую."""
+    order_id = str(conn.execute(
+        "SELECT order_id FROM mp_supply_orders WHERE supply_id = ?", (supply_id,),
+    ).fetchone()["order_id"])
+    mp_service.register_pack_scan(
+        conn, supply_id, order_id, code=fbs["barcode"], qty=2, user_id="u", role="admin",
+    )
+    mp_service.pack_order(conn, supply_id, order_id, "u", "admin")
+    conn.execute(
+        "UPDATE mp_orders SET label_url = '/uploads/x.pdf', label_barcode = external_id WHERE id = ?",
+        (order_id,),
+    )
+    mp_service.advance_supply(conn, supply_id, "u")
+    unit = mp_service.create_cargo_unit(conn, supply_id, "box", "u")
+    mp_service.add_order_to_cargo(conn, unit["id"], order_id, "u")
+    mp_service.close_cargo_unit(conn, unit["id"], "u")
 
 
 def test_handover_to_done_ships_the_picked_stock(fbs):
@@ -639,11 +978,12 @@ def test_handover_to_done_ships_the_picked_stock(fbs):
     with get_connection() as conn:
         _pick(conn, fbs, supply_id, qty=2)
         mp_service.advance_supply(conn, supply_id, "u")
+        _pack_and_handover(conn, fbs, supply_id)
         mp_service.advance_supply(conn, supply_id, "u")
         conn.commit()
     assert _net(fbs, "picked") == 0
     assert _net(fbs, "shipped") == 2
-    assert _net(fbs, INV_OP_STORAGE) == 8
+    assert _net(fbs, MP_SUPPLY_PICK_OP) == 8
 
 
 def test_picked_stock_is_not_offered_to_the_next_wave(fbs):
@@ -687,7 +1027,7 @@ def _boxed(fbs, qty: int) -> str:
             product_id=fbs["product_id"], product_name="Худи оверсайз", product_sku=None,
             color_id=None, color_name=None, size_id=None, size_name=None,
             client_id=fbs["client_id"], client_name="Test Client",
-            from_op=INV_OP_STORAGE, to_op=INV_OP_STORAGE,
+            from_op=MP_SUPPLY_PICK_OP, to_op=MP_SUPPLY_PICK_OP,
             from_quality=INV_Q_GOOD, to_quality=INV_Q_GOOD,
             from_zone_id=fbs["cell_id"], from_zone_name=fbs["cell_name"],
             to_zone_id=fbs["cell_id"], to_zone_name=fbs["cell_name"],

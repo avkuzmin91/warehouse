@@ -4,6 +4,8 @@
  */
 import { request, requestBlob, requestForm } from './http'
 import type {
+  BarcodeLabelRequestItem,
+  BarcodeLabelsResponse,
   ClientStoreItem,
   DictionaryItem,
   DictionaryListQueryParams,
@@ -150,7 +152,13 @@ export function setUnloadingZoneShipping(id: string) {
 
 export function createSimpleDictionaryItem(
   apiPath: string,
-  payload: { name: string; is_active: boolean; color_hex?: string | null; rent_monthly_kopecks?: number | null },
+  payload: {
+    name: string
+    is_active: boolean
+    color_hex?: string | null
+    rent_monthly_kopecks?: number | null
+    sort_order?: number | null
+  },
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(path, {
@@ -162,12 +170,46 @@ export function createSimpleDictionaryItem(
 export function updateSimpleDictionaryItem(
   apiPath: string,
   id: string,
-  payload: { name?: string; is_active?: boolean; color_hex?: string | null; rent_monthly_kopecks?: number | null },
+  payload: {
+    name?: string
+    is_active?: boolean
+    color_hex?: string | null
+    rent_monthly_kopecks?: number | null
+    sort_order?: number | null
+    clear_sort_order?: boolean
+  },
 ) {
   const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
   return request<{ message: string }>(`${path}/${id}`, {
     method: 'PATCH',
     body: JSON.stringify(payload),
+  })
+}
+
+export type DictionaryBulkCreateResponse = {
+  message: string
+  created: number
+  skipped: string[]
+}
+
+/** Заводит ряд значений одним запросом; sort_order продолжает нумерацию справочника. */
+export function bulkCreateDictionaryItems(
+  apiPath: string,
+  payload: { names: string[]; is_active: boolean; requires_size?: boolean },
+) {
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  return request<DictionaryBulkCreateResponse>(`${path}/bulk`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Новый порядок значений справочника; sort_order проставляет backend по позициям. */
+export function reorderDictionaryItems(apiPath: string, ids: string[]) {
+  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`
+  return request<{ message: string }>(`${path}/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
   })
 }
 
@@ -201,6 +243,7 @@ export function createProductType(payload: {
   is_active: boolean
   requires_color: boolean
   requires_size: boolean
+  sort_order?: number | null
 }) {
   return request<{ message: string }>('/product-types', {
     method: 'POST',
@@ -215,6 +258,8 @@ export function updateProductType(
     is_active?: boolean
     requires_color?: boolean
     requires_size?: boolean
+    sort_order?: number | null
+    clear_sort_order?: boolean
   },
 ) {
   return request<{ message: string }>(`/product-types/${id}`, {
@@ -441,6 +486,19 @@ export function deleteProductBarcodeFile(productId: string, barcodeId: string, f
 // Плоский список этикеток товара — для выбора в документах (читается складскими ролями).
 export function getProductFiles(productId: string, signal?: AbortSignal) {
   return request<ProductFileItem[]>(`/products/${productId}/files`, { signal })
+}
+
+// Печатные формы ШК по цифрам кода: площадки отдают только цифры, картинку рисует
+// backend на каждый запрос печати и нигде не хранит.
+export function getBarcodeLabels(
+  items: BarcodeLabelRequestItem[],
+  opts: { allCodes?: boolean; signal?: AbortSignal } = {},
+) {
+  return request<BarcodeLabelsResponse>('/products/barcode-labels', {
+    method: 'POST',
+    body: JSON.stringify({ items, all_codes: opts.allCodes ?? false }),
+    signal: opts.signal,
+  })
 }
 
 export function uploadProductDictionaryImage(file: File) {

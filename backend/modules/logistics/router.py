@@ -88,7 +88,7 @@ from modules.expenses.service import (
     upsert_trip_logistics_expense,
 )
 from security import can_view_costs, ensure_cost_access, ensure_received_correction_access, is_admin
-from utils import now_iso as _now
+from utils import now_iso as _now, size_order_sql
 
 router = APIRouter(tags=["logistics"])
 
@@ -322,7 +322,7 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 (trip_id,),
             ).fetchall()
             alloc_rows = conn.execute(
-                """
+                f"""
                 SELECT ta.trip_line_id, ta.qty,
                        sl.id AS dispatch_line_id,
                        COALESCE(NULLIF(sl.product_sku, ''), p.sku) AS product_sku,
@@ -332,8 +332,10 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 JOIN trip_lines l ON l.id = ta.trip_line_id
                 JOIN dispatch_lines sl ON sl.id = ta.dispatch_line_id
                 LEFT JOIN products p ON p.id = sl.product_id
+                LEFT JOIN sizes sz ON sz.id = sl.size_id
                 WHERE l.trip_id = ? AND COALESCE(ta.is_deleted, 0) = 0 AND l.is_deleted = 0
-                ORDER BY sl.product_sku
+                ORDER BY product_sku, product_name, sl.color_name NULLS FIRST,
+                         {size_order_sql('sz.sort_order', 'sl.size_name')}, sl.id
                 """,
                 (trip_id,),
             ).fetchall()
@@ -350,19 +352,22 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 (trip_id,),
             ).fetchall()
             recv_alloc_rows = conn.execute(
-                """
+                f"""
                 SELECT ta.trip_line_id, ta.qty,
                        rl.id AS receipt_line_id,
                        COALESCE(NULLIF(rl.product_sku, ''), p.sku) AS product_sku,
                        COALESCE(NULLIF(rl.product_name, ''), p.name) AS product_name,
                        rl.color_name, rl.size_name, rl.planned_qty, rl.accepted_qty,
-                       rl.storage_zone_id, rl.storage_zone_name
+                       rl.storage_zone_id, rl.storage_zone_name,
+                       rl.product_id, rl.color_id, rl.size_id
                 FROM trip_alloc ta
                 JOIN trip_lines l ON l.id = ta.trip_line_id
                 JOIN receipt_lines rl ON rl.id = ta.receipt_line_id
                 LEFT JOIN products p ON p.id = rl.product_id
+                LEFT JOIN sizes sz ON sz.id = rl.size_id
                 WHERE l.trip_id = ? AND COALESCE(ta.is_deleted, 0) = 0 AND l.is_deleted = 0
-                ORDER BY rl.product_sku
+                ORDER BY product_sku, product_name, rl.color_name NULLS FIRST,
+                         {size_order_sql('sz.sort_order', 'rl.size_name')}, rl.id
                 """,
                 (trip_id,),
             ).fetchall()
@@ -406,6 +411,9 @@ def get_trip(trip_id: str, user=Depends(get_current_manager)):
                 product_sku=a["product_sku"],
                 product_name=a["product_name"],
                 variant=variant,
+                product_id=str(a["product_id"]) if a["product_id"] else None,
+                color_id=str(a["color_id"]) if a["color_id"] else None,
+                size_id=str(a["size_id"]) if a["size_id"] else None,
                 qty=int(a["qty"] or 0),
                 planned_qty=int(a["planned_qty"] or 0),
                 accepted_qty=int(a["accepted_qty"] or 0),

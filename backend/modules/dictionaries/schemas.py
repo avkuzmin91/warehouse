@@ -11,6 +11,7 @@ class DictionaryBaseItem(BaseModel):
     is_packing_zone: bool = False
     is_shipping_zone: bool = False
     is_active: bool
+    sort_order: int | None = None
     is_deleted: bool = False
     deleted_at: str | None = None
     deleted_by: str | None = None
@@ -30,6 +31,28 @@ class DictionaryCreateRequest(BaseModel):
     color_hex: str | None = None
     rent_monthly_kopecks: int | None = Field(default=None, ge=0)
     is_active: bool = False
+    sort_order: int | None = None
+
+
+class DictionaryBulkCreateRequest(BaseModel):
+    """Заведение ряда значений одним действием (размерная сетка, список должностей)."""
+
+    names: list[str] = Field(min_length=1, max_length=200)
+    is_active: bool = True
+    # Только для product_types — как color_hex/rent у одиночного создания
+    requires_size: bool = False
+
+
+class DictionaryReorderRequest(BaseModel):
+    """Новый порядок значений: система сама проставит sort_order по позициям."""
+
+    ids: list[str] = Field(min_length=1, max_length=1000)
+
+
+class DictionaryBulkCreateResponse(BaseModel):
+    message: str
+    created: int
+    skipped: list[str] = []
 
 
 class DictionaryUpdateRequest(BaseModel):
@@ -38,6 +61,9 @@ class DictionaryUpdateRequest(BaseModel):
     rent_monthly_kopecks: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
     is_deleted: bool | None = None
+    sort_order: int | None = None
+    # sort_order=None в PATCH означает «не менять»; сброс порядка — отдельным флагом
+    clear_sort_order: bool = False
 
 
 class ClientStoreItem(BaseModel):
@@ -78,6 +104,7 @@ class ProductTypeCreateRequest(BaseModel):
     is_active: bool = False
     requires_color: bool = False
     requires_size: bool = False
+    sort_order: int | None = None
 
 
 class ProductTypeUpdateRequest(BaseModel):
@@ -86,6 +113,8 @@ class ProductTypeUpdateRequest(BaseModel):
     is_deleted: bool | None = None
     requires_color: bool | None = None
     requires_size: bool | None = None
+    sort_order: int | None = None
+    clear_sort_order: bool = False
 
 
 class SizeItem(BaseModel):

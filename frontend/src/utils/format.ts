@@ -40,6 +40,24 @@ export function fmtDateTime(s: string): string {
   return parseMoscow(s).toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: MOSCOW_TZ })
 }
 
+/**
+ * Длительность в мс → компактное "4 ч 20 мин" / "3 дн" / "5 мин".
+ *
+ * Монитору нужен запас времени, а не момент: "через 4 ч" читается без счёта в
+ * уме, "06 сент., 17:31" — нет. Знак не выводится, направление ("через" /
+ * "просрочен на") задаёт вызывающий.
+ */
+export function fmtDurationShort(ms: number): string {
+  const total = Math.floor(Math.abs(ms) / 60000)
+  if (total < 1) return 'меньше минуты'
+  const days = Math.floor(total / 1440)
+  const hours = Math.floor((total % 1440) / 60)
+  const minutes = total % 60
+  if (days > 0) return hours > 0 ? `${days} дн ${hours} ч` : `${days} дн`
+  if (hours > 0) return minutes > 0 ? `${hours} ч ${minutes} мин` : `${hours} ч`
+  return `${minutes} мин`
+}
+
 /** YYYY-MM-DD → DD-MM-YYYY (без локали, фиксированный формат). */
 export function fmtYmdAsDmy(value: string | null): string {
   if (!value) return '—'

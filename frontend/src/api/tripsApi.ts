@@ -71,6 +71,10 @@ export type TripReceiptAlloc = {
   product_sku: string | null
   product_name: string | null
   variant: string | null
+  // Ключ варианта — по нему приёмка печатает этикетки ШК на принятое.
+  product_id: string | null
+  color_id: string | null
+  size_id: string | null
   qty: number          // привозит этот рейс
   planned_qty: number  // план по строке
   accepted_qty: number // принято всего (по всем рейсам)

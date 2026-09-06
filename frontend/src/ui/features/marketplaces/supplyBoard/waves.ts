@@ -1,4 +1,4 @@
-import type { MpSupplyBoardItem } from '../../../../api/marketplacesApi'
+import type { MpSupplyBoardItem, MpSupplyOrderItem } from '../../../../api/marketplacesApi'
 import { parseMoscow } from '../../../../utils/format'
 
 /** Волна = отсечка площадки. Верхний уровень доски — время, а не алфавит:
@@ -72,4 +72,15 @@ export function groupIntoWaves(items: MpSupplyBoardItem[]): SupplyWave[] {
     waves.unshift({ key: 'overdue', title: 'Просрочено', late: true, items: late })
   }
   return waves
+}
+
+
+/** Дедлайн — то, за что менеджер отвечает: из самого раннего считается отсечка
+ *  поставки. Поэтому порядок один и тот же везде, где заказы выбирают, и после
+ *  сохранения строки не прыгают под курсором. */
+export function sortOrders(orders: MpSupplyOrderItem[]): MpSupplyOrderItem[] {
+  return [...orders].sort((a, b) => (
+    (a.deadline_at ?? '9999').localeCompare(b.deadline_at ?? '9999')
+    || a.external_id.localeCompare(b.external_id)
+  ))
 }

@@ -1,17 +1,33 @@
 import { useState, useEffect, useCallback } from 'react'
-import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
 import {
   fetchSimpleDictionaryPage,
   fetchProductTypesPage,
   getSizes,
+  reorderDictionaryItems,
 } from '../../../api/adminApi'
 import type { DictionaryItem, ProductTypeDictionaryItem, SizeItem } from '../../../api/domainTypes'
 import type { DictionaryTypeId } from './types'
 import { Icon } from '../../primitives/Icon'
 import { Badge } from '../../primitives/Badge'
-import { Checkbox } from '../../primitives/Checkbox'
-import { Avatar, getInitials } from '../../primitives/Avatar'
 import { EmptyState } from '../../primitives/EmptyState'
+import { useToast } from '../../feedback/Toast'
+import { reorderByDrag } from './reorderByDrag'
+
+/** Пути API простых справочников. */
+const SIMPLE_DICT_PATHS: Partial<Record<DictionaryTypeId, string>> = {
+  sizes: '/sizes',
+  'product-types': '/product-types',
+  colors: '/colors',
+  suppliers: '/suppliers',
+  warehouses: '/warehouses',
+  'own-warehouses': '/own-warehouses',
+  carriers: '/carriers',
+  'vehicle-types': '/vehicle-types',
+  positions: '/positions',
+  reasons: '/defect-reasons',
+}
+
+type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
 
 function isPackingZone(item: AnyDictItem): boolean {
   return 'is_packing_zone' in item && !!item.is_packing_zone
@@ -21,19 +37,11 @@ function isShippingZone(item: AnyDictItem): boolean {
   return 'is_shipping_zone' in item && !!item.is_shipping_zone
 }
 
-type AnyDictItem = DictionaryItem | ProductTypeDictionaryItem | SizeItem
-
 interface SimpleDictProps {
   typeId: DictionaryTypeId
   title: string
   refreshKey: number
   onEdit: (item: AnyDictItem) => void
-}
-
-function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = parseMoscow(iso)
-  return d.toLocaleDateString('ru', { day: 'numeric', month: 'short', timeZone: MOSCOW_TZ })
 }
 
 function itemRentKopecks(item: AnyDictItem): number | null {
@@ -56,6 +64,13 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit }: SimpleDictProp
   const [loading, setLoading] = useState(true)
   const [loadedOnce, setLoadedOnce] = useState(false)
   const [search, setSearch] = useState('')
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+  const toast = useToast()
+
+  // Перетаскивание переставляет значения относительно всего справочника, поэтому
+  // при поиске оно недоступно: видна выборка, а не порядок.
+  const canReorder = search.trim() === ''
 
   const load = useCallback(async (q: string) => {
     setLoading(true)
@@ -66,33 +81,15 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit }: SimpleDictProp
       } else if (typeId === 'sizes') {
         const res = await getSizes({ page: 1, limit: 100, name: q || undefined })
         setItems(res.items)
-      } else if (typeId === 'colors') {
-        const res = await fetchSimpleDictionaryPage('/colors', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'suppliers') {
-        const res = await fetchSimpleDictionaryPage('/suppliers', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'warehouses') {
-        const res = await fetchSimpleDictionaryPage('/warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'own-warehouses') {
-        const res = await fetchSimpleDictionaryPage('/own-warehouses', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'carriers') {
-        const res = await fetchSimpleDictionaryPage('/carriers', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'vehicle-types') {
-        const res = await fetchSimpleDictionaryPage('/vehicle-types', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'positions') {
-        const res = await fetchSimpleDictionaryPage('/positions', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
-      } else if (typeId === 'reasons') {
-        const res = await fetchSimpleDictionaryPage('/defect-reasons', 'name', { page: 1, limit: 100, name: q || undefined })
-        setItems(res.items)
       } else {
-        // Fallback for unknown simple types — should not reach here (those get EmptyState at page level)
-        setItems([])
+        const path = SIMPLE_DICT_PATHS[typeId]
+        if (!path) {
+          // Fallback for unknown simple types — should not reach here (those get EmptyState at page level)
+          setItems([])
+        } else {
+          const res = await fetchSimpleDictionaryPage(path, 'name', { page: 1, limit: 100, name: q || undefined })
+          setItems(res.items)
+        }
       }
       setLoadedOnce(true)
     } catch {
@@ -110,6 +107,33 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit }: SimpleDictProp
     const timer = setTimeout(() => load(search), 250)
     return () => clearTimeout(timer)
   }, [search, load, refreshKey])
+
+  const dropOn = async (targetId: string) => {
+    const sourceId = dragId
+    setDragId(null)
+    setOverId(null)
+    if (!sourceId || sourceId === targetId) return
+    const next = reorderByDrag(items, sourceId, targetId)
+    if (next === items) return
+    setItems(next)
+    const path = SIMPLE_DICT_PATHS[typeId]
+    if (!path) return
+    try {
+      await reorderDictionaryItems(path, next.map((i) => i.id))
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось сохранить порядок', 'error')
+    } finally {
+      await load(search)
+    }
+  }
+
+  const dragIndex = dragId ? items.findIndex((i) => i.id === dragId) : -1
+  const overIndex = overId ? items.findIndex((i) => i.id === overId) : -1
+
+  const dropClass = (id: string) => {
+    if (!dragId || dragId === id || overId !== id || dragIndex < 0 || overIndex < 0) return ''
+    return dragIndex > overIndex ? 'dict-row-drop-before' : 'dict-row-drop-after'
+  }
 
   return (
     <div className="t-wrap">
@@ -131,33 +155,35 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit }: SimpleDictProp
       <table className="t">
         <thead>
           <tr>
-            <th style={{ width: 30 }}>
-              {/* TODO: реализовать массовые действия */}
-              <Checkbox checked={false} onChange={() => {}} />
-            </th>
             <th>{title}</th>
-            <th style={{ width: 130 }}>Создано</th>
-            <th style={{ width: 150 }}>Кем</th>
-            <th style={{ width: 100 }}>Статус</th>
-            <th style={{ width: 30 }}></th>
+            <th style={{ width: 110 }} title="Перетащите строку за ручку — номер проставится сам.">Порядок</th>
+            <th style={{ width: 110 }}>Статус</th>
           </tr>
         </thead>
         <tbody>
           {loading && !loadedOnce ? (
-            <tr><td colSpan={6} style={{ textAlign: 'center', padding: 24 }}>
+            <tr><td colSpan={3} style={{ textAlign: 'center', padding: 24 }}>
               <span className="text-sm muted">Загрузка…</span>
             </td></tr>
           ) : items.length === 0 ? (
-            <tr><td colSpan={6} style={{ padding: 32 }}>
+            <tr><td colSpan={3} style={{ padding: 32 }}>
               <EmptyState title="Нет записей" sub="Нажмите «Создать запись» чтобы добавить первую" />
             </td></tr>
           ) : (
-            items.map((item) => (
-              <tr key={item.id} onClick={() => onEdit(item)} style={{ cursor: 'pointer' }}>
-                <td onClick={(e) => e.stopPropagation()}>
-                  {/* TODO: реализовать массовые действия */}
-                  <Checkbox checked={false} onChange={() => {}} />
-                </td>
+            items.map((item, index) => (
+              <tr
+                key={item.id}
+                onClick={() => onEdit(item)}
+                className={`${dragId === item.id ? 'dict-row-dragging' : ''} ${dropClass(item.id)}`.trim()}
+                style={{ cursor: 'pointer' }}
+                onDragOver={(e) => {
+                  if (!dragId) return
+                  e.preventDefault()
+                  e.dataTransfer.dropEffect = 'move'
+                  setOverId(item.id)
+                }}
+                onDrop={(e) => { e.preventDefault(); void dropOn(item.id) }}
+              >
                 <td style={{ fontWeight: 450 }}>
                   {typeId === 'colors' ? (
                     <div className="row gap-8">
@@ -186,21 +212,29 @@ export function SimpleDict({ typeId, title, refreshKey, onEdit }: SimpleDictProp
                     </span>
                   )}
                 </td>
-                <td className="text-sm muted">{formatDate(item.created_at)}</td>
-                <td>
-                  <div className="row gap-8">
-                    {item.created_by
-                      ? <><Avatar initials={getInitials(item.created_by)} /><span className="text-sm">{item.created_by}</span></>
-                      : <span className="faint text-sm">—</span>}
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="dict-order-cell">
+                    <span
+                      className={`dict-order-grip${canReorder ? '' : ' disabled'}`}
+                      draggable={canReorder}
+                      title={canReorder ? 'Перетащите, чтобы изменить порядок' : 'Порядок меняется без поиска'}
+                      onDragStart={(e) => {
+                        // Firefox не начинает перетаскивание без данных в dataTransfer
+                        e.dataTransfer.setData('text/plain', item.id)
+                        e.dataTransfer.effectAllowed = 'move'
+                        setDragId(item.id)
+                      }}
+                      onDragEnd={() => { setDragId(null); setOverId(null) }}
+                    >
+                      <Icon name="menu" size={13} />
+                    </span>
+                    <span className="dict-order-value">{index + 1}</span>
                   </div>
                 </td>
                 <td>
                   <Badge tone={item.is_active ? 'success' : ''} dot>
                     {item.is_active ? 'Активно' : 'Архив'}
                   </Badge>
-                </td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  <button className="btn ghost icon sm"><Icon name="more" size={14} /></button>
                 </td>
               </tr>
             ))

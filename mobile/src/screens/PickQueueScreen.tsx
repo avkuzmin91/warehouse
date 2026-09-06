@@ -19,7 +19,7 @@ import { fmtDateTime } from '../utils/format'
  * вместо кнопки: две поставки одновременно один человек не носит.
  */
 export function PickQueueScreen() {
-  const { openSupplyPick } = useNav()
+  const { openSupplyPick, openSupplyPack } = useNav()
   const [queue, setQueue] = useState(0)
   const [mine, setMine] = useState<MpSupplyPickView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -45,6 +45,10 @@ export function PickQueueScreen() {
     void load(ac.signal)
     return () => ac.abort()
   }, [load])
+
+  const openMine = (id: string, status: string) => (
+    status === 'packing' ? openSupplyPack(id) : openSupplyPick(id)
+  )
 
   async function onClaim() {
     setBusy(true)
@@ -76,7 +80,7 @@ export function PickQueueScreen() {
             {mine ? (
               <>
                 <div className="sec">Ваша сборка</div>
-                <button className="tile" onClick={() => openSupplyPick(mine.id)}>
+                <button className="tile" onClick={() => openMine(mine.id, mine.status)}>
                   <div className="tile-ico blue"><Icon name="boxes" size={21} /></div>
                   <div className="tile-body">
                     <div className="tile-title">{mine.doc_number}</div>
@@ -85,7 +89,7 @@ export function PickQueueScreen() {
                       {mine.client_name ? ` · ${mine.client_name}` : ''}
                     </div>
                     <div className="tile-meta">
-                      Собрано {mine.picked_qty} из {mine.need_qty} шт.
+                      {mine.status === 'packing' ? 'Упаковка заказов' : `Собрано ${mine.picked_qty} из ${mine.need_qty} шт.`}
                       {mine.cutoff_at ? ` · отсечка ${fmtDateTime(mine.cutoff_at, '')}` : ''}
                     </div>
                   </div>
@@ -113,8 +117,8 @@ export function PickQueueScreen() {
                 </div>
               )}
               {mine ? (
-                <button className="btn" onClick={() => openSupplyPick(mine.id)}>
-                  <Icon name="qr" size={18} /> Продолжить сборку
+                <button className="btn" onClick={() => openMine(mine.id, mine.status)}>
+                  <Icon name="qr" size={18} /> {mine.status === 'packing' ? 'Продолжить упаковку' : 'Продолжить сборку'}
                 </button>
               ) : (
                 <button className="btn" disabled={busy || queue === 0} onClick={() => { void onClaim() }}>

@@ -276,7 +276,7 @@ function LinesTable({ lines, qty, setQty, query }: {
     <table className="lt">
       <thead>
         <tr>
-          <th style={{ width: 104 }}>SKU</th>
+          <th style={{ width: 148 }}>SKU</th>
           <th>Наименование</th>
           <th style={{ width: 150 }}>Вариант</th>
           {hasStore && <th style={{ width: 150 }}>Магазин</th>}
@@ -295,8 +295,8 @@ function LinesTable({ lines, qty, setQty, query }: {
           const disabled = st === 'distributed'
           return (
             <tr key={l.line_id} className={`${groupStart ? 'group-start' : ''} ${st === 'over' ? 'is-over' : ''} ${disabled ? 'is-done' : ''}`}>
-              <td><span className={`c-sku${groupStart ? '' : ' dim'}`}>{l.sku}</span></td>
-              <td><span className={`c-name${groupStart ? '' : ' dim'}`}>{l.name}</span></td>
+              <td><span className={`c-sku${groupStart ? '' : ' dim'}`} title={l.sku ?? ''}>{l.sku}</span></td>
+              <td><span className={`c-name${groupStart ? '' : ' dim'}`} title={l.name ?? ''}>{l.name}</span></td>
               <td>{l.variant && <span className="var-chip"><span className="var-sw" style={{ background: colorSwatch(l.color) }} />{l.variant}</span>}</td>
               {hasStore && <td>{l.store ? <span className="c-name">{l.store}</span> : <span className="subtle">—</span>}</td>}
               <td className="c-num">{l.plan}</td>
@@ -545,7 +545,7 @@ function PreviewPane({ doc, lines, onAdd, lex }: {
               <table className="lt">
                 <thead>
                   <tr>
-                    <th style={{ width: 104 }}>SKU</th>
+                    <th style={{ width: 148 }}>SKU</th>
                     <th>Наименование</th>
                     <th style={{ width: 150 }}>Вариант</th>
                     {hasStore && <th style={{ width: 150 }}>Магазин</th>}
@@ -560,8 +560,8 @@ function PreviewPane({ doc, lines, onAdd, lex }: {
                     prevKey = key
                     return (
                       <tr key={l.line_id} className={groupStart ? 'group-start' : ''}>
-                        <td><span className={`c-sku${groupStart ? '' : ' dim'}`}>{l.sku}</span></td>
-                        <td><span className={`c-name${groupStart ? '' : ' dim'}`}>{l.name}</span></td>
+                        <td><span className={`c-sku${groupStart ? '' : ' dim'}`} title={l.sku ?? ''}>{l.sku}</span></td>
+                        <td><span className={`c-name${groupStart ? '' : ' dim'}`} title={l.name ?? ''}>{l.name}</span></td>
                         <td>{l.variant && <span className="var-chip"><span className="var-sw" style={{ background: colorSwatch(l.color) }} />{l.variant}</span>}</td>
                         {hasStore && <td>{l.store ? <span className="c-name">{l.store}</span> : <span className="subtle">—</span>}</td>}
                         <td className="c-num">{l.plan}</td>

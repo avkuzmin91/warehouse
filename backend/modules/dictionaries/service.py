@@ -9,6 +9,8 @@ from psycopg import IntegrityError
 from config import (
     DICTIONARY_TABLES,
     CLIENT_LIST_SORT_COLUMNS,
+    DICTIONARY_ORDER_SQL,
+    DICTIONARY_SORTABLE_TABLES,
     SIZE_LIST_SORT_COLUMNS,
     COLOR_LIST_SORT_COLUMNS,
 )
@@ -16,6 +18,9 @@ from dbconn import escape_like, get_connection
 
 from .schemas import (
     ClientStoreCreateRequest,
+    DictionaryBulkCreateRequest,
+    DictionaryBulkCreateResponse,
+    DictionaryReorderRequest,
     ClientStoreItem,
     ClientStoreUpdateRequest,
     DictionaryBaseItem,
@@ -39,6 +44,10 @@ from utils import now_iso as _now
 def _ensure_dictionary_table(table_name: str) -> None:
     if table_name not in DICTIONARY_TABLES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Недопустимый справочник")
+
+
+def _sort_order_sql(table_name: str) -> str:
+    return "d.sort_order" if table_name in DICTIONARY_SORTABLE_TABLES else "NULL AS sort_order"
 
 
 def _normalize_name(name: str) -> str:
@@ -123,6 +132,7 @@ def _dict_row_to_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
         is_packing_zone=bool(row.get("is_packing_zone") or 0),
         is_shipping_zone=bool(row.get("is_shipping_zone") or 0),
         is_active=bool(row["is_active"]),
+        sort_order=row.get("sort_order"),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
         deleted_by=row["deleted_by"],
@@ -173,6 +183,7 @@ def _product_type_row_to_item(row: Mapping[str, Any]) -> ProductTypeDictionaryIt
         id=row["id"],
         name=row["name"],
         is_active=bool(row["is_active"]),
+        sort_order=row.get("sort_order"),
         is_deleted=bool(row["is_deleted"]),
         deleted_at=row["deleted_at"],
         deleted_by=row["deleted_by"],
@@ -191,11 +202,12 @@ def get_dictionary_item(table_name: str, item_id: str, *, include_deleted: bool 
     _ensure_dictionary_table(table_name)
     color_hex_sql = "d.color_hex" if table_name == "colors" else "NULL AS color_hex"
     rent_sql = "d.rent_monthly_kopecks" if table_name == "own_warehouses" else "NULL AS rent_monthly_kopecks"
+    sort_order_sql = _sort_order_sql(table_name)
     with get_connection() as connection:
         row = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
-                   {color_hex_sql}, {rent_sql},
+                   {color_hex_sql}, {rent_sql}, {sort_order_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM {table_name} d
@@ -222,14 +234,16 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
         try:
             if table_name == "colors":
                 connection.execute(
-                    "INSERT INTO colors (id, name, color_hex, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                    (item_id, name, color_hex, 1 if payload.is_active else 0, _now(), creator_id),
+                    "INSERT INTO colors (id, name, color_hex, is_active, sort_order, created_at, creator_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (item_id, name, color_hex, 1 if payload.is_active else 0, payload.sort_order, _now(), creator_id),
                 )
             elif table_name == "own_warehouses":
                 now = _now()
                 connection.execute(
-                    "INSERT INTO own_warehouses (id, name, rent_monthly_kopecks, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?, ?)",
-                    (item_id, name, payload.rent_monthly_kopecks, 1 if payload.is_active else 0, now, creator_id),
+                    "INSERT INTO own_warehouses (id, name, rent_monthly_kopecks, is_active, sort_order, created_at, creator_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (item_id, name, payload.rent_monthly_kopecks, 1 if payload.is_active else 0, payload.sort_order, now, creator_id),
                 )
                 # Стартовая ставка → запись в effective-dated истории (источник правды
                 # для начислений аренды); колонка выше остаётся кэшем «на сегодня».
@@ -240,6 +254,12 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
                         "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         (str(uuid4()), item_id, int(payload.rent_monthly_kopecks), now[:10], None, now, creator_id),
                     )
+            elif table_name in DICTIONARY_SORTABLE_TABLES:
+                connection.execute(
+                    f"INSERT INTO {table_name} (id, name, is_active, sort_order, created_at, creator_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (item_id, name, 1 if payload.is_active else 0, payload.sort_order, _now(), creator_id),
+                )
             else:
                 connection.execute(
                     f"INSERT INTO {table_name} (id, name, is_active, created_at, creator_id) VALUES (?, ?, ?, ?, ?)",
@@ -252,6 +272,119 @@ def create_dictionary_item(table_name: str, payload: DictionaryCreateRequest, cr
                 detail="Запись с таким названием уже существует",
             ) from exc
     return MessageResponse(message="Создано")
+
+
+def create_dictionary_items_bulk(
+    table_name: str, payload: DictionaryBulkCreateRequest, creator_id: str
+) -> DictionaryBulkCreateResponse:
+    """Заводит список значений одним действием, продолжая нумерацию sort_order.
+
+    Каждое значение пишется отдельной транзакцией: занятое имя не должно
+    отменять весь ряд — оно попадает в «пропущено», остальные создаются.
+    """
+    _ensure_dictionary_table(table_name)
+    names: list[str] = []
+    seen: set[str] = set()
+    for raw in payload.names:
+        value = str(raw).strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(value)
+    if not names:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не указано ни одного значения")
+
+    sortable = table_name in DICTIONARY_SORTABLE_TABLES
+    created = 0
+    skipped: list[str] = []
+    with get_connection() as connection:
+        next_order = None
+        if sortable:
+            row = connection.execute(f"SELECT MAX(sort_order) AS mx FROM {table_name}").fetchone()
+            next_order = int(row["mx"] or 0) + 10
+        for value in names:
+            item_id = str(uuid4())
+            now = _now()
+            try:
+                if table_name == "product_types":
+                    connection.execute(
+                        "INSERT INTO product_types "
+                        "(id, name, is_active, requires_color, requires_size, sort_order, created_at, creator_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            # requires_color=1 — как в create_product_type: заведение
+                            # пачкой не должно давать типы с другими атрибутами
+                            item_id, value, 1 if payload.is_active else 0, 1,
+                            1 if payload.requires_size else 0,
+                            next_order, now, creator_id,
+                        ),
+                    )
+                elif sortable:
+                    connection.execute(
+                        f"INSERT INTO {table_name} (id, name, is_active, sort_order, created_at, creator_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        (item_id, value, 1 if payload.is_active else 0, next_order, now, creator_id),
+                    )
+                else:
+                    connection.execute(
+                        f"INSERT INTO {table_name} (id, name, is_active, created_at, creator_id) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (item_id, value, 1 if payload.is_active else 0, now, creator_id),
+                    )
+                connection.commit()
+            except IntegrityError:
+                connection.rollback()
+                skipped.append(value)
+                continue
+            created += 1
+            if next_order is not None:
+                next_order += 10
+
+    message = f"Создано: {created}"
+    if skipped:
+        message += f", пропущено (уже есть): {len(skipped)}"
+    return DictionaryBulkCreateResponse(message=message, created=created, skipped=skipped)
+
+
+def reorder_dictionary_items(
+    table_name: str, payload: DictionaryReorderRequest, editor_id: str
+) -> MessageResponse:
+    """Переставляет значения по списку id: sort_order = позиция × 10.
+
+    Клиент присылает порядок видимой страницы. Значения, в неё не попавшие,
+    дописываются в хвост в текущем порядке — иначе перестановка на первой
+    странице перемешала бы невидимый остаток справочника.
+    """
+    _ensure_dictionary_table(table_name)
+    if table_name not in DICTIONARY_SORTABLE_TABLES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Справочник не поддерживает порядок")
+    now = _now()
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"SELECT d.id FROM {table_name} d WHERE COALESCE(d.is_deleted, 0) = 0 ORDER BY {DICTIONARY_ORDER_SQL}"
+        ).fetchall()
+        existing = [str(r["id"]) for r in rows]
+        known = set(existing)
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for raw in payload.ids:
+            item_id = str(raw)
+            if item_id in known and item_id not in seen:
+                seen.add(item_id)
+                ordered.append(item_id)
+        if not ordered:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Не найдено значений для перестановки")
+        ordered.extend(item_id for item_id in existing if item_id not in seen)
+        for index, item_id in enumerate(ordered):
+            connection.execute(
+                f"UPDATE {table_name} SET sort_order = ?, updated_at = ?, updated_by_id = ? WHERE id = ?",
+                ((index + 1) * 10, now, editor_id, item_id),
+            )
+        connection.commit()
+    return MessageResponse(message="Порядок обновлён")
 
 
 def update_dictionary_item(
@@ -268,7 +401,7 @@ def update_dictionary_item(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Запись не найдена")
         is_del = bool(meta["del"])
         if is_del and payload.is_deleted is not False:
-            if payload.name is not None or payload.is_active is not None:
+            if payload.name is not None or payload.is_active is not None or payload.sort_order is not None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Запись удалена. Восстановите её перед редактированием.",
@@ -295,6 +428,12 @@ def update_dictionary_item(
         if payload.is_active is not None:
             fields.append("is_active = ?")
             values.append(1 if payload.is_active else 0)
+        if table_name in DICTIONARY_SORTABLE_TABLES:
+            if payload.clear_sort_order:
+                fields.append("sort_order = NULL")
+            elif payload.sort_order is not None:
+                fields.append("sort_order = ?")
+                values.append(int(payload.sort_order))
 
         if not fields:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет данных для обновления")
@@ -486,6 +625,7 @@ def list_dictionary_items_page(
     rent_sql = "d.rent_monthly_kopecks" if table_name == "own_warehouses" else "NULL AS rent_monthly_kopecks"
     packing_sql = "COALESCE(d.is_packing_zone, 0) AS is_packing_zone" if table_name == "unloading_zones" else "0 AS is_packing_zone"
     shipping_sql = "COALESCE(d.is_shipping_zone, 0) AS is_shipping_zone" if table_name == "unloading_zones" else "0 AS is_shipping_zone"
+    sort_order_sql = _sort_order_sql(table_name)
     offset = (page - 1) * limit
     conds = ["1=1"]
     params: list = []
@@ -517,7 +657,7 @@ def list_dictionary_items_page(
         rows = connection.execute(
             f"""
             SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
-                   {color_hex_sql}, {rent_sql}, {packing_sql}, {shipping_sql},
+                   {color_hex_sql}, {rent_sql}, {packing_sql}, {shipping_sql}, {sort_order_sql},
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(NULLIF(creator.display_name, ''), creator.email) AS created_by, COALESCE(NULLIF(editor.display_name, ''), editor.email) AS updated_by, COALESCE(NULLIF(deleter.display_name, ''), deleter.email) AS deleted_by
             FROM {table_name} d
@@ -600,7 +740,7 @@ def list_sizes_page(
     if not include_deleted:
         conds.append("COALESCE(d.is_deleted, 0) = 0")
     where_sql = " AND ".join(conds)
-    order_sql = _order_sql_from_sort_param(sort, SIZE_LIST_SORT_COLUMNS) or "d.sort_order IS NULL, d.sort_order, LOWER(d.name)"
+    order_sql = _order_sql_from_sort_param(sort, SIZE_LIST_SORT_COLUMNS) or DICTIONARY_ORDER_SQL
     with get_connection() as connection:
         ia = _resolve_actuality_filter(connection, actuality_id)
         if ia is not None:
@@ -720,7 +860,7 @@ def get_product_type_item(item_id: str, *, include_deleted: bool = False) -> Pro
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
+            SELECT d.id, d.name, d.is_active, d.sort_order, COALESCE(d.is_deleted, 0) AS is_deleted,
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(d.requires_color, 0) AS requires_color,
                    COALESCE(d.requires_size, 0) AS requires_size,
@@ -766,7 +906,7 @@ def list_product_types_page(
     if not include_deleted:
         conds.append("COALESCE(d.is_deleted, 0) = 0")
     where_sql = " AND ".join(conds)
-    order_sql = _order_sql_from_sort_param(sort, CLIENT_LIST_SORT_COLUMNS) or "d.created_at DESC"
+    order_sql = _order_sql_from_sort_param(sort, CLIENT_LIST_SORT_COLUMNS) or DICTIONARY_ORDER_SQL
     with get_connection() as connection:
         ia = _resolve_actuality_filter(connection, actuality_id)
         if ia is not None:
@@ -781,7 +921,7 @@ def list_product_types_page(
         )
         rows = connection.execute(
             f"""
-            SELECT d.id, d.name, d.is_active, COALESCE(d.is_deleted, 0) AS is_deleted,
+            SELECT d.id, d.name, d.is_active, d.sort_order, COALESCE(d.is_deleted, 0) AS is_deleted,
                    d.deleted_at, d.created_at, d.updated_at,
                    COALESCE(d.requires_color, 0) AS requires_color,
                    COALESCE(d.requires_size, 0) AS requires_size,
@@ -811,10 +951,14 @@ def create_product_type(payload: ProductTypeCreateRequest, creator_id: str) -> M
         try:
             connection.execute(
                 """
-                INSERT INTO product_types (id, name, is_active, requires_color, requires_size, created_at, creator_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO product_types
+                    (id, name, is_active, requires_color, requires_size, sort_order, created_at, creator_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (item_id, name, 1 if payload.is_active else 0, 1, 1 if payload.requires_size else 0, _now(), creator_id),
+                (
+                    item_id, name, 1 if payload.is_active else 0, 1,
+                    1 if payload.requires_size else 0, payload.sort_order, _now(), creator_id,
+                ),
             )
             connection.commit()
         except IntegrityError as exc:
@@ -863,6 +1007,11 @@ def update_product_type(item_id: str, payload: ProductTypeUpdateRequest, editor_
         if payload.requires_size is not None:
             fields.append("requires_size = ?")
             values.append(1 if payload.requires_size else 0)
+        if payload.clear_sort_order:
+            fields.append("sort_order = NULL")
+        elif payload.sort_order is not None:
+            fields.append("sort_order = ?")
+            values.append(int(payload.sort_order))
         if not fields:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нет данных для обновления")
         fields.extend(["updated_at = ?", "updated_by_id = ?"])

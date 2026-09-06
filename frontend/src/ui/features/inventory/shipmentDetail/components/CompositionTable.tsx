@@ -9,6 +9,8 @@ import { LineIdentityCell } from '../../shared/LineIdentityCell'
 import { AvailabilityCell } from '../../shared/AvailabilityCell'
 import type { LineAvailability } from '../../shared/AvailabilityCell'
 import { LineFilesCell } from './LineFilesCell'
+import { usePrintBarcodeLabels } from '../../../shared/usePrintBarcodeLabels'
+import type { LineLabelState } from '../../../shared/usePrintBarcodeLabels'
 import type { EditableShipmentLine, LineDraft, StoreChoice, LineFilePreview } from '../shared/types'
 
 // Подпись под файлом — распознанные коды; помечается только конфликт (чужой
@@ -88,6 +90,8 @@ type CompositionTableProps = {
   onDeleteFile:    (lineId: string, fileId: string) => void
   // Этикетка из карточки товара — прикрепление без повторной загрузки файла.
   onPickLabel?:    (line: ShipmentLine) => void
+  /** Чем маркируют строку — считает владелец состава одним запросом на документ. */
+  labelOf:         (line: ShipmentLine) => LineLabelState
   // Дозаполнение SKU для товара «ожидает SKU» прямо из состава отгрузки.
   onAssignSku?:    (line: ShipmentLine) => void
   // Доступность строки под планом: «на хранении» + «в пути» (только при правке плана).
@@ -100,8 +104,10 @@ export function CompositionTable({
   lines, showZone = false, putaway = false, canEditPlan, canEditStore, canDelete, canAttachFiles,
   acting, saving, savingLine, uploadingLines, getDraft, getStoreOptions,
   onPreviewFile, onQty, onStore, onDelete, onUploadFile, onReplaceFile, onDeleteFile, onPickLabel, onAssignSku,
-  getAvail, availLoading,
+  labelOf, getAvail, availLoading,
 }: CompositionTableProps) {
+  // Этикетку клеят на столе упаковки — печать идёт по плану строки.
+  const { printLabels, printing } = usePrintBarcodeLabels()
   const skuCount = new Set(lines.map((l) => l.product_sku)).size
   const planTotal = lines.reduce((s, l) => s + getDraft(l).qty, 0)
 
@@ -114,9 +120,14 @@ export function CompositionTable({
           {showZone && <th style={{ width: 170 }}>Местоположение</th>}
           <th style={{ width: 180 }}>Магазин</th>
           <th style={{ width: 160, textAlign: 'right' }}>{putaway ? 'План размещения' : 'План упаковки'}</th>
-          <th style={{ width: 124, textAlign: 'center' }}>
+          <th style={{ width: 236, textAlign: 'center' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
-              <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
+              <Icon name="barcode" size={12} style={{ opacity: 0.7 }} />Этикетка
+              {putaway ? (
+                <span style={{ textTransform: 'none', fontWeight: 500, color: 'var(--c-text-faint)' }}>
+                  · нужна до скана
+                </span>
+              ) : null}
             </span>
           </th>
           <th style={{ width: 44 }} />
@@ -129,6 +140,7 @@ export function CompositionTable({
           const isSaving = saving[line.id] ?? false
           const busy = acting || isSaving || savingLine === line.id
           const planOver = canEditPlan && draft.qty > line.available
+          const lineLabel = labelOf(line)
 
           return (
             <tr key={line.id}>
@@ -221,6 +233,17 @@ export function CompositionTable({
                   onReplace={(fileId, file) => onReplaceFile(line.id, fileId, file)}
                   onRemove={(fileId) => onDeleteFile(line.id, fileId)}
                   onPickFromCard={onPickLabel ? () => onPickLabel(line) : undefined}
+                  label={lineLabel}
+                  labelScanCritical={putaway}
+                  productHref={`/dictionaries/products/${line.product_id}`}
+                  onPrintLabel={printing || draft.qty <= 0 || lineLabel.kind !== 'code' ? undefined : () => void printLabels([{
+                    product_id: line.product_id,
+                    color_id: line.color_id,
+                    size_id: line.size_id,
+                    store_id: line.store_id,
+                    barcode: line.label_barcode,
+                    qty: draft.qty,
+                  }])}
                 />
               </Td>
               <Td>

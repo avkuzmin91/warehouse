@@ -34,7 +34,7 @@ type LastPick = { id: string; label: string }
  * выход не здесь: заказ снимает менеджер, и тогда потребность уменьшается.
  */
 export function SupplyPickScreen({ supplyId }: { supplyId: string }) {
-  const { back } = useNav()
+  const { back, openSupplyReturn } = useNav()
   const [view, setView] = useState<MpSupplyPickView | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -230,6 +230,24 @@ export function SupplyPickScreen({ supplyId }: { supplyId: string }) {
               >
                 <Icon name="refresh" size={14} /> Отменить: {lastPick.label}
               </button>
+            )}
+
+            {view.return_debt_qty > 0 && (
+              <>
+                <div className="alert">
+                  <Icon name="alert" size={15} />
+                  Заказы сняты с поставки (отменены площадкой). Собранное под них
+                  нужно вернуть на место: {view.return_debt_qty} шт.
+                </div>
+                <button
+                  className="btn ghost sm"
+                  style={{ width: '100%' }}
+                  disabled={busy}
+                  onClick={() => openSupplyReturn(supplyId)}
+                >
+                  <Icon name="refresh" size={14} /> Вернуть на место
+                </button>
+              </>
             )}
 
             <div className="sec">

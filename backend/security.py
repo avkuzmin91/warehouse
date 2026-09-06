@@ -187,6 +187,17 @@ def ensure_scan_lookup_access(user: Mapping[str, Any]) -> None:
     ensure_stock_write_access(user)
 
 
+def ensure_supply_work_access(user: Mapping[str, Any]) -> None:
+    """Станция упаковки и грузовые места FBS-поставки: те же руки, что и сборка,
+    плюс менеджер — он ведёт поставку и может допаковать заказ у ПК с принтером."""
+    if user["role"] in MP_SUPPLY_PICK_ROLES or user["role"] == "manager":
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=FORBIDDEN_DETAIL,
+    )
+
+
 def ensure_supply_pick_access(user: Mapping[str, Any]) -> None:
     """Сборка FBS-поставки на ТСД: сборщик, кладовщик и начальник склада.
 

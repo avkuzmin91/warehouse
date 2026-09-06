@@ -200,6 +200,69 @@ class BarcodeLookupResponse(BaseModel):
     match: BarcodeMatch | None = None
 
 
+class BarcodeLabelRequestItem(BaseModel):
+    """Вариант для печати: товар + цвет/размер (тот же ключ, каким его знают строки
+    документов). `barcode` пришпиливает конкретный код, когда их у варианта несколько."""
+
+    product_id: str
+    color_id: str | None = None
+    size_id: str | None = None
+    barcode: str | None = None
+    # Магазин строки документа: у варианта в разных кабинетах разные коды.
+    store_id: str | None = None
+    qty: int = Field(default=1, ge=1, le=500)
+
+
+class BarcodeLabelsRequest(BaseModel):
+    items: list[BarcodeLabelRequestItem] = Field(min_length=1, max_length=200)
+    # Печать берёт у варианта один код, выбор этикетки в строке документа — все:
+    # там человек смотрит, каким кодом маркировать.
+    all_codes: bool = False
+
+
+class BarcodeLabelItem(BaseModel):
+    product_id: str
+    # Ключ запроса возвращается как есть: состав документа знает строку по
+    # товару и цвето-размеру, а не по variant_id.
+    color_id: str | None = None
+    size_id: str | None = None
+    variant_id: str
+    barcode: str
+    barcode_svg: str
+    # Ширина кода в модулях: лист этикеток печатает модуль постоянной толщины.
+    modules: int
+    product_name: str
+    sku: str
+    color_name: str | None = None
+    size_name: str | None = None
+    qty: int
+    # Откуда код: кабинет МП («Ozon», «WB») или ручной ввод.
+    source: str | None = None
+    store_id: str | None = None
+    # Код пришпилен запросом — то есть выбран человеком, а не правилом.
+    chosen: bool = False
+    # Сколько кодов претендует на эту строку после отбора по магазину.
+    barcode_count: int = 1
+    # Кандидаты из разных кабинетов (или разных источников) — выбор обязателен:
+    # чужой код на коробе площадка не примет.
+    mixed_origin: bool = False
+
+
+class BarcodeLabelMissingItem(BaseModel):
+    product_id: str
+    # Ключ запроса возвращается как есть — строка состава по нему находит свой ответ.
+    color_id: str | None = None
+    size_id: str | None = None
+    variant_id: str | None = None
+    label: str
+    reason: str
+
+
+class BarcodeLabelsResponse(BaseModel):
+    items: list[BarcodeLabelItem] = Field(default_factory=list)
+    missing: list[BarcodeLabelMissingItem] = Field(default_factory=list)
+
+
 class ProductListResponse(BaseModel):
     items: list[ProductItem]
     total: int

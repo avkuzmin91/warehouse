@@ -30,6 +30,8 @@ function taskVisual(kind: string, direction?: string | null): { icon: IconName; 
   if (kind.startsWith('trip')) return direction === 'outbound' ? { icon: 'truckOut', tone: 'green' } : { icon: 'truckIn', tone: '' }
   if (kind.startsWith('receipt')) return { icon: 'truckIn', tone: '' }
   if (kind === 'mp_supply_pick') return { icon: 'boxes', tone: 'blue' }
+  if (kind === 'mp_supply_pack') return { icon: 'box', tone: 'blue' }
+  if (kind === 'mp_supply_cargo') return { icon: 'layers', tone: 'green' }
   return { icon: 'list', tone: 'gray' }
 }
 
@@ -37,7 +39,7 @@ export function TasksScreen() {
   const { user } = useAuth()
   const {
     openTrip, openShipment, openDispatchPrepare, openPackDoc, openPutawayDoc, openPlace,
-    openReceiptDoc, openSupplyPick,
+    openReceiptDoc, openSupplyPick, openSupplyPack, openSupplyCargo,
   } = useNav()
   const toast = useToast()
   // Сводка дня — только менеджерский состав (контроль склада со смартфона).
@@ -162,7 +164,10 @@ export function TasksScreen() {
                   return
                 }
                 if (t.doc_type === 'trip') openTrip(t.doc_id)
-                // «Собрать поставку» — экран сборки FBS: лист подбора и скан по маршруту.
+                // FBS: «Собрать» — лист подбора, «Упаковать» — заказы поштучно,
+                // «Грузовые места» — короба/палеты на передаче.
+                else if (t.kind === 'mp_supply_pack') openSupplyPack(t.doc_id)
+                else if (t.kind === 'mp_supply_cargo') openSupplyCargo(t.doc_id)
                 else if (t.doc_type === 'mp_supply') openSupplyPick(t.doc_id)
                 // «Упаковать» — внесение годного/брака: экран упаковки, не деталка кладовщика.
                 else if (t.kind === 'shipment_pack') openPackDoc(t.doc_id)

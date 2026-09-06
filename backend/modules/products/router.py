@@ -25,11 +25,14 @@ from idempotency import begin_idempotent, finish_idempotent
 from modules.auth.service import (
     get_current_admin,
     get_current_manager,
+    get_current_shipment_viewer,
     get_current_user,
     get_current_warehouse,
 )
 
 from .schemas import (
+    BarcodeLabelsRequest,
+    BarcodeLabelsResponse,
     BarcodeLookupResponse,
     BarcodeMatch,
     MessageResponse,
@@ -56,6 +59,7 @@ from .schemas import (
 )
 from .service import (
     _barcode_owner_label,
+    build_barcode_labels,
     _find_barcode_owner,
     apply_product_import_plan,
     build_product_import_plan,
@@ -123,15 +127,23 @@ def list_products(
     if search is not None and str(search).strip():
         term = str(search).strip()
         like = _ci_substring_like_param(term)
+        # Артикул продавца ищется наравне со своим SKU: клиент называет товар тем
+        # артикулом, под которым продаёт его на площадке, а не SKU склада.
         conds.append(
             "(fold_ci(COALESCE(p.name, '')) LIKE ? OR fold_ci(COALESCE(p.sku, '')) LIKE ?"
             " OR EXISTS ("
             "   SELECT 1 FROM product_barcodes pb"
             "   WHERE pb.product_id = p.id AND pb.barcode LIKE ?"
             "     AND COALESCE(pb.is_deleted, 0) = 0"
+            " )"
+            " OR EXISTS ("
+            "   SELECT 1 FROM mp_product_links pl"
+            "   JOIN mp_products mp ON mp.id = pl.mp_product_id"
+            "   WHERE pl.product_id = p.id AND COALESCE(pl.is_deleted, 0) = 0"
+            "     AND fold_ci(COALESCE(mp.offer_id, '')) LIKE ?"
             " ))"
         )
-        params.extend([like, like, like_substring_param(term)])
+        params.extend([like, like, like_substring_param(term), like])
     if name is not None and str(name).strip():
         conds.append("fold_ci(p.name) LIKE ?")
         params.append(_ci_substring_like_param(str(name)))
@@ -955,6 +967,18 @@ def list_product_files(item_id: str, user=Depends(get_current_warehouse)):
         )
         for r in rows
     ]
+
+
+@router.post("/products/barcode-labels", response_model=BarcodeLabelsResponse)
+def make_barcode_labels(payload: BarcodeLabelsRequest, user=Depends(get_current_shipment_viewer)):
+    """Печатные формы ШК по вариантам: площадки отдают только цифры, картинку рисуем сами.
+
+    Ничего не сохраняется — этикетка считается на каждый запрос печати. Право то же,
+    что на просмотр документов: печать этикетки ничего не меняет, а точки входа —
+    приёмка рейса и задача упаковки, где работает и начальник смены."""
+    _ = user
+    with get_connection() as connection:
+        return build_barcode_labels(connection, payload.items, all_codes=payload.all_codes)
 
 
 @router.get("/products/by-barcode/{code}", response_model=BarcodeLookupResponse)

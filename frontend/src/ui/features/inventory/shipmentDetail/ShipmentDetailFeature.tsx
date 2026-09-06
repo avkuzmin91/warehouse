@@ -14,6 +14,7 @@ import {
   uploadShipmentLineFile,
   deleteShipmentLineFile,
   attachShipmentLineFileFromProduct,
+  updateShipmentLineLabel,
   returnShipmentLineFromPacking,
   returnShipmentToPacking,
   SHIPMENT_STATUS_LABELS,
@@ -736,6 +737,17 @@ export function ShipmentDetailFeature() {
     }
   }
 
+  async function handleChooseLabel(barcode: string | null) {
+    if (!docId || !labelPickerLine) return
+    try {
+      await updateShipmentLineLabel(docId, labelPickerLine.id, barcode)
+      await refresh()
+      toast(barcode ? `Этикетка строки: код ${barcode}` : 'Код этикетки снова выбирается автоматически', 'success')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'Не удалось сохранить выбор кода', 'error')
+    }
+  }
+
   async function handleDeleteFile(lineId: string, fileId: string) {
     if (!docId) return
     try {
@@ -1162,10 +1174,16 @@ export function ShipmentDetailFeature() {
         <ProductLabelPickerModal
           productId={labelPickerLine.product_id}
           productName={labelPickerLine.product_name}
+          variantLabel={[labelPickerLine.color_name, labelPickerLine.size_name].filter(Boolean).join(' · ') || null}
           lineColorId={labelPickerLine.color_id ?? null}
           lineSizeId={labelPickerLine.size_id ?? null}
+          lineStoreId={labelPickerLine.store_id}
+          qty={labelPickerLine.qty}
+          chosenBarcode={labelPickerLine.label_barcode}
           excludeUrls={(labelPickerLine.files ?? []).map((f) => f.url)}
+          onPullBarcodes={() => { setLabelPickerLine(null); setStoreBarcodesOpen(true) }}
           onPick={(f) => void handlePickLabel(f)}
+          onChoose={(barcode) => handleChooseLabel(barcode)}
           onClose={() => setLabelPickerLine(null)}
         />
       )}

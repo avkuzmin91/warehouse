@@ -30,6 +30,7 @@ export type DictionaryItem = {
   is_packing_zone?: boolean
   is_shipping_zone?: boolean
   is_active: boolean
+  sort_order?: number | null
   is_deleted?: boolean
   deleted_at?: string | null
   deleted_by?: string | null
@@ -127,6 +128,58 @@ export type ProductFileItem = {
   filename: string
   url: string
   mime_type: string | null
+}
+
+/** Запрос печатной формы ШК: вариант задаётся тем же ключом, каким его знают
+ * строки документов (товар + цвет/размер). `barcode` — конкретный код варианта. */
+export type BarcodeLabelRequestItem = {
+  product_id: string
+  color_id?: string | null
+  size_id?: string | null
+  /** Пришпиленный код: выбор человека на строке документа. */
+  barcode?: string | null
+  /** Магазин строки — у варианта в разных кабинетах разные коды. */
+  store_id?: string | null
+  qty?: number
+}
+
+export type BarcodeLabelItem = {
+  product_id: string
+  color_id: string | null
+  size_id: string | null
+  variant_id: string
+  barcode: string
+  barcode_svg: string
+  /** Ширина кода в модулях — по ней лист держит постоянную толщину модуля. */
+  modules: number
+  product_name: string
+  sku: string
+  color_name: string | null
+  size_name: string | null
+  qty: number
+  /** Откуда код: кабинет МП («Ozon», «WB») или ручной ввод. */
+  source: string | null
+  store_id: string | null
+  /** Код пришпилен запросом — выбран человеком, а не правилом. */
+  chosen: boolean
+  /** Сколько кодов претендует на строку после отбора по магазину. */
+  barcode_count: number
+  /** Кандидаты из разных кабинетов — выбор обязателен, чужой код площадка не примет. */
+  mixed_origin: boolean
+}
+
+export type BarcodeLabelMissingItem = {
+  product_id: string
+  color_id: string | null
+  size_id: string | null
+  variant_id: string | null
+  label: string
+  reason: string
+}
+
+export type BarcodeLabelsResponse = {
+  items: BarcodeLabelItem[]
+  missing: BarcodeLabelMissingItem[]
 }
 
 export type ProductVariantItem = {

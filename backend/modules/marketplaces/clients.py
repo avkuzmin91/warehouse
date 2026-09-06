@@ -4,6 +4,10 @@
 версии метода МП правится только этот файл. Все функции — синхронные (воркер
 вызывает их через asyncio.to_thread), сеть — httpx.
 
+Пишущий контур (сборка отправления, коды маркировки, этикетки, поставки и короба WB)
+собран по публичной документации площадок; форматы ответов разбираются мягко,
+потому что версии методов у обеих площадок меняются чаще, чем этот файл.
+
 Ключи продавцов в логи не пишутся никогда; логгер wms.mp получает только
 счётчики, номера заказов и тексты ошибок МП.
 """
@@ -72,6 +76,48 @@ def _request(method: str, url: str, *, headers: dict, json_body: Any | None = No
         except ValueError as exc:
             raise MpApiError("Некорректный ответ маркетплейса (не JSON)") from exc
     raise MpApiError(last_error, retriable=True)
+
+
+def _request_bytes(method: str, url: str, *, headers: dict, json_body: Any | None = None,
+                   params: dict | None = None) -> tuple[bytes, str]:
+    """Запрос, тело которого — файл (PDF/PNG этикетки). → (bytes, content-type)."""
+    last_error: str = "нет ответа"
+    for attempt in range(1, _RETRIES + 1):
+        try:
+            resp = httpx.request(
+                method, url, headers=headers, json=json_body, params=params, timeout=_TIMEOUT,
+            )
+        except httpx.HTTPError as exc:
+            last_error = f"сетевая ошибка: {type(exc).__name__}"
+            if attempt < _RETRIES:
+                time.sleep(attempt)
+                continue
+            raise MpApiError(last_error, retriable=True) from exc
+        if resp.status_code == 429 or resp.status_code >= 500:
+            last_error = f"HTTP {resp.status_code}"
+            if attempt < _RETRIES:
+                time.sleep(attempt)
+                continue
+            raise MpApiError(f"Маркетплейс недоступен ({last_error})", retriable=True)
+        if resp.status_code in (401, 403):
+            raise MpApiError("Неверный API-ключ или нет доступа (HTTP %d)" % resp.status_code)
+        if resp.status_code >= 400:
+            detail = ""
+            try:
+                body = resp.json()
+                detail = str(body.get("message") or body.get("error") or "")[:200]
+            except Exception:
+                pass
+            raise MpApiError(f"Ошибка запроса (HTTP {resp.status_code}): {detail or 'без деталей'}")
+        return resp.content, str(resp.headers.get("content-type") or "")
+    raise MpApiError(last_error, retriable=True)
+
+
+def _request_with_params(method: str, url: str, *, headers: dict, params: dict,
+                         json_body: Any | None = None) -> Any:
+    """JSON-запрос с query-параметрами (стикеры WB задают формат и размер в query)."""
+    full = httpx.URL(url, params=params)
+    return _request(method, str(full), headers=headers, json_body=json_body)
 
 
 # ── Ozon Seller API ───────────────────────────────────────────────────────────
@@ -166,6 +212,67 @@ def ozon_fetch_postings(creds: dict, external_ids: list[str]) -> list[dict]:
     return postings
 
 
+def ozon_set_exemplars(creds: dict, posting_number: str, products: list[dict]) -> None:
+    """Коды маркировки по экземплярам отправления (до сборки).
+
+    products: [{"product_id": <sku>, "exemplars": [{"mandatory_mark": "<КИЗ>"}]}].
+    ГТД и РНПТ у товаров лёгкой промышленности не требуются — передаём признаки
+    отсутствия, как того ждёт /v5/fbs/posting/product/exemplar/set.
+    """
+    body = {
+        "posting_number": posting_number,
+        "products": [
+            {
+                "product_id": int(p["product_id"]),
+                "exemplars": [
+                    {
+                        "mandatory_mark": str(e["mandatory_mark"]),
+                        "is_gtd_absent": True,
+                        "is_rnpt_absent": True,
+                    }
+                    for e in p["exemplars"]
+                ],
+            }
+            for p in products
+        ],
+    }
+    _request(
+        "POST", f"{OZON_BASE}/v5/fbs/posting/product/exemplar/set",
+        headers=_ozon_headers(creds), json_body=body,
+    )
+
+
+def ozon_ship_posting(creds: dict, posting_number: str, products: list[dict]) -> None:
+    """Собрать отправление: одна упаковка со всем составом (/v4/posting/fbs/ship).
+
+    products: [{"product_id": <sku>, "quantity": n}]. После вызова отправление
+    переходит в awaiting_deliver, и площадка отдаёт этикетку.
+    """
+    body = {
+        "posting_number": posting_number,
+        "packages": [{
+            "products": [
+                {"product_id": int(p["product_id"]), "quantity": int(p["quantity"])}
+                for p in products
+            ],
+        }],
+        "with": {"additional_data": False},
+    }
+    _request("POST", f"{OZON_BASE}/v4/posting/fbs/ship", headers=_ozon_headers(creds), json_body=body)
+
+
+def ozon_package_label(creds: dict, posting_numbers: list[str]) -> bytes:
+    """Этикетка отправления (PDF). Ozon формирует её через ~45 с после сборки —
+    до этого отвечает ошибкой, вызывающий повторяет позже."""
+    data, content_type = _request_bytes(
+        "POST", f"{OZON_BASE}/v2/posting/fbs/package-label",
+        headers=_ozon_headers(creds), json_body={"posting_number": list(posting_numbers)},
+    )
+    if "pdf" not in content_type.lower() and not data.startswith(b"%PDF"):
+        raise MpApiError("Ozon: этикетка ещё не готова — повторите через минуту", retriable=True)
+    return data
+
+
 # ── WB Marketplace API ────────────────────────────────────────────────────────
 
 def _wb_headers(creds: dict) -> dict:
@@ -229,3 +336,95 @@ def wb_fetch_order_statuses(creds: dict, external_ids: list[int]) -> list[dict]:
         if i + 1000 < len(external_ids):
             time.sleep(_PAGE_PAUSE)
     return statuses
+
+
+def wb_create_supply(creds: dict, name: str) -> str:
+    """Новая поставка продавца (WB-GI-…): в неё добавляются сборочные задания."""
+    data = _request(
+        "POST", f"{_wb_marketplace(creds)}/api/v3/supplies", headers=_wb_headers(creds),
+        json_body={"name": name[:128]},
+    )
+    supply_id = str((data or {}).get("id") or "")
+    if not supply_id:
+        raise MpApiError("WB: площадка не вернула номер поставки")
+    return supply_id
+
+
+def wb_add_orders_to_supply(creds: dict, supply_id: str, order_ids: list[str]) -> None:
+    """Сборочные задания → поставка; на площадке задания переходят в «на сборке».
+
+    Метод батчевый и живёт под префиксом `/api/marketplace/v3`: пер-заказного пути
+    `/api/v3/supplies/{id}/orders/{order}` у площадки больше нет, он отвечает «path
+    not found». Повтор по тому же заданию безопасен — площадка отвечает 204."""
+    ids = [int(x) for x in order_ids]
+    for i in range(0, len(ids), 100):
+        _request(
+            "PATCH", f"{_wb_marketplace(creds)}/api/marketplace/v3/supplies/{supply_id}/orders",
+            headers=_wb_headers(creds), json_body={"orders": ids[i:i + 100]},
+        )
+        if i + 100 < len(ids):
+            time.sleep(_PAGE_PAUSE)
+
+
+def wb_set_order_sgtins(creds: dict, order_id: str, sgtins: list[str]) -> None:
+    """Коды маркировки ЧЗ по сборочному заданию."""
+    _request(
+        "PUT", f"{_wb_marketplace(creds)}/api/v3/orders/{order_id}/meta/sgtin",
+        headers=_wb_headers(creds), json_body={"sgtins": list(sgtins)},
+    )
+
+
+def wb_order_stickers(creds: dict, order_ids: list[int]) -> list[dict]:
+    """Стикеры сборочных заданий (PNG 58×40, base64 в поле file) + их штрих-код.
+
+    Площадка берёт не больше 100 заданий за запрос, поэтому лента на поставку
+    целиком идёт страницами."""
+    ids = [int(x) for x in order_ids]
+    stickers: list[dict] = []
+    for i in range(0, len(ids), 100):
+        data = _request_with_params(
+            "POST", f"{_wb_marketplace(creds)}/api/v3/orders/stickers",
+            headers=_wb_headers(creds), params={"type": "png", "width": 58, "height": 40},
+            json_body={"orders": ids[i:i + 100]},
+        )
+        stickers.extend((data or {}).get("stickers") or [])
+        if i + 100 < len(ids):
+            time.sleep(_PAGE_PAUSE)
+    return stickers
+
+
+def wb_create_boxes(creds: dict, supply_id: str, amount: int) -> list[str]:
+    """Короба поставки (trbx): площадка сама выдаёт их номера."""
+    data = _request(
+        "POST", f"{_wb_marketplace(creds)}/api/v3/supplies/{supply_id}/trbx",
+        headers=_wb_headers(creds), json_body={"amount": int(amount)},
+    )
+    ids = [str(x) for x in ((data or {}).get("trbxIds") or [])]
+    if len(ids) != amount:
+        raise MpApiError("WB: площадка вернула не все номера коробов")
+    return ids
+
+
+def wb_box_set_orders(creds: dict, supply_id: str, box_id: str, order_ids: list[int]) -> None:
+    """Состав короба поставки."""
+    _request(
+        "PUT", f"{_wb_marketplace(creds)}/api/v3/supplies/{supply_id}/trbx/{box_id}",
+        headers=_wb_headers(creds), json_body={"orderIds": [int(x) for x in order_ids]},
+    )
+
+
+def wb_supply_deliver(creds: dict, supply_id: str) -> None:
+    """Передать поставку в доставку: состав зафиксирован, дальше площадка."""
+    _request(
+        "PATCH", f"{_wb_marketplace(creds)}/api/v3/supplies/{supply_id}/deliver",
+        headers=_wb_headers(creds),
+    )
+
+
+def wb_supply_barcode(creds: dict, supply_id: str) -> dict:
+    """QR поставки для сдачи на склад WB (PNG base64 в поле file)."""
+    data = _request_with_params(
+        "GET", f"{_wb_marketplace(creds)}/api/v3/supplies/{supply_id}/barcode",
+        headers=_wb_headers(creds), params={"type": "png"},
+    )
+    return data or {}

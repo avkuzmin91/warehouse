@@ -20,6 +20,9 @@ export type Route =
   | { name: 'packing' }
   | { name: 'pick' }
   | { name: 'supplyPick'; id: string }
+  | { name: 'supplyPack'; id: string }
+  | { name: 'supplyReturn'; id: string }
+  | { name: 'supplyCargo'; id: string; unitId?: string }
   | { name: 'packDoc'; id: string; focus?: PackFocus }
   | { name: 'putawayDoc'; id: string }
   | { name: 'putawayBox'; id: string; boxId: string }
@@ -76,6 +79,9 @@ type NavState = {
   openPackDoc: (id: string, focus?: PackFocus) => void
   openPutawayDoc: (id: string) => void
   openSupplyPick: (id: string) => void
+  openSupplyPack: (id: string) => void
+  openSupplyReturn: (id: string) => void
+  openSupplyCargo: (id: string, unitId?: string) => void
   // replace — короб за коробом на сборке: экран сменяется, стек не растёт, «Назад»
   // возвращает к задаче, а не к предыдущему закрытому коробу.
   openPutawayBox: (id: string, boxId: string, replace?: boolean) => void
@@ -146,6 +152,9 @@ export function NavProvider({ children }: { children: ReactNode }) {
     openPackDoc: (id, focus) => setStack((s) => [...s, { name: 'packDoc', id, focus }]),
     openPutawayDoc: (id) => setStack((s) => [...s, { name: 'putawayDoc', id }]),
     openSupplyPick: (id) => setStack((s) => [...s, { name: 'supplyPick', id }]),
+    openSupplyPack: (id) => setStack((s) => [...s, { name: 'supplyPack', id }]),
+    openSupplyReturn: (id) => setStack((s) => [...s, { name: 'supplyReturn', id }]),
+    openSupplyCargo: (id, unitId) => setStack((s) => [...s, { name: 'supplyCargo', id, unitId }]),
     openPutawayBox: (id, boxId, replace) => setStack((s) => (
       [...(replace && s.length > 1 ? s.slice(0, -1) : s), { name: 'putawayBox', id, boxId }]
     )),

@@ -683,14 +683,17 @@ def _aside_sources(connection, variant: dict, quality: str | None) -> list[dict]
 _SHELF_OPS_SQL = ", ".join(f"'{s}'" for s in (INV_OP_STORAGE, INV_OP_READY))
 
 
-def free_storage_sources(connection, variant: dict, quality: str | None, zone_id: str | None) -> list[dict]:
+def free_storage_sources(connection, variant: dict, quality: str | None, zone_id: str | None,
+                         ops: tuple[str, ...] | None = None) -> list[dict]:
     """Свободный (вне коробов) остаток позиции на полке: по местам, корзине и качеству.
 
     Товар в коробе двигается только коробом целиком, поэтому в источники переноса
-    попадает лишь то, у чего ось короба пуста.
+    попадает лишь то, у чего ось короба пуста. `ops` сужает корзины (по умолчанию —
+    полочные `storage`/`ready`).
     """
+    ops_sql = ", ".join("?" for _ in ops) if ops else _SHELF_OPS_SQL
     conds = " AND to_zone_id = ?" if zone_id else ""
-    params: list[Any] = [variant["product_id"], variant["color_id"], variant["size_id"]]
+    params: list[Any] = [*(ops or ()), variant["product_id"], variant["color_id"], variant["size_id"]]
     if zone_id:
         params.append(zone_id)
     rows = connection.execute(
@@ -700,7 +703,7 @@ def free_storage_sources(connection, variant: dict, quality: str | None, zone_id
                    product_name, product_sku, color_name, size_name, client_name,
                    to_op AS op, to_quality AS quality, to_zone_id AS zone_id, to_zone_name AS zone_name, qty AS net
             FROM zone_relocations
-            WHERE to_op IN ({_SHELF_OPS_SQL}) AND to_container_id IS NULL
+            WHERE to_op IN ({ops_sql}) AND to_container_id IS NULL
               AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
               {conds}
             UNION ALL
@@ -708,7 +711,7 @@ def free_storage_sources(connection, variant: dict, quality: str | None, zone_id
                    product_name, product_sku, color_name, size_name, client_name,
                    from_op, from_quality, from_zone_id, from_zone_name, -qty
             FROM zone_relocations
-            WHERE from_op IN ({_SHELF_OPS_SQL}) AND from_container_id IS NULL
+            WHERE from_op IN ({ops_sql}) AND from_container_id IS NULL
               AND product_id = ? AND color_id IS NOT DISTINCT FROM ?::text AND size_id IS NOT DISTINCT FROM ?::text
               {conds.replace('to_zone_id', 'from_zone_id')}
         )

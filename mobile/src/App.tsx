@@ -23,6 +23,9 @@ import { ShiftPackingDetailScreen } from './screens/ShiftPackingDetailScreen'
 import { PutawayTaskScreen } from './screens/PutawayTaskScreen'
 import { PickQueueScreen } from './screens/PickQueueScreen'
 import { SupplyPickScreen } from './screens/SupplyPickScreen'
+import { SupplyPackScreen } from './screens/SupplyPackScreen'
+import { SupplyReturnScreen } from './screens/SupplyReturnScreen'
+import { SupplyCargoScreen } from './screens/SupplyCargoScreen'
 import { PlaceScreen } from './screens/PlaceScreen'
 import { ScanBoxScreen } from './screens/ScanBoxScreen'
 import { PutawayBoxScreen } from './screens/PutawayBoxScreen'
@@ -103,6 +106,9 @@ function Main() {
     case 'putawayDoc': screen = <PutawayTaskScreen shipmentId={route.id} />; break
     case 'pick':      screen = <PickQueueScreen />; break
     case 'supplyPick': screen = <SupplyPickScreen supplyId={route.id} />; break
+    case 'supplyPack': screen = <SupplyPackScreen supplyId={route.id} />; break
+    case 'supplyReturn': screen = <SupplyReturnScreen supplyId={route.id} />; break
+    case 'supplyCargo': screen = <SupplyCargoScreen supplyId={route.id} initialUnitId={route.unitId} />; break
     case 'putawayBox': screen = <PutawayBoxScreen shipmentId={route.id} boxId={route.boxId} />; break
     case 'putawayAside': screen = <PutawayAsideScreen shipmentId={route.id} />; break
     case 'place': screen = <PlaceScreen init={route.init} />; break

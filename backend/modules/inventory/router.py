@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
+from config import DICTIONARY_ORDER_SQL, DICTIONARY_SORTABLE_TABLES
 from dbconn import ci_like_substring_param, get_connection, like_substring_param
 from modules.auth.service import get_current_manager, get_current_shipment_viewer
 from modules.dictionaries.schemas import ClientStoreItem, DictionaryBaseItem
@@ -66,6 +67,9 @@ def _dict_item(row: Mapping[str, Any]) -> DictionaryBaseItem:
 
 
 def _active_dictionary_rows(table_name: str) -> list[DictionaryBaseItem]:
+    # Порядок подбора = порядок справочника: иначе заданный вручную sort_order
+    # виден в справочнике, но не в списках выбора, где он и нужен.
+    order_sql = DICTIONARY_ORDER_SQL if table_name in DICTIONARY_SORTABLE_TABLES else "LOWER(d.name) ASC"
     with get_connection() as connection:
         rows = connection.execute(
             f"""
@@ -78,7 +82,7 @@ def _active_dictionary_rows(table_name: str) -> list[DictionaryBaseItem]:
             LEFT JOIN users editor ON editor.id = d.updated_by_id
             LEFT JOIN users deleter ON deleter.id = d.deleted_by_id
             WHERE d.is_active = 1 AND COALESCE(d.is_deleted, 0) = 0
-            ORDER BY LOWER(d.name) ASC
+            ORDER BY {order_sql}
             """
         ).fetchall()
     return [_dict_item(row) for row in rows]

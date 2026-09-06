@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { addProductBarcode, addProductBarcodeFile, deleteProduct, deleteProductBarcode, deleteProductBarcodeFile, getProduct, getProductVariants } from '../../../api/adminApi'
+import { getWmsProductMpArticles, MARKETPLACE_LABELS } from '../../../api/marketplacesApi'
 import { useBarcodeDupCheck, barcodeOwnerLabel } from './useBarcodeDupCheck'
+import { usePrintBarcodeLabels } from '../shared/usePrintBarcodeLabels'
 import type { ProductBarcodeFileItem, ProductBarcodeItem, ProductVariantItem } from '../../../api/domainTypes'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { useApi } from '../../../hooks/useApi'
@@ -48,8 +50,10 @@ export function ProductViewFeature({ productId }: Props) {
   const productState = useApi((signal) => getProduct(productId, signal), [productId])
   const [variantsVersion, setVariantsVersion] = useState(0)
   const variantsState = useApi((signal) => getProductVariants(productId, signal), [productId, variantsVersion])
+  const mpArticlesState = useApi((signal) => getWmsProductMpArticles(productId, signal), [productId])
   const product = productState.data
   const variants = variantsState.data ?? []
+  const mpArticles = mpArticlesState.data?.items ?? []
 
   const [mainIdx, setMainIdx] = useState(0)
   const [fullscreen, setFullscreen] = useState(false)
@@ -98,6 +102,9 @@ export function ProductViewFeature({ productId }: Props) {
       toast(e instanceof Error ? e.message : 'Не удалось снять штрих-код', 'error')
     }
   }
+
+  // Печатная форма ШК: площадки отдают только цифры, картинку рисуем сами.
+  const { printLabels, printing } = usePrintBarcodeLabels()
 
   // Этикетки кода (PDF/фото ШК) в карточке — их подтягивают задачи упаковки.
   const labelInputRef = useRef<HTMLInputElement>(null)
@@ -366,6 +373,21 @@ export function ProductViewFeature({ productId }: Props) {
                                   <button
                                     type="button"
                                     className="btn ghost icon sm"
+                                    title="Напечатать этикетку с этим кодом"
+                                    disabled={printing}
+                                    onClick={() => void printLabels([{
+                                      product_id: productId,
+                                      color_id: variant.color_id,
+                                      size_id: variant.size_id,
+                                      barcode: bc.barcode,
+                                    }])}
+                                    style={{ width: 22, height: 22 }}
+                                  >
+                                    <Icon name="print" size={12} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn ghost icon sm"
                                     title="Прикрепить этикетку (PDF, PNG, JPG)"
                                     disabled={labelUploading}
                                     onClick={() => pickLabelFile(bc.id)}
@@ -405,6 +427,60 @@ export function ProductViewFeature({ productId }: Props) {
               </tbody>
             </Table>
           </Card>
+
+          {(mpArticles.length > 0 || mpArticlesState.error) && (
+            <Card>
+              <CardHead>
+                <Icon name="tag" size={15} className="ic-accent" />
+                <span className="card-head-title">Артикулы маркетплейсов</span>
+                <div className="flex-1" />
+                <span className="t-sub mono">{mpArticles.length.toLocaleString('ru-RU')}</span>
+              </CardHead>
+              {mpArticlesState.error ? (
+                <CardBody>
+                  <EmptyState title="Не удалось загрузить артикулы" sub={mpArticlesState.error.message} />
+                </CardBody>
+              ) : (
+                <Table>
+                  <thead>
+                    <tr>
+                      <th style={{ width: 170 }}>Артикул продавца</th>
+                      <th style={{ width: 200 }}>Кабинет</th>
+                      <th>Карточка маркетплейса</th>
+                      <th style={{ width: 220 }}>Вариант WMS</th>
+                      <th style={{ width: 190 }}>Связка</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mpArticles.map((a) => (
+                      <tr key={a.mp_product_id}>
+                        <Td className="mono" style={{ fontWeight: 600 }}>{a.offer_id ?? '—'}</Td>
+                        <Td>
+                          {a.account_name}
+                          <div className="t-sub" style={{ fontSize: 11.5 }}>{MARKETPLACE_LABELS[a.marketplace]}</div>
+                        </Td>
+                        <Td>
+                          {a.title ?? '—'}
+                          <div className="t-sub mono" style={{ fontSize: 11.5 }}>
+                            {[a.external_id, a.external_color, a.external_size].filter(Boolean).join(' · ')}
+                          </div>
+                        </Td>
+                        <Td>
+                          {a.variant_id
+                            ? ([a.color_name, a.size_name].filter(Boolean).join(' / ') || 'Вариант без цвета и размера')
+                            : <span style={{ color: 'var(--c-text-subtle)' }}>Товар целиком</span>}
+                        </Td>
+                        <Td className="t-sub" style={{ fontSize: 12 }}>
+                          {a.link_source === 'barcode_auto' ? 'Авто по ШК' : 'Вручную'}
+                          {a.linked_by && ` · ${a.linked_by}`}
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </Table>
+              )}
+            </Card>
+          )}
         </div>
       )}
 

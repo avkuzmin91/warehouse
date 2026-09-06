@@ -73,6 +73,7 @@ from modules.shipments.schemas import (
     ShipmentLineItem,
     ShipmentLinePackPayload,
     ShipmentLinePlacement,
+    ShipmentLineLabelUpdate,
     ShipmentLineStoreUpdate,
     ShipmentLinesListItem,
     ShipmentLinesResponse,
@@ -279,11 +280,12 @@ def create_shipment(
             conn.execute(
                 """INSERT INTO shipment_lines
                    (id,doc_id,product_id,product_name,product_sku,color_id,color_name,size_id,size_name,
-                    qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,created_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,label_barcode,created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (str(uuid4()), doc_id, line.product_id, line.product_name, product_sku,
                  line.color_id, line.color_name, line.size_id, line.size_name, line.qty,
-                 line.shipped_qty, line.storage_zone_id, line.storage_zone_name, store_id, store_name, now),
+                 line.shipped_qty, line.storage_zone_id, line.storage_zone_name, store_id, store_name,
+                 (line.label_barcode or None), now),
             )
         conn.execute(
             "INSERT INTO shipment_ops (id,doc_id,op_type,created_at,created_by) VALUES (?,?,?,?,?)",
@@ -833,6 +835,7 @@ def get_shipment(doc_id: str, user=Depends(_get_viewer)):
             storage_zone_name=l["storage_zone_name"],
             store_id=l["store_id"],
             store_name=l["store_name"],
+            label_barcode=l["label_barcode"],
             store_barcodes=store_barcodes_by_line.get(str(l["id"]), []),
             placements=placements_by_line.get(str(l["id"]), []),
             files=files_by_line.get(str(l["id"]), []),
@@ -1042,11 +1045,13 @@ def add_shipment_line(doc_id: str, body: ShipmentLineIn, user=Depends(_get_manag
         conn.execute(
             """INSERT INTO shipment_lines
                (id,doc_id,product_id,product_name,product_sku,color_id,color_name,
-                size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,created_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                size_id,size_name,qty,shipped_qty,storage_zone_id,storage_zone_name,store_id,store_name,
+                label_barcode,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (line_id, doc_id, body.product_id, body.product_name, product_sku,
              body.color_id, body.color_name, body.size_id, body.size_name, body.qty,
-             body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name, now),
+             body.shipped_qty, body.storage_zone_id, body.storage_zone_name, store_id, store_name,
+             (body.label_barcode or None), now),
         )
         if str(row["status"]) == SHIPMENT_STATUS_PACKING:
             _check_lines_covered_by_stock(conn, doc_id, row["client_id"])
@@ -1154,6 +1159,61 @@ def update_shipment_line_store(doc_id: str, line_id: str, body: ShipmentLineStor
         conn.commit()
         if status == SHIPMENT_STATUS_ON_PACKING:
             notify_packing_correction(conn, doc_id=doc_id, doc_number=str(row["doc_number"]), body=op_comment)
+    return {"message": "ok"}
+
+
+@router.patch("/shipments/{doc_id}/lines/{line_id}/label")
+def update_shipment_line_label(doc_id: str, line_id: str, body: ShipmentLineLabelUpdate, user=Depends(_get_manager)):
+    """Каким из кодов варианта маркировать строку.
+
+    Пустой barcode возвращает строку к правилу «код магазина → общий код». Выбор
+    держится до конца упаковки: печатают и в «На упаковке», поэтому гейт тот же,
+    что у магазина строки, а не у плана."""
+    ensure_shipment_planning_access(user)
+    now = _now()
+    uid = str(user["id"])
+    barcode = (body.barcode or "").strip() or None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT doc_number, status FROM shipment_docs WHERE id = ? AND is_deleted = 0", (doc_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Документ не найден")
+        status = str(row["status"])
+        if status not in SHIPMENT_EDITABLE_LINE_STATUSES and status != SHIPMENT_STATUS_ON_PACKING:
+            raise HTTPException(status_code=400, detail="Этикетку можно менять только до завершения упаковки")
+        line = conn.execute(
+            "SELECT product_id, product_name, color_name, size_name, label_barcode FROM shipment_lines "
+            "WHERE id = ? AND doc_id = ? AND COALESCE(is_deleted, 0) = 0",
+            (line_id, doc_id),
+        ).fetchone()
+        if not line:
+            raise HTTPException(status_code=404, detail="Строка не найдена")
+        if barcode:
+            known = conn.execute(
+                "SELECT 1 FROM product_barcodes WHERE product_id = ? AND barcode = ? "
+                "AND COALESCE(is_deleted, 0) = 0",
+                (str(line["product_id"]), barcode),
+            ).fetchone()
+            if not known:
+                raise HTTPException(status_code=400, detail="Такого штрих-кода нет в карточке товара")
+        if (line["label_barcode"] or None) == barcode:
+            return {"message": "ok"}
+        conn.execute(
+            "UPDATE shipment_lines SET label_barcode = ? WHERE id = ? AND doc_id = ?",
+            (barcode, line_id, doc_id),
+        )
+        variant = " · ".join(v for v in (line["color_name"], line["size_name"]) if v)
+        label = f"«{line['product_name']}»" + (f" ({variant})" if variant else "")
+        op_comment = (
+            f"Этикетка по {label}: код {barcode}" if barcode
+            else f"Этикетка по {label}: код выбирается по магазину строки"
+        )
+        conn.execute(
+            "INSERT INTO shipment_ops (id,doc_id,op_type,comment,created_at,created_by) VALUES (?,?,?,?,?,?)",
+            (str(uuid4()), doc_id, SHIPMENT_OP_DOC_UPDATE, op_comment, now, uid),
+        )
+        conn.commit()
     return {"message": "ok"}
 
 

@@ -4,6 +4,7 @@ import {
   dayGroupLabel,
   fmtDate,
   fmtDateTime,
+  fmtDurationShort,
   fmtYmdAsDmy,
   formatMoneyKopecks,
   localTodayYmd,
@@ -137,5 +138,23 @@ describe('moscowTodayYmd / localTodayYmd', () => {
   it('возвращают YYYY-MM-DD', () => {
     expect(moscowTodayYmd()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(localTodayYmd()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+describe('fmtDurationShort', () => {
+  it('минуты, часы и дни — без ведущих нулевых частей', () => {
+    expect(fmtDurationShort(5 * 60_000)).toBe('5 мин')
+    expect(fmtDurationShort(4 * 3_600_000)).toBe('4 ч')
+    expect(fmtDurationShort(4 * 3_600_000 + 20 * 60_000)).toBe('4 ч 20 мин')
+    expect(fmtDurationShort(3 * 86_400_000)).toBe('3 дн')
+    expect(fmtDurationShort(3 * 86_400_000 + 2 * 3_600_000)).toBe('3 дн 2 ч')
+  })
+
+  it('знак не выводится — направление задаёт вызывающий', () => {
+    expect(fmtDurationShort(-90 * 60_000)).toBe('1 ч 30 мин')
+  })
+
+  it('меньше минуты не показывает "0 мин"', () => {
+    expect(fmtDurationShort(20_000)).toBe('меньше минуты')
   })
 })

@@ -2,7 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../../../../primitives/Icon'
 import type { IconName } from '../../../../primitives/Icon'
+import { Link } from 'react-router-dom'
 import { fileTypeIcon, fileTypeColor, shortName } from './fileHelpers'
+import type { LineLabelState } from '../../../shared/usePrintBarcodeLabels'
 
 type FileGlyph = { name: IconName; color: string }
 
@@ -20,6 +22,7 @@ export type LineFileEntry = {
 
 export function LineFilesCell({
   entries, canEdit, uploading, onPreview, onAdd, onReplace, onRemove, onPickFromCard,
+  label, labelScanCritical, onPrintLabel, productHref,
   accept = '.pdf,.png,.jpg,.jpeg',
   glyphFor = (mime, filename) => ({ name: fileTypeIcon(mime, filename), color: fileTypeColor(mime, filename) }),
 }: {
@@ -32,6 +35,15 @@ export function LineFilesCell({
   onRemove: (entryId: string) => void
   /** Выбор этикетки из карточки товара — кнопка появляется, только если проп передан. */
   onPickFromCard?: () => void
+  /** Чем маркируют строку, если файла в ней нет: код карточки, «нет ШК» или загрузка.
+   * Без пропа ячейка ведёт себя по-старому — только файлы (отгрузка, вложения строки). */
+  label?: LineLabelState
+  /** Задача с ТСД: без кода не сработает скан, поэтому предупреждение жёстче. */
+  labelScanCritical?: boolean
+  /** Печать этикетки по коду карточки — тираж считает вызывающая сторона. */
+  onPrintLabel?: () => void
+  /** Куда вести за штрих-кодом, когда его нет: карточка товара. */
+  productHref?: string | null
   /** Список расширений для input[type=file]. По умолчанию — набор упаковки (pdf/png/jpg). */
   accept?: string
   /** Иконка+цвет глифа по файлу — для доменов с другим набором типов (напр. zip в отгрузке). */
@@ -107,9 +119,210 @@ export function LineFilesCell({
     />
   )
 
-  // Пусто + только просмотр → прочерк
-  if (entries.length === 0 && !canEdit) {
+  // Пусто + только просмотр → прочерк. Со сведениями об этикетке прочерк не ставим:
+  // на закрытой задаче тоже видно, чем маркировали строку.
+  if (entries.length === 0 && !canEdit && !label) {
     return <span style={{ fontSize: 12, color: 'var(--c-text-faint)' }}>—</span>
+  }
+
+  // Файла нет, но код в карточке есть — строка сразу показывает, что напечатается.
+  // Раньше здесь была пустая кнопка «прикрепить», и генерация была не видна вообще.
+  if (entries.length === 0 && label && label.kind === 'code') {
+    return (
+      <div
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
+      >
+        {hiddenInput}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          <button
+            type="button"
+            onClick={onPickFromCard}
+            disabled={!onPickFromCard}
+            title={label.chosen
+              ? 'Код выбран вручную — сменить'
+              : label.count > 1 ? `У варианта ${label.count} кода — выбрать` : 'Этикетка строки'}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 7,
+              height: 30, maxWidth: 210, padding: '0 9px',
+              borderRadius: 'var(--r-md)',
+              border: `1px solid ${label.chosen ? 'var(--c-success)' : 'var(--c-accent-border)'}`,
+              background: label.chosen ? 'var(--c-success-bg)' : 'var(--c-accent-bg)',
+              cursor: onPickFromCard ? 'pointer' : 'default',
+            }}
+          >
+            <Icon
+              name={label.chosen ? 'check' : 'barcode'}
+              size={14}
+              style={{ color: label.chosen ? 'var(--c-success)' : 'var(--c-accent)', flexShrink: 0 }}
+            />
+            <span className="mono" style={{ fontSize: 11.5, color: 'var(--c-text)' }}>{label.barcode}</span>
+            {/* Показываем начало кода в натуральном масштабе, а не весь код,
+                сжатый до 44 px: 143 модуля в такой ширине сливаются в серую кашу. */}
+            <span style={{ height: 16, width: 46, flexShrink: 0, overflow: 'hidden', display: 'block' }}>
+              <span
+                style={{ display: 'block', height: '100%', width: label.modules * 1.2 }}
+                dangerouslySetInnerHTML={{ __html: label.barcodeSvg }}
+              />
+            </span>
+          </button>
+          {canEdit && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 1,
+              opacity: hover ? 1 : 0, transition: 'opacity 120ms ease',
+              pointerEvents: hover ? 'auto' : 'none',
+            }}>
+              {onPrintLabel && (
+                <button
+                  type="button"
+                  title="Напечатать этикетки на эту строку"
+                  onClick={onPrintLabel}
+                  className="btn ghost icon sm"
+                  style={{ width: 22, height: 22, color: 'var(--c-accent)' }}
+                >
+                  <Icon name="print" size={12} />
+                </button>
+              )}
+              <button
+                type="button"
+                title="Прикрепить файл этикетки (PDF, PNG, JPG)"
+                disabled={uploading}
+                onClick={() => pickFile(null)}
+                className="btn ghost icon sm"
+                style={{ width: 22, height: 22, color: 'var(--c-text-subtle)' }}
+              >
+                <Icon name="importFile" size={12} />
+              </button>
+            </span>
+          )}
+        </span>
+        <span style={{
+          fontSize: 10.5, lineHeight: '12px',
+          color: label.chosen ? 'var(--c-success)' : 'var(--c-text-subtle)',
+          maxWidth: 232, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {label.chosen ? 'Код выбран вручную' : label.count > 1 ? (
+            <>
+              По умолчанию ·{' '}
+              <button
+                type="button"
+                onClick={onPickFromCard}
+                disabled={!onPickFromCard}
+                style={{
+                  border: 0, background: 'none', padding: 0, font: 'inherit',
+                  color: 'var(--c-accent)', textDecoration: 'underline',
+                  cursor: onPickFromCard ? 'pointer' : 'default',
+                }}
+              >
+                выбрать из {label.count}
+              </button>
+            </>
+          ) : 'Напечатаем по коду карточки'}
+        </span>
+      </div>
+    )
+  }
+
+  // Коды из разных кабинетов: любой напечатать нельзя — чужой ШК площадка не примет.
+  // Это не ошибка данных, а незакрытое решение, поэтому тон акцентный, а не тревожный.
+  if (entries.length === 0 && label && label.kind === 'choose') {
+    return (
+      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+        {hiddenInput}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          <button
+            type="button"
+            onClick={onPickFromCard}
+            disabled={!onPickFromCard}
+            title="Выбрать, каким кодом маркировать строку"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              height: 30, padding: '0 10px', borderRadius: 'var(--r-md)',
+              border: '1px dashed var(--c-accent)', background: 'var(--c-bg-elev)',
+              color: 'var(--c-accent)', fontSize: 12, fontWeight: 600,
+              cursor: onPickFromCard ? 'pointer' : 'default',
+            }}
+          >
+            <Icon name="alert" size={13} />{label.count} кода — выберите
+          </button>
+          {canEdit && (
+            <button
+              type="button"
+              title="Прикрепить файл этикетки (PDF, PNG, JPG)"
+              disabled={uploading}
+              onClick={() => pickFile(null)}
+              className="btn ghost icon sm"
+              style={{ width: 22, height: 22, color: 'var(--c-text-subtle)' }}
+            >
+              <Icon name="importFile" size={12} />
+            </button>
+          )}
+        </span>
+        <span style={{
+          fontSize: 10.5, lineHeight: '12px', color: 'var(--c-accent)',
+          maxWidth: 232, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          Коды разных кабинетов
+        </span>
+      </div>
+    )
+  }
+
+  // Кода нет — маркировать нечем. На задаче с ТСД это ещё и стоп для сборки.
+  if (entries.length === 0 && label && label.kind === 'missing') {
+    return (
+      <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+        {hiddenInput}
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          <button
+            type="button"
+            onClick={onPickFromCard}
+            disabled={!onPickFromCard}
+            title="Чем маркировать эту строку"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              height: 30, padding: '0 9px', borderRadius: 'var(--r-md)',
+              border: '1px solid var(--c-warning)', background: 'var(--c-warning-bg)',
+              color: 'var(--c-warning)', fontSize: 12, fontWeight: 600,
+              cursor: onPickFromCard ? 'pointer' : 'default',
+            }}
+          >
+            <Icon name="alert" size={13} />{label.reason.startsWith('Выбранный код') ? 'Код снят' : 'Нет ШК'}
+          </button>
+          {canEdit && (
+            <button
+              type="button"
+              title="Прикрепить файл этикетки (PDF, PNG, JPG)"
+              disabled={uploading}
+              onClick={() => pickFile(null)}
+              className="btn ghost icon sm"
+              style={{ width: 22, height: 22, color: 'var(--c-text-subtle)' }}
+            >
+              <Icon name="importFile" size={12} />
+            </button>
+          )}
+        </span>
+        <span style={{
+          fontSize: 10.5, lineHeight: '12px', color: 'var(--c-warning)',
+          maxWidth: 232, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }} title={label.reason}>
+          {label.reason.startsWith('Выбранный код')
+            ? 'Код снят с карточки'
+            : labelScanCritical ? 'Сканер не опознает товар' : 'Печатать нечего'}
+          {productHref ? <> — <Link to={productHref} style={{ color: 'var(--c-warning)' }}>добавить код</Link></> : null}
+        </span>
+      </div>
+    )
+  }
+
+  if (entries.length === 0 && label && label.kind === 'loading') {
+    return (
+      <span style={{
+        display: 'inline-block', width: 150, height: 30, borderRadius: 'var(--r-md)',
+        background: 'var(--c-bg-sunken)', border: '1px solid var(--c-border)',
+      }} />
+    )
   }
 
   // Пусто + можно прикрепить → приглушённая ghost-кнопка (не «кричит» на пустых строках)

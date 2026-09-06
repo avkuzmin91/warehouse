@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from config import CLIENT_LIST_SORT_COLUMNS, COLOR_LIST_SORT_COLUMNS, SIZE_LIST_SORT_COLUMNS
+from config import (
+    CLIENT_LIST_SORT_COLUMNS,
+    COLOR_LIST_SORT_COLUMNS,
+    DICTIONARY_ORDER_SQL,
+    SIZE_LIST_SORT_COLUMNS,
+)
 from modules.auth.service import get_current_admin, get_current_user
 from security import FORBIDDEN_DETAIL
 
@@ -11,8 +16,11 @@ from .schemas import (
     ClientStoreItem,
     ClientStoreUpdateRequest,
     DictionaryBaseItem,
+    DictionaryBulkCreateRequest,
+    DictionaryBulkCreateResponse,
     DictionaryCreateRequest,
     DictionaryListResponse,
+    DictionaryReorderRequest,
     DictionaryUpdateRequest,
     MessageResponse,
     ProductTypeCreateRequest,
@@ -27,6 +35,8 @@ from .schemas import (
 )
 from .service import (
     create_dictionary_item,
+    create_dictionary_items_bulk,
+    reorder_dictionary_items,
     create_client_store,
     create_product_type,
     create_size,
@@ -165,7 +175,7 @@ def list_colors(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=COLOR_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=COLOR_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -173,6 +183,16 @@ def list_colors(
 @router.post("/colors", response_model=MessageResponse)
 def create_color(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("colors", payload, admin["id"])
+
+
+@router.post("/colors/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_colors(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("colors", payload, admin["id"])
+
+
+@router.post("/colors/reorder", response_model=MessageResponse)
+def reorder_colors(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("colors", payload, admin["id"])
 
 
 @router.get("/colors/{item_id}", response_model=DictionaryBaseItem)
@@ -220,6 +240,16 @@ def create_product_type_endpoint(payload: ProductTypeCreateRequest, admin=Depend
     return create_product_type(payload, admin["id"])
 
 
+@router.post("/product-types/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_product_types(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("product_types", payload, admin["id"])
+
+
+@router.post("/product-types/reorder", response_model=MessageResponse)
+def reorder_product_types(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("product_types", payload, admin["id"])
+
+
 @router.get("/product-types/{item_id}", response_model=ProductTypeDictionaryItem)
 def get_product_type(item_id: str, admin=Depends(get_current_admin), include_deleted: bool = Query(False)):
     _ = admin
@@ -256,7 +286,7 @@ def list_suppliers(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -264,6 +294,16 @@ def list_suppliers(
 @router.post("/suppliers", response_model=MessageResponse)
 def create_supplier(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("suppliers", payload, admin["id"])
+
+
+@router.post("/suppliers/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_suppliers(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("suppliers", payload, admin["id"])
+
+
+@router.post("/suppliers/reorder", response_model=MessageResponse)
+def reorder_suppliers(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("suppliers", payload, admin["id"])
 
 
 @router.get("/suppliers/{item_id}", response_model=DictionaryBaseItem)
@@ -302,7 +342,7 @@ def list_unloading_zones(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -310,6 +350,16 @@ def list_unloading_zones(
 @router.post("/unloading-zones", response_model=MessageResponse)
 def create_unloading_zone(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("unloading_zones", payload, admin["id"])
+
+
+@router.post("/unloading-zones/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_unloading_zones(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("unloading_zones", payload, admin["id"])
+
+
+@router.post("/unloading-zones/reorder", response_model=MessageResponse)
+def reorder_unloading_zones(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("unloading_zones", payload, admin["id"])
 
 
 @router.get("/unloading-zones/{item_id}", response_model=DictionaryBaseItem)
@@ -360,7 +410,7 @@ def list_warehouses(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -368,6 +418,16 @@ def list_warehouses(
 @router.post("/warehouses", response_model=MessageResponse)
 def create_warehouse(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("warehouses", payload, admin["id"])
+
+
+@router.post("/warehouses/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_warehouses(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("warehouses", payload, admin["id"])
+
+
+@router.post("/warehouses/reorder", response_model=MessageResponse)
+def reorder_warehouses(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("warehouses", payload, admin["id"])
 
 
 @router.get("/warehouses/{item_id}", response_model=DictionaryBaseItem)
@@ -406,7 +466,7 @@ def list_own_warehouses(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -414,6 +474,16 @@ def list_own_warehouses(
 @router.post("/own-warehouses", response_model=MessageResponse)
 def create_own_warehouse(payload: DictionaryCreateRequest, admin=Depends(_get_strict_admin)):
     return create_dictionary_item("own_warehouses", payload, admin["id"])
+
+
+@router.post("/own-warehouses/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_own_warehouses(payload: DictionaryBulkCreateRequest, admin=Depends(_get_strict_admin)):
+    return create_dictionary_items_bulk("own_warehouses", payload, admin["id"])
+
+
+@router.post("/own-warehouses/reorder", response_model=MessageResponse)
+def reorder_own_warehouses(payload: DictionaryReorderRequest, admin=Depends(_get_strict_admin)):
+    return reorder_dictionary_items("own_warehouses", payload, admin["id"])
 
 
 @router.get("/own-warehouses/{item_id}", response_model=DictionaryBaseItem)
@@ -452,7 +522,7 @@ def list_carriers(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -460,6 +530,16 @@ def list_carriers(
 @router.post("/carriers", response_model=MessageResponse)
 def create_carrier(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("carriers", payload, admin["id"])
+
+
+@router.post("/carriers/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_carriers(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("carriers", payload, admin["id"])
+
+
+@router.post("/carriers/reorder", response_model=MessageResponse)
+def reorder_carriers(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("carriers", payload, admin["id"])
 
 
 @router.get("/carriers/{item_id}", response_model=DictionaryBaseItem)
@@ -498,7 +578,7 @@ def list_positions(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -506,6 +586,16 @@ def list_positions(
 @router.post("/positions", response_model=MessageResponse)
 def create_position(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("positions", payload, admin["id"])
+
+
+@router.post("/positions/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_positions(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("positions", payload, admin["id"])
+
+
+@router.post("/positions/reorder", response_model=MessageResponse)
+def reorder_positions(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("positions", payload, admin["id"])
 
 
 @router.get("/positions/{item_id}", response_model=DictionaryBaseItem)
@@ -544,7 +634,7 @@ def list_vehicle_types(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -552,6 +642,16 @@ def list_vehicle_types(
 @router.post("/vehicle-types", response_model=MessageResponse)
 def create_vehicle_type(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("vehicle_types", payload, admin["id"])
+
+
+@router.post("/vehicle-types/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_vehicle_types(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("vehicle_types", payload, admin["id"])
+
+
+@router.post("/vehicle-types/reorder", response_model=MessageResponse)
+def reorder_vehicle_types(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("vehicle_types", payload, admin["id"])
 
 
 @router.get("/vehicle-types/{item_id}", response_model=DictionaryBaseItem)
@@ -590,7 +690,7 @@ def list_defect_reasons(
         search=name, actuality_id=actuality_id,
         date_from=_normalize_date_yyyy_mm_dd(date_from, "date_from"),
         date_to=_normalize_date_yyyy_mm_dd(date_to, "date_to"),
-        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order="d.created_at DESC",
+        sort=sort, sort_columns=CLIENT_LIST_SORT_COLUMNS, default_order=DICTIONARY_ORDER_SQL,
         include_deleted=include_deleted,
     )
 
@@ -598,6 +698,16 @@ def list_defect_reasons(
 @router.post("/defect-reasons", response_model=MessageResponse)
 def create_defect_reason(payload: DictionaryCreateRequest, admin=Depends(get_current_admin)):
     return create_dictionary_item("defect_reasons", payload, admin["id"])
+
+
+@router.post("/defect-reasons/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_defect_reasons(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("defect_reasons", payload, admin["id"])
+
+
+@router.post("/defect-reasons/reorder", response_model=MessageResponse)
+def reorder_defect_reasons(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("defect_reasons", payload, admin["id"])
 
 
 @router.get("/defect-reasons/{item_id}", response_model=DictionaryBaseItem)
@@ -635,6 +745,16 @@ def list_sizes(
 @router.post("/sizes", response_model=MessageResponse)
 def create_size_endpoint(payload: SizeCreateRequest, admin=Depends(get_current_admin)):
     return create_size(payload, admin["id"])
+
+
+@router.post("/sizes/bulk", response_model=DictionaryBulkCreateResponse)
+def bulk_create_sizes(payload: DictionaryBulkCreateRequest, admin=Depends(get_current_admin)):
+    return create_dictionary_items_bulk("sizes", payload, admin["id"])
+
+
+@router.post("/sizes/reorder", response_model=MessageResponse)
+def reorder_sizes(payload: DictionaryReorderRequest, admin=Depends(get_current_admin)):
+    return reorder_dictionary_items("sizes", payload, admin["id"])
 
 
 @router.get("/sizes/{item_id}", response_model=SizeItem)

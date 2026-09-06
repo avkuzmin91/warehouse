@@ -9,6 +9,7 @@ import type { DuplicateMatch, ProductFileItem } from '../../../api/domainTypes'
 import { attachShipmentLineFileFromProduct } from '../../../api/shipmentsApi'
 import { resolvePublicUploadSrc } from '../../../api/constants'
 import { ProductLabelPickerModal } from './shipmentDetail/components/ProductLabelPickerModal'
+import { useLineBarcodeLabels, usePrintBarcodeLabels } from '../shared/usePrintBarcodeLabels'
 import { StoreBarcodesDrawer } from './shipmentDetail/components/StoreBarcodesDrawer'
 import { DuplicateWarnModal } from './shared/DuplicateWarnModal'
 import { ClientActiveDocsPanel, activeDocVariantKey, loadActiveShipments } from './shared/ClientActiveDocsPanel'
@@ -130,6 +131,21 @@ export function ShipmentCreateFeature(
   }
 
   const [labelPickerLine, setLabelPickerLine] = useState<DraftLine | null>(null)
+  // Чем маркируют строку, видно уже при заведении задачи: код карточки или «нет ШК».
+  const { printLabels, printing } = usePrintBarcodeLabels()
+  const labelOf = useLineBarcodeLabels(lines.map((l) => ({
+    product_id: l.product_id, color_id: l.color_id, size_id: l.size_id,
+    store_id: l.store_id, barcode: l.label_barcode,
+  })))
+  // Строки с кодами разных кабинетов в пачку печати не идут: печатать «любой из
+  // двух» нельзя, а тормозить из-за них весь тираж дороже, чем пропустить.
+  const undecidedLines = lines.filter((l) => labelOf(l).kind === 'choose')
+  const printableLines = lines.filter((l) => labelOf(l).kind === 'code' && l.qty > 0)
+  const labelsTotal = printableLines.reduce((sum, l) => sum + l.qty, 0)
+
+  function setLineLabel(uid: string, barcode: string | null) {
+    setLines((ls) => ls.map((l) => (l._uid === uid ? { ...l, label_barcode: barcode } : l)))
+  }
 
   function addProductFileRef(uid: string, file: ProductFileItem) {
     setLines((ls) => ls.map((l) => l._uid === uid && !l.productFiles.some((f) => f.id === file.id)
@@ -292,6 +308,7 @@ export function ShipmentCreateFeature(
           storage_zone_name: line.storage_zone_name ?? null,
           store_id:          line.store_id ?? null,
           store_name:        line.store_name ?? null,
+          label_barcode:     line.label_barcode ?? null,
         })),
       })
       const docId = res.message
@@ -422,6 +439,33 @@ export function ShipmentCreateFeature(
             hint="Товар на остатках и в пути"
             right={
               <div className="row gap-8">
+                {undecidedLines.length > 0 && (
+                  <button
+                    className="btn sm"
+                    onClick={() => setLabelPickerLine(undecidedLines[0])}
+                    title="У этих строк несколько кодов из разных кабинетов — выберите, чем маркировать"
+                    style={{
+                      borderColor: 'var(--c-warning)', background: 'var(--c-warning-bg)',
+                      color: 'var(--c-warning)',
+                    }}
+                  >
+                    <Icon name="alert" size={12} />
+                    {undecidedLines.length === 1 ? '1 строка без выбора' : `${undecidedLines.length} строк без выбора`}
+                  </button>
+                )}
+                {lines.length > 0 && (
+                  <button
+                    className="btn sm"
+                    onClick={() => void printLabels(printableLines.map((l) => ({
+                      product_id: l.product_id, color_id: l.color_id, size_id: l.size_id,
+                      store_id: l.store_id, barcode: l.label_barcode, qty: l.qty,
+                    })))}
+                    disabled={printing || labelsTotal <= 0}
+                    title="Этикетки ШК на весь состав — по плану строк"
+                  >
+                    <Icon name="print" size={12} />Печать этикеток · {labelsTotal}
+                  </button>
+                )}
                 {lines.length > 0 && (
                   <button className="btn sm" onClick={() => setStoreBarcodesOpen(true)} disabled={saving}>
                     <Icon name="barcode" size={12} />Подтянуть ШК
@@ -445,9 +489,9 @@ export function ShipmentCreateFeature(
                     <th>Товар · вариант</th>
                     <th style={{ width: 180 }}>Магазин</th>
                     <th style={{ textAlign: 'right', width: 176 }}>План упаковки</th>
-                    <th style={{ width: 124, textAlign: 'center' }}>
+                    <th style={{ width: 236, textAlign: 'center' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--c-text-subtle)' }}>
-                        <Icon name="paperclip" size={12} style={{ opacity: 0.7 }} />Файлы
+                        <Icon name="barcode" size={12} style={{ opacity: 0.7 }} />Этикетка
                       </span>
                     </th>
                     <th style={{ width: 32 }} />
@@ -558,6 +602,12 @@ export function ShipmentCreateFeature(
                               else removeLineFile(l._uid, Number(entryId))
                             }}
                             onPickFromCard={() => setLabelPickerLine(l)}
+                            label={labelOf(l)}
+                            productHref={`/dictionaries/products/${l.product_id}`}
+                            onPrintLabel={printing || l.qty <= 0 || labelOf(l).kind !== 'code' ? undefined : () => void printLabels([{
+                              product_id: l.product_id, color_id: l.color_id, size_id: l.size_id,
+                              store_id: l.store_id, barcode: l.label_barcode, qty: l.qty,
+                            }])}
                           />
                         </td>
                         <td>
@@ -667,9 +717,15 @@ export function ShipmentCreateFeature(
         <ProductLabelPickerModal
           productId={labelPickerLine.product_id}
           productName={labelPickerLine.product_name}
+          variantLabel={[labelPickerLine.color_name, labelPickerLine.size_name].filter(Boolean).join(' · ') || null}
           lineColorId={labelPickerLine.color_id ?? null}
           lineSizeId={labelPickerLine.size_id ?? null}
+          lineStoreId={labelPickerLine.store_id ?? null}
+          qty={labelPickerLine.qty}
+          chosenBarcode={labelPickerLine.label_barcode ?? null}
           excludeUrls={labelPickerLine.productFiles.map((f) => f.url)}
+          onChoose={(barcode) => setLineLabel(labelPickerLine._uid, barcode)}
+          onPullBarcodes={() => { setLabelPickerLine(null); setStoreBarcodesOpen(true) }}
           onPick={(f) => { addProductFileRef(labelPickerLine._uid, f); setLabelPickerLine(null) }}
           onClose={() => setLabelPickerLine(null)}
         />

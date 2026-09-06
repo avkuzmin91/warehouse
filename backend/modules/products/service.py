@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Mapping, NamedTuple
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -23,6 +23,10 @@ from config import (
 from dbconn import escape_like, get_connection
 
 from .schemas import (
+    BarcodeLabelItem,
+    BarcodeLabelMissingItem,
+    BarcodeLabelRequestItem,
+    BarcodeLabelsResponse,
     ProductCreateDimensionBlock,
     ProductCreateMeta,
     ProductItem,
@@ -35,7 +39,7 @@ from .schemas import (
     ProductVariantsPatchRequest,
     MessageResponse,
 )
-from utils import now_iso as _now
+from utils import barcode_svg as _barcode_svg, now_iso as _now
 
 
 
@@ -1814,3 +1818,146 @@ def purge_stale_product_import_batches(
         "DELETE FROM product_import_batches WHERE status = ? AND created_at < ?",
         (PRODUCT_IMPORT_STATUS_PREVIEW, cutoff),
     )
+
+
+class _Code(NamedTuple):
+    barcode: str
+    source: str | None
+    store_id: str | None
+
+
+def _label_candidates(codes: list[_Code], store_id: str | None) -> list[_Code]:
+    """Из чего выбирают этикетку строки: сначала коды её магазина, потом общие.
+
+    Магазин — доменный признак, а не украшение: у варианта в кабинете Ozon и в
+    кабинете WB разные ШК, и клеить чужой нельзя. Когда магазин строки не указан,
+    кандидаты — общие коды, а если и таких нет, остаются все.
+    """
+    own = [c for c in codes if store_id and c.store_id == store_id]
+    if own:
+        return own
+    general = [c for c in codes if not c.store_id]
+    return general or codes
+
+
+def build_barcode_labels(
+    connection: Any, items: list[BarcodeLabelRequestItem], *, all_codes: bool = False
+) -> BarcodeLabelsResponse:
+    """Печатные этикетки ШК по вариантам: код рисуется здесь и нигде не хранится.
+
+    Картинка — чистая функция от цифр, поэтому сохранённый файл только протухал бы
+    после смены цвето-размера варианта или прихода нового кода из кабинета МП.
+    Загруженная вручную этикетка (`product_barcode_files`) этим не отменяется:
+    она остаётся приоритетной там, где менеджер её приложил.
+    """
+    product_ids = list({str(it.product_id) for it in items})
+    placeholders = ",".join("?" for _ in product_ids)
+    variant_rows = connection.execute(
+        f"""
+        SELECT v.id, v.product_id, v.sku, v.color_id, v.size_id,
+               col.name AS color_name, sz.name AS size_name,
+               p.name AS product_name
+        FROM product_variants v
+        JOIN products p ON p.id = v.product_id
+        LEFT JOIN colors col ON col.id = v.color_id
+        LEFT JOIN sizes sz ON sz.id = v.size_id
+        WHERE v.product_id IN ({placeholders})
+          AND COALESCE(v.is_deleted, 0) = 0
+          AND COALESCE(p.is_deleted, 0) = 0
+        """,
+        product_ids,
+    ).fetchall()
+    by_identity: dict[tuple[str, str, str], Any] = {}
+    for r in variant_rows:
+        key = (str(r["product_id"]), str(r["color_id"] or ""), str(r["size_id"] or ""))
+        by_identity.setdefault(key, r)
+
+    barcode_rows = connection.execute(
+        f"""
+        SELECT product_id, variant_id, barcode, source, store_id
+        FROM product_barcodes
+        WHERE product_id IN ({placeholders}) AND COALESCE(is_deleted, 0) = 0
+        ORDER BY created_at
+        """,
+        product_ids,
+    ).fetchall()
+    by_variant: dict[str, list[_Code]] = {}
+    product_level: dict[str, list[_Code]] = {}
+    for r in barcode_rows:
+        code = _Code(
+            barcode=str(r["barcode"]),
+            source=str(r["source"]) if r["source"] else None,
+            store_id=str(r["store_id"]) if r["store_id"] else None,
+        )
+        if r["variant_id"]:
+            by_variant.setdefault(str(r["variant_id"]), []).append(code)
+        else:
+            product_level.setdefault(str(r["product_id"]), []).append(code)
+
+    labels: list[BarcodeLabelItem] = []
+    missing: list[BarcodeLabelMissingItem] = []
+    for it in items:
+        pid = str(it.product_id)
+        row = by_identity.get((pid, str(it.color_id or ""), str(it.size_id or "")))
+        if row is None:
+            missing.append(BarcodeLabelMissingItem(
+                product_id=pid, color_id=str(it.color_id) if it.color_id else None,
+                size_id=str(it.size_id) if it.size_id else None,
+                label=pid, reason="Вариант не найден",
+            ))
+            continue
+        vid = str(row["id"])
+        attrs = " / ".join(x for x in [row["color_name"], row["size_name"]] if x)
+        label = str(row["sku"]) + (f" ({attrs})" if attrs else "")
+        # Код без варианта — легаси карточек с единственным вариантом: он опознаёт
+        # тот же товар, и печатать по нему можно.
+        codes = by_variant.get(vid) or product_level.get(pid) or []
+        if not codes:
+            missing.append(BarcodeLabelMissingItem(
+                product_id=pid, color_id=str(it.color_id) if it.color_id else None,
+                size_id=str(it.size_id) if it.size_id else None,
+                variant_id=vid, label=label, reason="У варианта нет штрих-кода",
+            ))
+            continue
+        candidates = _label_candidates(codes, str(it.store_id or "") or None)
+        mixed = len({(c.store_id or "", c.source or "") for c in candidates}) > 1
+        pinned = str(it.barcode or "").strip()
+        if pinned and pinned not in [c.barcode for c in codes]:
+            # Выбранный на строке код сняли с карточки. Молча подставить другой нельзя:
+            # это ровно та ошибка, ради которой выбор и заводился.
+            missing.append(BarcodeLabelMissingItem(
+                product_id=pid, color_id=str(it.color_id) if it.color_id else None,
+                size_id=str(it.size_id) if it.size_id else None,
+                variant_id=vid, label=label,
+                reason="Выбранный код снят с карточки — выберите заново",
+            ))
+            continue
+        if pinned:
+            chosen = [c for c in codes if c.barcode == pinned]
+        elif all_codes:
+            # Шторка выбора показывает все коды варианта, кандидаты — первыми.
+            chosen = candidates + [c for c in codes if c not in candidates]
+        else:
+            chosen = candidates[:1]
+        for code in chosen:
+            svg, modules = _barcode_svg(code.barcode)
+            labels.append(BarcodeLabelItem(
+                product_id=pid,
+                color_id=str(it.color_id) if it.color_id else None,
+                size_id=str(it.size_id) if it.size_id else None,
+                variant_id=vid,
+                barcode=code.barcode,
+                barcode_svg=svg,
+                modules=modules,
+                product_name=str(row["product_name"] or ""),
+                sku=str(row["sku"]),
+                color_name=row["color_name"],
+                size_name=row["size_name"],
+                qty=int(it.qty),
+                source=code.source,
+                store_id=code.store_id,
+                chosen=bool(pinned) and code.barcode == pinned,
+                barcode_count=len(candidates),
+                mixed_origin=mixed,
+            ))
+    return BarcodeLabelsResponse(items=labels, missing=missing)

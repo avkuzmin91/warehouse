@@ -18,7 +18,11 @@ from config import (
 )
 from modules.containers.service import pending_placement
 from modules.dispatch.service import list_stuck_partial_dispatches
-from modules.marketplaces.service import list_picking_supplies
+from modules.marketplaces.service import (
+    list_handover_supplies,
+    list_packing_supplies,
+    list_picking_supplies,
+)
 from modules.receipts.service import list_shortage_receipts
 from modules.timesheet.service import business_today
 
@@ -206,6 +210,35 @@ def list_my_tasks(connection, *, user) -> list[dict]:
             tasks.append({
                 "kind": "mp_supply_pick",
                 "title": f"Собрать поставку {r['doc_number']}",
+                "doc_type": "mp_supply",
+                "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]),
+                "status": str(r["status"]),
+                "role": ROLE_PICKER,
+                "since": r["updated_at"] or r["created_at"],
+            })
+        # Упаковка — продолжение той же задачи у того же сборщика: заказы пакуются
+        # поштучно у ПК с принтером этикеток. Взятая поставка остаётся за ним.
+        for r in list_packing_supplies(connection):
+            holder = r.get("picker_id")
+            if holder and str(holder) != str(user["id"]) and role != "admin":
+                continue
+            tasks.append({
+                "kind": "mp_supply_pack",
+                "title": f"Упаковать заказы {r['doc_number']}",
+                "doc_type": "mp_supply",
+                "doc_id": str(r["id"]),
+                "doc_number": str(r["doc_number"]),
+                "status": str(r["status"]),
+                "role": ROLE_PICKER,
+                "since": r["updated_at"] or r["created_at"],
+            })
+        # Грузовые места — общая работа склада: закрытые заказы укладываются в
+        # короба/палеты, за поставкой никто не закреплён.
+        for r in list_handover_supplies(connection):
+            tasks.append({
+                "kind": "mp_supply_cargo",
+                "title": f"Сформировать грузовые места {r['doc_number']}",
                 "doc_type": "mp_supply",
                 "doc_id": str(r["id"]),
                 "doc_number": str(r["doc_number"]),

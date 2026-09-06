@@ -34,7 +34,7 @@ from config import (
     UPLOADS_DIR,
 )
 from dbconn import get_connection, ci_like_substring_param, barcode_variant_exists_sql, like_substring_param
-from utils import now_iso as _now, validate_business_date
+from utils import now_iso as _now, size_order_sql, validate_business_date
 from modules.auth.service import get_current_document_creator, get_current_manager
 from security import can_view_costs, ensure_cost_access
 from modules.dispatch.schemas import (
@@ -367,7 +367,10 @@ def dispatch_trip_alloc_remaining(doc_id: str, user=Depends(_get_manager)):
             "COALESCE(NULLIF(p.sku, ''), NULLIF(l.product_sku, ''), '') AS product_sku, "
             "l.product_name, l.color_name, l.size_name, l.qty, l.shipped_qty "
             "FROM dispatch_lines l LEFT JOIN products p ON p.id = l.product_id "
-            "WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0 ORDER BY product_sku, l.id",
+            "LEFT JOIN sizes sz ON sz.id = l.size_id "
+            "WHERE l.doc_id = ? AND COALESCE(l.is_deleted, 0) = 0 "
+            "ORDER BY product_sku, l.product_name, l.color_name NULLS FIRST, "
+            f"{size_order_sql('sz.sort_order', 'l.size_name')}, l.id",
             (doc_id,),
         ).fetchall()
     items = [

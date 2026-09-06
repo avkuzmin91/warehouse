@@ -19,11 +19,18 @@ class ShipmentLineIn(BaseModel):
     storage_zone_name: str | None = None
     store_id:          str | None = None
     store_name:        str | None = None
+    # Выбранный код этикетки: у варианта их бывает несколько (Ozon и WB).
+    label_barcode:     str | None = None
 
 
 class ShipmentLineStoreUpdate(BaseModel):
     # None / пустая строка — «без магазина».
     store_id: str | None = None
+
+
+class ShipmentLineLabelUpdate(BaseModel):
+    # None / пустая строка — вернуться к коду по правилу (магазин строки → общий).
+    barcode: str | None = None
 
 
 class ShipmentLinePackPayload(BaseModel):
@@ -322,6 +329,9 @@ class ShipmentLineItem(BaseModel):
     storage_zone_name: str | None
     store_id:          str | None
     store_name:        str | None
+    # Каким кодом маркируют строку, когда у варианта их несколько. Пусто — код
+    # выбирается правилом (магазин строки → общий код карточки).
+    label_barcode:     str | None = None
     # ШК варианта, заведённые под магазин строки: у одного варианта в разных
     # магазинах разные коды, кладовщику нужен код именно этого магазина.
     store_barcodes:    list[str] = []

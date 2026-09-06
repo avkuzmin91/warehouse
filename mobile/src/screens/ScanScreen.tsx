@@ -5,6 +5,7 @@ import { scanSource } from '../scan/ScanSource'
 import { getProductByBarcode } from '../api/productsApi'
 import { getLocationByCode, isLocationCode } from '../api/locationsApi'
 import { getContainerByCode, isContainerCode } from '../api/containersApi'
+import { getCargoByCode, isCargoCode } from '../api/marketplacesApi'
 import { isCisCode, parseCis } from '../utils/cis'
 import { isScanAutoStartEnabled } from '../utils/scanSettings'
 import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
@@ -17,7 +18,7 @@ import { scanNotFoundFeedback, scanSuccessFeedback } from '../utils/feedback'
 let returningFromResult = false
 
 export function ScanScreen() {
-  const { back, openScanProduct, openScanLocation, openScanCis, openScanBox } = useNav()
+  const { back, openScanProduct, openScanLocation, openScanCis, openScanBox, openSupplyCargo } = useNav()
   const [code, setCode] = useState('')
   const [looking, setLooking] = useState(false)
   const [error, setError] = useState('')
@@ -64,6 +65,19 @@ export function ScanScreen() {
           scanSuccessFeedback()
           returningFromResult = true
           openScanBox(found.container.id)
+        } else {
+          scanNotFoundFeedback()
+          setNotFound(c)
+        }
+        return
+      }
+      // QR грузового места FBS («wms:gm:<id>») открывает экран грузовых мест его поставки.
+      if (isCargoCode(c)) {
+        const found = await getCargoByCode(c)
+        if (found.found && found.unit) {
+          scanSuccessFeedback()
+          returningFromResult = true
+          openSupplyCargo(found.unit.supply_id, found.unit.id)
         } else {
           scanNotFoundFeedback()
           setNotFound(c)

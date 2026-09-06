@@ -7,6 +7,7 @@ import {
   updateProductType,
   createSize,
   updateSize,
+  bulkCreateDictionaryItems,
   fetchSimpleDictionaryPage,
   setUnloadingZonePacking,
   setUnloadingZoneShipping,
@@ -57,6 +58,8 @@ function normalizeColorHex(value: string): string | null {
 
 const SIMPLE_API_PATHS: Record<string, string> = {
   colors: '/colors',
+  sizes: '/sizes',
+  'product-types': '/product-types',
   suppliers: '/suppliers',
   'unloading-zones': '/unloading-zones',
   warehouses: '/warehouses',
@@ -85,7 +88,6 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
   const [colorHex, setColorHex] = useState(DEFAULT_COLOR_HEX)
   const [rentRub, setRentRub] = useState('')
   const [active, setActive] = useState(true)
-  const [sortOrder, setSortOrder] = useState('')
   const [reqColor, setReqColor] = useState(false)
   const [reqSize, setReqSize] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -106,8 +108,6 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     const initialRent = initial && 'rent_monthly_kopecks' in initial ? initial.rent_monthly_kopecks : null
     setRentRub(apiType === 'own-warehouses' && initialRent != null ? String(initialRent / 100) : '')
     setActive(initial?.is_active ?? true)
-    const initialSortOrder = initial && 'sort_order' in initial ? initial.sort_order : null
-    setSortOrder(apiType === 'sizes' && initialSortOrder != null ? String(initialSortOrder) : '')
     setError(null)
     if (apiType === 'product-types' && initial) {
       const pt = initial as ProductTypeDictionaryItem
@@ -158,8 +158,32 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     }
   }
 
+  // Пачка: значения по одному в строке. Порядок им проставит backend, продолжая
+  // нумерацию справочника шагом 10.
+  const names = name.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+  const isBatch = isNew && names.length > 1
+
   const handleSave = async () => {
     if (!name.trim()) { setError('Введите значение'); return }
+    if (isBatch) {
+      setSaving(true)
+      setError(null)
+      try {
+        const res = await bulkCreateDictionaryItems(SIMPLE_API_PATHS[apiType] ?? _apiPath(apiType), {
+          names,
+          is_active: active,
+          ...(apiType === 'product-types' ? { requires_size: reqSize } : {}),
+        })
+        toast(res.message, res.skipped.length ? 'info' : 'success')
+        onSaved()
+        onClose()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Ошибка сохранения')
+      } finally {
+        setSaving(false)
+      }
+      return
+    }
     if (apiType === 'colors' && colorHex.trim() && !normalizeColorHex(colorHex)) {
       setError('Hex цвета должен быть в формате #RGB или #RRGGBB')
       return
@@ -184,27 +208,29 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
     try {
       if (isNew) {
         if (apiType === 'product-types') {
-          await createProductType({ name: name.trim(), is_active: active, requires_color: reqColor, requires_size: reqSize })
+          await createProductType({
+            name: name.trim(), is_active: active, requires_color: reqColor, requires_size: reqSize,
+          })
         } else if (apiType === 'sizes') {
-          const so = sortOrder.trim() === '' ? null : Number(sortOrder)
-          await createSize({ name: name.trim(), is_active: active, sort_order: Number.isFinite(so as number) ? so : null })
+          await createSize({ name: name.trim(), is_active: active })
         } else {
           const path = _apiPath(apiType)
-          await createSimpleDictionaryItem(path, { name: name.trim(), is_active: active, ...colorPayload, ...rentPayload })
+          await createSimpleDictionaryItem(path, {
+            name: name.trim(), is_active: active, ...colorPayload, ...rentPayload,
+          })
         }
       } else if (initial) {
         if (apiType === 'product-types') {
-          await updateProductType(initial.id, { name: name.trim(), is_active: active, requires_color: reqColor, requires_size: reqSize })
-        } else if (apiType === 'sizes') {
-          const so = sortOrder.trim() === '' ? null : Number(sortOrder)
-          await updateSize(initial.id, {
-            name: name.trim(),
-            is_active: active,
-            ...(so == null || !Number.isFinite(so) ? { clear_sort_order: true } : { sort_order: so }),
+          await updateProductType(initial.id, {
+            name: name.trim(), is_active: active, requires_color: reqColor, requires_size: reqSize,
           })
+        } else if (apiType === 'sizes') {
+          await updateSize(initial.id, { name: name.trim(), is_active: active })
         } else {
           const path = _apiPath(apiType)
-          await updateSimpleDictionaryItem(path, initial.id, { name: name.trim(), is_active: active, ...colorPayload, ...rentPayload })
+          await updateSimpleDictionaryItem(path, initial.id, {
+            name: name.trim(), is_active: active, ...colorPayload, ...rentPayload,
+          })
         }
       }
       onSaved()
@@ -240,24 +266,36 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         </>
       }
     >
-      <Field label="Значение" required error={error ?? undefined}>
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={`Например: ${placeholder}`}
-          autoFocus
-        />
+      <Field
+        label="Значение"
+        required
+        error={error ?? undefined}
+        help={isNew ? 'Несколько значений — по одному в строке: заведутся сразу, порядок проставится автоматически.' : undefined}
+      >
+        {isNew ? (
+          <textarea
+            className="input"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={`Например: ${placeholder}`}
+            rows={3}
+            autoFocus
+            style={{ height: 'auto', padding: '7px 10px', lineHeight: 1.5, resize: 'vertical', fontFamily: 'inherit' }}
+          />
+        ) : (
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={`Например: ${placeholder}`}
+            autoFocus
+          />
+        )}
       </Field>
 
-      {kind === 'Размер' && (
-        <Field label="Порядок сортировки" help="Меньше — раньше в списках (XS=10, S=20, M=30…). Пусто — после упорядоченных, по алфавиту.">
-          <Input
-            value={sortOrder}
-            onChange={(e) => setSortOrder(e.target.value.replace(/[^\d-]/g, ''))}
-            placeholder="Например: 30"
-            inputMode="numeric"
-          />
-        </Field>
+      {isBatch && (
+        <div className="text-xs subtle" style={{ margin: '-8px 0 14px' }}>
+          Будет заведено значений: {names.length}
+        </div>
       )}
 
       {kind === 'Тип товара' && (
@@ -269,7 +307,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         </Field>
       )}
 
-      {kind === 'Цвет' && (
+      {kind === 'Цвет' && !isBatch && (
         <Field label="Hex / визуальное обозначение">
           <div className="row gap-8">
             <div style={{ width: 30, height: 30, borderRadius: 6, background: swatchColor, border: '1px solid var(--c-border)', flexShrink: 0 }} />
@@ -283,7 +321,7 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
         </Field>
       )}
 
-      {apiType === 'own-warehouses' && isNew && (
+      {apiType === 'own-warehouses' && isNew && !isBatch && (
         <Field label="Аренда, ₽ / мес" help="Стартовая ставка действует с сегодняшнего дня. После создания склада можно менять ставку и задавать дату изменения в карточке. Оставьте пустым, если аренды нет.">
           <Input
             className="num"
@@ -352,9 +390,9 @@ export function SimpleDictSheet({ open, onClose, onSaved, isNew, kind, apiType, 
           <div className="text-xs subtle" style={{ marginBottom: 6 }}>МЕТА</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 8, fontSize: 12.5 }}>
             <span className="muted">Создано</span>
-            <span>{fmtDateLong(initial.created_at ?? null)}</span>
+            <span>{fmtDateLong(initial.created_at ?? null)}{initial.created_by ? ` · ${initial.created_by}` : ''}</span>
             <span className="muted">Изменено</span>
-            <span>{fmtDateLong(initial.updated_at ?? null)}</span>
+            <span>{fmtDateLong(initial.updated_at ?? null)}{initial.updated_by ? ` · ${initial.updated_by}` : ''}</span>
           </div>
         </div>
       )}

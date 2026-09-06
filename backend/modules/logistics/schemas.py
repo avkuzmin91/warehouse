@@ -162,6 +162,10 @@ class TripReceiptAllocItem(BaseModel):
     product_sku: str | None = None
     product_name: str | None = None
     variant: str | None = None
+    # Ключ варианта — по нему приёмка печатает этикетки ШК на принятое.
+    product_id: str | None = None
+    color_id: str | None = None
+    size_id: str | None = None
     qty: int = 0           # привозит этот рейс
     planned_qty: int = 0   # план по строке
     accepted_qty: int = 0  # принято всего (по всем рейсам)

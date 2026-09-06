@@ -3,6 +3,7 @@ import type { DictionaryItem } from '../../../../../api/domainTypes'
 import type { TripReceiptItem } from '../../../../../api/tripsApi'
 import { Icon } from '../../../../primitives/Icon'
 import { Combobox } from '../../../../data/Combobox'
+import { usePrintBarcodeLabels } from '../../../shared/usePrintBarcodeLabels'
 
 /** Одна строка раскладки: сколько штук кладётся в какую ячейку. */
 export type ReceivePlacement = { qty: number; zoneId: string }
@@ -22,6 +23,8 @@ export function UnloadReceiveTable({ receipts, zones, placementsByLine, onPlacem
   showErrors: boolean
 }) {
   const withAlloc = receipts.filter((r) => r.allocations.length > 0)
+  // Товар приезжает немаркированным — этикетки печатаются здесь, пока он на рампе.
+  const { printLabels, printing } = usePrintBarcodeLabels()
   // Место правили руками (или меняли состав ячеек) — мастер эту строку не перезаписывает.
   const [touched, setTouched] = useState<Record<string, boolean>>({})
   const [masterAll, setMasterAll] = useState('')
@@ -124,21 +127,40 @@ export function UnloadReceiveTable({ receipts, zones, placementsByLine, onPlacem
             }
             return (
               <div key={a.line_id} style={{ padding: '8px 14px' }}>
-                <div style={{ minWidth: 0, marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {a.product_name ?? a.product_sku ?? '—'}
-                    {a.variant ? <span style={{ color: 'var(--c-text-subtle)', fontWeight: 500 }}> · {a.variant}</span> : null}
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {a.product_name ?? a.product_sku ?? '—'}
+                      {a.variant ? <span style={{ color: 'var(--c-text-subtle)', fontWeight: 500 }}> · {a.variant}</span> : null}
+                    </div>
+                    {a.product_name && a.product_sku ? (
+                      <div className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{a.product_sku}</div>
+                    ) : null}
+                    <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
+                      план рейса {a.qty} шт · принято {total}
+                      {short ? <> · <span style={{ color: 'var(--c-warning)' }}>недовоз</span></> : null}
+                      {surplus ? <> · <span style={{ color: 'var(--c-accent)' }}>сверх плана +{total - a.qty}</span></> : null}
+                      {isTouched ? <> · <span style={{ color: 'var(--c-accent)' }}>вручную</span></> : null}
+                      {fromLastTime ? <> · <span>как в прошлый раз</span></> : null}
+                    </div>
                   </div>
-                  {a.product_name && a.product_sku ? (
-                    <div className="mono" style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>{a.product_sku}</div>
+                  {a.product_id ? (
+                    <button
+                      type="button"
+                      className="btn ghost sm"
+                      style={{ flexShrink: 0 }}
+                      disabled={printing || total <= 0}
+                      title={total > 0 ? `Напечатать этикетки ШК: ${total} шт.` : 'Сначала укажите принятое количество'}
+                      onClick={() => void printLabels([{
+                        product_id: a.product_id as string,
+                        color_id: a.color_id,
+                        size_id: a.size_id,
+                        qty: total,
+                      }])}
+                    >
+                      <Icon name="print" size={13} /> Этикетки
+                    </button>
                   ) : null}
-                  <div style={{ fontSize: 11.5, color: 'var(--c-text-subtle)' }}>
-                    план рейса {a.qty} шт · принято {total}
-                    {short ? <> · <span style={{ color: 'var(--c-warning)' }}>недовоз</span></> : null}
-                    {surplus ? <> · <span style={{ color: 'var(--c-accent)' }}>сверх плана +{total - a.qty}</span></> : null}
-                    {isTouched ? <> · <span style={{ color: 'var(--c-accent)' }}>вручную</span></> : null}
-                    {fromLastTime ? <> · <span>как в прошлый раз</span></> : null}
-                  </div>
                 </div>
 
                 {rows.map((p, idx) => {

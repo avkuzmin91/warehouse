@@ -16,6 +16,8 @@ export type TaskKind =
   | 'boxes_place'
   | 'dispatch_prepare'
   | 'mp_supply_pick'
+  | 'mp_supply_pack'
+  | 'mp_supply_cargo'
 
 export type TaskItem = {
   kind: TaskKind
@@ -61,6 +63,9 @@ export function taskLink(task: TaskItem): string {
   if (task.doc_type === 'trip')     return `/logistics/trips/${task.doc_id}`
   if (task.doc_type === 'shipment') return `/inventory/shipments/${task.doc_id}`
   if (task.doc_type === 'dispatch') return `/inventory/dispatches/${task.doc_id}`
+  // Упаковка и грузовые места — рабочие экраны склада, не менеджерская карточка.
+  if (task.kind === 'mp_supply_pack')  return `/marketplaces/supplies/${task.doc_id}/pack`
+  if (task.kind === 'mp_supply_cargo') return `/marketplaces/supplies/${task.doc_id}/cargo`
   if (task.doc_type === 'mp_supply') return `/marketplaces/supplies/${task.doc_id}`
   if (task.doc_type === 'containers') return '/inventory/boxes'
   return `/inventory/receipts/${task.doc_id}`

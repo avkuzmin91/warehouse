@@ -12,68 +12,119 @@ from config import (
     MP_LINK_SOURCE_MANUAL,
     MP_ORDER_STATUSES,
     MP_OZON,
+    MP_SUPPLY_STATUS_HANDOVER,
+    MP_SUPPLY_STATUS_PACKING,
     MP_SUPPLY_STATUS_PICKING,
     MP_SYNC_KIND_CATALOG,
     MP_SYNC_KIND_ORDERS,
 )
 from dbconn import get_connection
 from idempotency import begin_idempotent, finish_idempotent
-from modules.auth.service import get_current_supply_picker, get_current_user
+from modules.auth.service import (
+    get_current_admin,
+    get_current_supply_picker,
+    get_current_supply_worker,
+    get_current_user,
+)
 from security import ensure_marketplace_access
 
 from .clients import MpApiError
 from .schemas import (
     MessageResponse,
+    MpCargoCreateRequest,
+    MpCargoLabel,
+    MpCargoLabelsResponse,
+    MpCargoLookupResponse,
+    MpCargoOrderScanRequest,
+    MpCargoOrderScanResult,
+    MpCargoUnit,
+    MpCargoUnitsResponse,
+    MpOrderPushResult,
+    MpPackScanRequest,
+    MpPackScanResult,
     MpAccountCreate,
     MpAccountItem,
     MpAccountsResponse,
     MpAccountUpdate,
     MpLinkRequest,
+    MpLinkResponse,
     MpOrderDetailResponse,
     MpOrderLine,
     MpOrderListItem,
     MpOrdersResponse,
     MpOrdersSummaryResponse,
+    MpPickReturnRequest,
+    MpPickReturnResult,
     MpPickScanRequest,
     MpPickScanResult,
+    MpProductArticleItem,
+    MpProductArticlesResponse,
     MpProductItem,
     MpProductsResponse,
     MpSupplyBoardResponse,
-    MpSupplyCandidateItem,
     MpSupplyCandidatesResponse,
+    MpSupplyCreateRequest,
     MpSupplyDetailResponse,
     MpSupplyOpItem,
     MpSupplyOpsResponse,
+    MpSupplyOrderItem,
     MpSupplyOrdersRequest,
+    MpSupplyLabelsResult,
+    MpSupplyPackViewResponse,
     MpSupplyPickViewResponse,
     MpSupplyQueueResponse,
     SyncStatsResponse,
 )
 from .service import (
+    add_order_to_cargo,
     advance_supply,
+    apply_supply_correction,
     auto_link_by_barcode,
     available_orders_for_supply,
     cancel_supply,
+    cargo_labels,
     check_account,
     claim_next_supply,
+    close_cargo_unit,
+    create_cargo_unit,
+    create_supply,
+    delete_cargo_unit,
+    discard_supply_correction,
     dock_supply_orders,
     drop_supply_order,
+    fetch_supply_labels,
+    handover_supply_to_marketplace,
     link_mp_product,
+    list_cargo_units,
+    lookup_cargo_unit,
+    pack_order,
+    push_order_to_marketplace,
+    register_pack_scan,
+    remove_order_from_cargo,
+    reopen_cargo_unit,
+    supply_pack_view,
+    undo_pack_scan,
+    unpack_order,
     list_mp_products,
     list_orders,
+    list_product_mp_articles,
     load_supply,
     order_detail,
     orders_summary,
     picking_queue_size,
+    pool_orders,
     register_pick,
+    return_pick,
     release_supply,
     set_supply_orders,
+    start_supply_correction,
     supply_board,
     supply_detail,
     supply_ops,
     supply_pick_view,
     sync_account_catalog,
     sync_account_orders,
+    transfer_supply_to_marketplace,
     undo_pick,
     unlink_mp_product,
     write_sync_log,
@@ -318,6 +369,7 @@ def list_orders_endpoint(
     status: str | None = Query(None),
     overdue: bool = Query(False),
     no_supply: bool = Query(False),
+    has_error: bool = Query(False),
     search: str | None = Query(None),
 ):
     _ = user
@@ -329,7 +381,7 @@ def list_orders_endpoint(
         data = list_orders(
             conn, page=page, limit=limit, account_id=account_id, client_id=client_id,
             marketplace=marketplace, status=status, overdue=overdue, search=search,
-            no_supply=no_supply,
+            no_supply=no_supply, has_error=has_error,
         )
     return MpOrdersResponse(
         items=[MpOrderListItem(**item) for item in data["items"]],
@@ -372,7 +424,7 @@ def order_detail_endpoint(order_id: str, user=Depends(_get_mp_manager)):
 @router.get("/marketplaces/products", response_model=MpProductsResponse)
 def list_products_endpoint(
     user=Depends(_get_mp_manager),
-    account_id: str = Query(...),
+    account_id: str | None = Query(None),
     page: int = Query(1, ge=1),
     limit: int = Query(25, ge=1, le=200),
     linked: str = Query("all"),
@@ -382,7 +434,7 @@ def list_products_endpoint(
     if linked not in ("all", "linked", "unlinked"):
         raise HTTPException(status_code=400, detail="Недопустимый фильтр связки")
     with get_connection() as conn:
-        account = _load_account(conn, account_id)
+        account = _load_account(conn, account_id) if account_id else None
         data = list_mp_products(conn, account, page=page, limit=limit, linked=linked, search=search)
     return MpProductsResponse(
         items=[MpProductItem(**item) for item in data["items"]],
@@ -390,17 +442,33 @@ def list_products_endpoint(
     )
 
 
-@router.post("/marketplaces/products/{mp_product_id}/link", response_model=MessageResponse)
+@router.get(
+    "/marketplaces/wms-products/{product_id}/articles",
+    response_model=MpProductArticlesResponse,
+)
+def list_product_articles_endpoint(product_id: str, user=Depends(get_current_admin)):
+    """Артикулы продавца в карточке товара WMS.
+
+    Доступ шире остальных marketplace-эндпоинтов (весь бэк-офис, не только
+    менеджерский состав): артикул — не ключ кабинета, а карточку товара смотрит
+    и склад."""
+    _ = user
+    with get_connection() as conn:
+        rows = list_product_mp_articles(conn, product_id)
+    return MpProductArticlesResponse(items=[MpProductArticleItem(**r) for r in rows])
+
+
+@router.post("/marketplaces/products/{mp_product_id}/link", response_model=MpLinkResponse)
 def link_product_endpoint(mp_product_id: str, payload: MpLinkRequest, user=Depends(_get_mp_manager)):
     uid = str(user["id"])
     with get_connection() as conn:
-        link_mp_product(
+        stats = link_mp_product(
             conn, mp_product_id,
             product_id=payload.product_id, variant_id=payload.variant_id,
             user_id=uid, source=MP_LINK_SOURCE_MANUAL,
         )
         conn.commit()
-    return MessageResponse(message="ok")
+    return MpLinkResponse(message="ok", **stats)
 
 
 @router.delete("/marketplaces/products/{mp_product_id}/link", response_model=MessageResponse)
@@ -432,6 +500,39 @@ def supply_board_endpoint(
     return MpSupplyBoardResponse(**data)
 
 
+@router.post("/marketplaces/supplies", response_model=MessageResponse)
+def create_supply_endpoint(
+    payload: MpSupplyCreateRequest, request: Request, user=Depends(_get_mp_manager),
+):
+    """Завести поставку кабинета: поток заказов делится на столько отгрузок,
+    на сколько решил менеджер. Состав приходит выбранным из пула — поставка
+    сразу встаёт на «Проверку», отдельного подтверждения того же списка нет."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    scope = f"mp_supply_create:{payload.account_id}"
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, scope)
+        if not proceed:
+            conn.commit()
+            return MessageResponse(**stored)
+        supply_id = create_supply(
+            conn, account_id=payload.account_id, order_ids=payload.order_ids, user_id=uid,
+        )
+        result = {"message": supply_id}
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MessageResponse(**result)
+
+
+@router.get("/marketplaces/supplies/pool", response_model=MpSupplyCandidatesResponse)
+def supply_pool_endpoint(account_id: str = Query(...), user=Depends(_get_mp_manager)):
+    """Свободные заказы кабинета — из них набирают состав новой поставки."""
+    _ = user
+    with get_connection() as conn:
+        items = pool_orders(conn, account_id)
+    return MpSupplyCandidatesResponse(items=[MpSupplyOrderItem(**i) for i in items])
+
+
 @router.get("/marketplaces/supplies/{supply_id}", response_model=MpSupplyDetailResponse)
 def supply_detail_endpoint(supply_id: str, user=Depends(_get_mp_manager)):
     _ = user
@@ -448,7 +549,7 @@ def supply_candidates_endpoint(supply_id: str, user=Depends(_get_mp_manager)):
     with get_connection() as conn:
         load_supply(conn, supply_id)
         items = available_orders_for_supply(conn, supply_id)
-    return MpSupplyCandidatesResponse(items=[MpSupplyCandidateItem(**i) for i in items])
+    return MpSupplyCandidatesResponse(items=[MpSupplyOrderItem(**i) for i in items])
 
 
 @router.get("/marketplaces/supplies/{supply_id}/ops", response_model=MpSupplyOpsResponse)
@@ -469,6 +570,60 @@ def set_supply_orders_endpoint(
         set_supply_orders(conn, supply_id, payload.order_ids, uid)
         conn.commit()
     return MessageResponse(message="ok")
+
+
+@router.post("/marketplaces/supplies/{supply_id}/correct", response_model=MessageResponse)
+def start_supply_correction_endpoint(supply_id: str, user=Depends(_get_mp_manager)):
+    """«Скорректировать»: состав перевыбирается галочками, как при заведении."""
+    with get_connection() as conn:
+        start_supply_correction(conn, supply_id, str(user["id"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/marketplaces/supplies/{supply_id}/correct/apply", response_model=MessageResponse)
+def apply_supply_correction_endpoint(
+    supply_id: str, payload: MpSupplyOrdersRequest, user=Depends(_get_mp_manager),
+):
+    with get_connection() as conn:
+        apply_supply_correction(conn, supply_id, payload.order_ids, str(user["id"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/marketplaces/supplies/{supply_id}/correct/discard", response_model=MessageResponse)
+def discard_supply_correction_endpoint(supply_id: str, user=Depends(_get_mp_manager)):
+    with get_connection() as conn:
+        discard_supply_correction(conn, supply_id, str(user["id"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/marketplaces/supplies/{supply_id}/transfer", response_model=MessageResponse)
+def transfer_supply_endpoint(supply_id: str, request: Request, user=Depends(_get_mp_manager)):
+    """«Передать поставку WB / Ozon»: у WB заводится поставка продавца со всеми
+    заданиями, у Ozon фиксируется состав. Дальше состав не правится, поставка не
+    аннулируется, а лента этикеток становится доступна."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    scope = f"mp_supply_transfer:{supply_id}"
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, scope)
+        if not proceed:
+            conn.commit()
+            return MessageResponse(**stored)
+        try:
+            transferred = transfer_supply_to_marketplace(conn, supply_id, uid)
+        except HTTPException as exc:
+            # Отказ площадки после заведения поставки продавца: её номер и запись об
+            # ошибке должны остаться, иначе повтор заведёт у WB вторую поставку.
+            if exc.status_code == 502:
+                conn.commit()
+            raise
+        result = {"message": transferred["external_supply_id"] or "ok"}
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MessageResponse(**result)
 
 
 @router.post("/marketplaces/supplies/{supply_id}/dock", response_model=MessageResponse)
@@ -494,6 +649,11 @@ def advance_supply_endpoint(
         if not proceed:
             conn.commit()
             return MessageResponse(**stored)
+        row = load_supply(conn, supply_id)
+        if str(row["status"]) == MP_SUPPLY_STATUS_HANDOVER:
+            # Регистрация коробов и deliver у WB идут до смены статуса: если площадка
+            # откажет, поставка остаётся на передаче с записью об ошибке в журнале.
+            handover_supply_to_marketplace(conn, supply_id, uid)
         status = advance_supply(conn, supply_id, uid)
         result = {"message": status}
         finish_idempotent(conn, request_id, result)
@@ -507,13 +667,14 @@ def picking_queue_endpoint(user=Depends(get_current_supply_picker)):
     uid = str(user["id"])
     with get_connection() as conn:
         mine = conn.execute(
-            "SELECT id FROM mp_supplies WHERE status = ? AND picker_id = ? "
+            "SELECT id, status FROM mp_supplies WHERE status IN (?, ?) AND picker_id = ? "
             "AND COALESCE(is_deleted, 0) = 0 ORDER BY claimed_at ASC LIMIT 1",
-            (MP_SUPPLY_STATUS_PICKING, uid),
+            (MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_PACKING, uid),
         ).fetchone()
         return MpSupplyQueueResponse(
             queue=picking_queue_size(conn),
             supply_id=str(mine["id"]) if mine else None,
+            supply_status=str(mine["status"]) if mine else None,
         )
 
 
@@ -572,10 +733,262 @@ def register_pick_endpoint(
     return MpPickScanResult(**result)
 
 
+@router.post("/marketplaces/supplies/{supply_id}/picks/return", response_model=MpPickReturnResult)
+def return_pick_endpoint(
+    supply_id: str, payload: MpPickReturnRequest, request: Request,
+    user=Depends(get_current_supply_worker),
+):
+    """Возврат на полку собранного под снятые заказы. Идемпотентно: обрыв связи
+    не задваивает движение стока."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    scope = f"mp_supply_pick_return:{supply_id}"
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, scope)
+        if not proceed:
+            conn.commit()
+            return MpPickReturnResult(**stored)
+        result = return_pick(
+            conn, supply_id, barcode=payload.barcode, zone_id=payload.zone_id,
+            qty=payload.qty, user_id=uid, role=str(user["role"]),
+        )
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MpPickReturnResult(**result)
+
+
 @router.post("/marketplaces/supplies/{supply_id}/picks/{pick_id}/undo", response_model=MessageResponse)
 def undo_pick_endpoint(supply_id: str, pick_id: str, user=Depends(get_current_supply_picker)):
     with get_connection() as conn:
         undo_pick(conn, supply_id, pick_id, str(user["id"]), str(user["role"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+# ── Станция упаковки ──────────────────────────────────────────────────────────
+
+@router.get("/marketplaces/supplies/{supply_id}/pack-view", response_model=MpSupplyPackViewResponse)
+def supply_pack_view_endpoint(supply_id: str, user=Depends(get_current_supply_worker)):
+    _ = user
+    with get_connection() as conn:
+        return MpSupplyPackViewResponse(**supply_pack_view(conn, supply_id))
+
+
+@router.post(
+    "/marketplaces/supplies/{supply_id}/orders/{order_id}/pack-scans",
+    response_model=MpPackScanResult,
+)
+def register_pack_scan_endpoint(
+    supply_id: str, order_id: str, payload: MpPackScanRequest, request: Request,
+    user=Depends(get_current_supply_worker),
+):
+    """Скан единицы (ШК или КИЗ) в заказ. Идемпотентно: повтор не задваивает укладку."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    scope = f"mp_supply_pack:{supply_id}"
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, scope)
+        if not proceed:
+            conn.commit()
+            return MpPackScanResult(**stored)
+        result = register_pack_scan(
+            conn, supply_id, order_id, code=payload.code, qty=payload.qty,
+            user_id=uid, role=str(user["role"]),
+        )
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MpPackScanResult(**result)
+
+
+@router.post(
+    "/marketplaces/supplies/{supply_id}/pack-scans/{pack_id}/undo", response_model=MessageResponse,
+)
+def undo_pack_scan_endpoint(supply_id: str, pack_id: str, user=Depends(get_current_supply_worker)):
+    with get_connection() as conn:
+        undo_pack_scan(conn, supply_id, pack_id, str(user["id"]), str(user["role"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post(
+    "/marketplaces/supplies/{supply_id}/orders/{order_id}/pack", response_model=MpOrderPushResult,
+)
+def pack_order_endpoint(
+    supply_id: str, order_id: str, request: Request, user=Depends(get_current_supply_worker),
+):
+    """Заказ укомплектован → отправление собирается на площадке и приходит этикетка.
+
+    Две транзакции: упаковка фиксируется независимо от ответа площадки, чтобы обрыв
+    связи с МП не откатывал факт укладки; ошибка площадки возвращается в ответе."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    scope = f"mp_supply_pack_order:{supply_id}"
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, scope)
+        if not proceed:
+            conn.commit()
+            return MpOrderPushResult(**stored)
+        pack_order(conn, supply_id, order_id, uid, str(user["role"]))
+        conn.commit()
+    with get_connection() as conn:
+        result = push_order_to_marketplace(conn, supply_id, order_id, uid)
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MpOrderPushResult(**result)
+
+
+@router.post(
+    "/marketplaces/supplies/{supply_id}/orders/{order_id}/push", response_model=MpOrderPushResult,
+)
+def push_order_endpoint(supply_id: str, order_id: str, user=Depends(get_current_supply_worker)):
+    """Повторить отправку на площадку / запрос этикетки для уже упакованного заказа."""
+    with get_connection() as conn:
+        result = push_order_to_marketplace(conn, supply_id, order_id, str(user["id"]))
+        conn.commit()
+    return MpOrderPushResult(**result)
+
+
+@router.post("/marketplaces/supplies/{supply_id}/labels", response_model=MpSupplyLabelsResult)
+def fetch_supply_labels_endpoint(supply_id: str, user=Depends(get_current_supply_worker)):
+    """Лента этикеток на весь состав: печатается пачкой и клеится на заказы по ходу
+    работы. Ошибка площадки не роняет уже полученное — она в ответе, повтор безопасен."""
+    with get_connection() as conn:
+        result = fetch_supply_labels(conn, supply_id, str(user["id"]))
+        conn.commit()
+    return MpSupplyLabelsResult(**result)
+
+
+@router.post(
+    "/marketplaces/supplies/{supply_id}/orders/{order_id}/unpack", response_model=MessageResponse,
+)
+def unpack_order_endpoint(supply_id: str, order_id: str, user=Depends(get_current_supply_worker)):
+    with get_connection() as conn:
+        unpack_order(conn, supply_id, order_id, str(user["id"]), str(user["role"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/marketplaces/supplies/{supply_id}/finish-packing", response_model=MessageResponse)
+def finish_packing_endpoint(
+    supply_id: str, request: Request, user=Depends(get_current_supply_worker),
+):
+    """Упаковка закончена — поставка уходит на передачу (грузовые места)."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    scope = f"mp_supply_finish_packing:{supply_id}"
+    with get_connection() as conn:
+        row = load_supply(conn, supply_id)
+        if str(row["status"]) != MP_SUPPLY_STATUS_PACKING:
+            raise HTTPException(status_code=400, detail="Поставка не на упаковке")
+        proceed, stored = begin_idempotent(conn, request_id, uid, scope)
+        if not proceed:
+            conn.commit()
+            return MessageResponse(**stored)
+        result = {"message": advance_supply(conn, supply_id, uid)}
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MessageResponse(**result)
+
+
+# ── Грузовые места ────────────────────────────────────────────────────────────
+
+@router.get("/marketplaces/supplies/{supply_id}/cargo", response_model=MpCargoUnitsResponse)
+def list_cargo_units_endpoint(supply_id: str, user=Depends(get_current_supply_worker)):
+    _ = user
+    with get_connection() as conn:
+        load_supply(conn, supply_id)
+        items = list_cargo_units(conn, supply_id)
+    return MpCargoUnitsResponse(items=[MpCargoUnit(**i) for i in items])
+
+
+@router.post("/marketplaces/supplies/{supply_id}/cargo", response_model=MpCargoUnit)
+def create_cargo_unit_endpoint(
+    supply_id: str, payload: MpCargoCreateRequest, request: Request,
+    user=Depends(get_current_supply_worker),
+):
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, f"mp_cargo_create:{supply_id}")
+        if not proceed:
+            conn.commit()
+            return MpCargoUnit(**stored)
+        unit = create_cargo_unit(conn, supply_id, payload.kind, uid)
+        finish_idempotent(conn, request_id, unit)
+        conn.commit()
+    return MpCargoUnit(**unit)
+
+
+@router.get("/marketplaces/cargo/labels", response_model=MpCargoLabelsResponse)
+def cargo_labels_endpoint(
+    user=Depends(get_current_supply_worker),
+    ids: str = Query(..., description="Список id грузовых мест через запятую"),
+):
+    _ = user
+    id_list = [x for x in (ids or "").split(",") if x.strip()]
+    with get_connection() as conn:
+        items = cargo_labels(conn, id_list)
+    return MpCargoLabelsResponse(items=[MpCargoLabel(**i) for i in items])
+
+
+@router.get("/marketplaces/cargo/by-code/{code}", response_model=MpCargoLookupResponse)
+def lookup_cargo_unit_endpoint(code: str, user=Depends(get_current_supply_worker)):
+    """Скан этикетки ГМ: QR/номер → грузовое место. found=false, если не найдено."""
+    _ = user
+    with get_connection() as conn:
+        unit = lookup_cargo_unit(conn, code)
+    return MpCargoLookupResponse(found=unit is not None, unit=MpCargoUnit(**unit) if unit else None)
+
+
+@router.post("/marketplaces/cargo/{cargo_id}/orders", response_model=MpCargoOrderScanResult)
+def add_order_to_cargo_endpoint(
+    cargo_id: str, payload: MpCargoOrderScanRequest, request: Request,
+    user=Depends(get_current_supply_worker),
+):
+    """Скан этикетки заказа в грузовое место. Идемпотентно по X-Request-Id."""
+    uid = str(user["id"])
+    request_id = request.headers.get("X-Request-Id")
+    with get_connection() as conn:
+        proceed, stored = begin_idempotent(conn, request_id, uid, f"mp_cargo_order:{cargo_id}")
+        if not proceed:
+            conn.commit()
+            return MpCargoOrderScanResult(**stored)
+        result = add_order_to_cargo(conn, cargo_id, payload.code, uid)
+        finish_idempotent(conn, request_id, result)
+        conn.commit()
+    return MpCargoOrderScanResult(**result)
+
+
+@router.delete("/marketplaces/cargo/{cargo_id}/orders/{order_id}", response_model=MessageResponse)
+def remove_order_from_cargo_endpoint(
+    cargo_id: str, order_id: str, user=Depends(get_current_supply_worker),
+):
+    with get_connection() as conn:
+        remove_order_from_cargo(conn, cargo_id, order_id, str(user["id"]))
+        conn.commit()
+    return MessageResponse(message="ok")
+
+
+@router.post("/marketplaces/cargo/{cargo_id}/close", response_model=MpCargoUnit)
+def close_cargo_unit_endpoint(cargo_id: str, user=Depends(get_current_supply_worker)):
+    with get_connection() as conn:
+        unit = close_cargo_unit(conn, cargo_id, str(user["id"]))
+        conn.commit()
+    return MpCargoUnit(**unit)
+
+
+@router.post("/marketplaces/cargo/{cargo_id}/reopen", response_model=MpCargoUnit)
+def reopen_cargo_unit_endpoint(cargo_id: str, user=Depends(get_current_supply_worker)):
+    with get_connection() as conn:
+        unit = reopen_cargo_unit(conn, cargo_id, str(user["id"]))
+        conn.commit()
+    return MpCargoUnit(**unit)
+
+
+@router.delete("/marketplaces/cargo/{cargo_id}", response_model=MessageResponse)
+def delete_cargo_unit_endpoint(cargo_id: str, user=Depends(get_current_supply_worker)):
+    with get_connection() as conn:
+        delete_cargo_unit(conn, cargo_id, str(user["id"]))
         conn.commit()
     return MessageResponse(message="ok")
 

@@ -144,6 +144,8 @@ export type ShipmentLine = {
   storage_zone_name: string | null
   store_id:          string | null
   store_name:        string | null
+  /** Выбранный код этикетки; null — код берётся по правилу (магазин → общий). */
+  label_barcode:     string | null
   // ШК варианта, заведённые под магазин строки (подтянуты из кабинета МП).
   store_barcodes:    string[]
   placements:        ShipmentLinePlacement[]
@@ -282,6 +284,8 @@ export type ShipmentLineIn = {
   storage_zone_name?: string | null
   store_id?:          string | null
   store_name?:        string | null
+  /** Выбранный код этикетки — черновик сохраняет его вместе со строкой. */
+  label_barcode?:     string | null
 }
 
 export type ShipmentDocCreate = {
@@ -391,6 +395,14 @@ export function addShipmentLine(docId: string, line: ShipmentLineIn) {
 
 export function updateShipmentLine(docId: string, lineId: string, line: ShipmentLineIn) {
   return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}`, { method: 'PATCH', body: JSON.stringify(line) })
+}
+
+export function updateShipmentLineLabel(docId: string, lineId: string, barcode: string | null) {
+  // Каким из кодов варианта маркируют строку; null — вернуться к правилу.
+  return request<{ message: string }>(`/shipments/${docId}/lines/${lineId}/label`, {
+    method: 'PATCH',
+    body: JSON.stringify({ barcode }),
+  })
 }
 
 export function updateShipmentLineStore(docId: string, lineId: string, storeId: string | null) {

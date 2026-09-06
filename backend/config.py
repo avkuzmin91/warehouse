@@ -72,6 +72,19 @@ DICTIONARY_TABLES = frozenset({
     "vehicle_types", "positions", "own_warehouses",
 })
 
+# Справочники с ручным порядком значений. «Клиенты» сюда не входят: это не простой
+# справочник, у него свой список и своя сортировка.
+DICTIONARY_SORTABLE_TABLES = frozenset(DICTIONARY_TABLES - {"clients"})
+
+# Порядок по умолчанию для них: сначала явный sort_order, затем «натуральная»
+# сортировка имени — числовой префикс сравнивается числом. Без него размерный ряд
+# читается как 01, 1, 104, 110, 116, 35, 36 вместо 1, 01, 35, 36, 104, 110, 116.
+DICTIONARY_ORDER_SQL = (
+    "d.sort_order IS NULL, d.sort_order, "
+    "(substring(d.name from '^[0-9]+'))::numeric NULLS LAST, "
+    "LOWER(d.name)"
+)
+
 # Системный справочник «актуальность записи»
 RECORD_ACTUALITY_YES_ID = "00000000-0000-4000-8000-000000000001"
 RECORD_ACTUALITY_NO_ID = "00000000-0000-4000-8000-000000000002"
@@ -907,6 +920,38 @@ MP_ORDER_TERMINAL_STATUSES: frozenset[str] = frozenset({
     MP_ORDER_STATUS_DONE, MP_ORDER_STATUS_CANCELLED,
 })
 
+# Где заказ в НАШЕМ процессе. Отличается от MP_ORDER_STATUS_*, который приходит с
+# площадки и про склад ничего не знает: «Ждёт сборки» на МП может уже лежать в
+# поставке на упаковке. Монитор заказов показывает обе оси.
+MP_ORDER_STAGE_POOL = "pool"              # свободный, ни в одной активной поставке
+MP_ORDER_STAGE_IN_SUPPLY = "in_supply"    # взят поставкой, фаза — в её статусе
+MP_ORDER_STAGE_PACKED = "packed"          # уложен и закрыт на станции упаковки
+MP_ORDER_STAGE_HANDED = "handed"          # передан площадке
+MP_ORDER_STAGE_DONE = "done"
+MP_ORDER_STAGE_CANCELLED = "cancelled"
+
+MP_ORDER_STAGES: tuple[str, ...] = (
+    MP_ORDER_STAGE_POOL, MP_ORDER_STAGE_IN_SUPPLY, MP_ORDER_STAGE_PACKED,
+    MP_ORDER_STAGE_HANDED, MP_ORDER_STAGE_DONE, MP_ORDER_STAGE_CANCELLED,
+)
+
+# Что мешает собрать заказ — общий словарь монитора заказов и состава поставки.
+MP_ORDER_BLOCKER_UNLINKED = "unlinked"
+MP_ORDER_BLOCKER_SHORTAGE = "shortage"
+MP_ORDER_BLOCKER_NO_LOCATION = "no_location"
+
+# Пул сборки FBS — корзина «Упаковано»: под заказ площадки уходит только товар,
+# прошедший стол упаковки. Со хранения (`storage`) сборщик не берёт — там ещё не
+# упакованный товар, а после развозки (`ready`) он числится под отгрузку клиенту.
+MP_SUPPLY_PICK_OP = INV_OP_PACKED
+
+# Дефицит на мониторе — конкуренция заказов за один остаток, поэтому смотреть на
+# одну страницу нельзя: в расчёт берётся очередь фильтра до этой отсечки.
+MP_ORDERS_READINESS_SCAN_LIMIT = 500
+
+# Сколько несвязанных артикулов показать в баннере над списком заказов.
+MP_ORDERS_UNLINKED_OFFERS_LIMIT = 20
+
 MP_LINK_SOURCE_BARCODE = "barcode_auto"
 MP_LINK_SOURCE_MANUAL = "manual"
 
@@ -942,36 +987,61 @@ MP_BARCODE_SOURCE_LABELS: dict[str, str] = {
 # Единица работы менеджера — поставка, а не заказ: площадка не примет отгрузку,
 # в которой заказы двух продавцов. Границу задаёт пара «кабинет + отсечка»
 # (mp_supplies.account_id + cutoff_at), поэтому смешать клиентов негде.
-MP_SUPPLY_STATUS_DRAFT     = "draft"      # «Состав» — приём открыт, менеджер правит выбор
-MP_SUPPLY_STATUS_CHECKING  = "checking"   # «Проверка» — состав утверждён, разбор блокеров
-MP_SUPPLY_STATUS_PICKING   = "picking"    # «Сборка» — задача кладовщику
-MP_SUPPLY_STATUS_HANDOVER  = "handover"   # «Передача» — собрано, ярлык/QR площадке
+MP_SUPPLY_STATUS_DRAFT     = "draft"      # «Создание» — состав набирается до заведения; в БД только легаси-поставки
+MP_SUPPLY_STATUS_CHECKING  = "checking"   # «Проверка» — состав принят, разбор блокеров, передача площадке
+MP_SUPPLY_STATUS_CORRECTING = "correcting"  # «Корректировка» — менеджер перевыбирает состав галочками, как при создании
+MP_SUPPLY_STATUS_PICKING   = "picking"    # «Сборка» — задача сборщику: снять товар с полок
+MP_SUPPLY_STATUS_PACKING   = "packing"    # «Упаковка» — заказы пакуются поштучно, ШК/ЧЗ, этикетка площадки
+MP_SUPPLY_STATUS_HANDOVER  = "handover"   # «Передача» — упаковано, формируются грузовые места
 MP_SUPPLY_STATUS_DONE      = "done"
 MP_SUPPLY_STATUS_CANCELLED = "cancelled"
 
 MP_SUPPLY_STATUSES: tuple[str, ...] = (
-    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_PICKING,
-    MP_SUPPLY_STATUS_HANDOVER, MP_SUPPLY_STATUS_DONE, MP_SUPPLY_STATUS_CANCELLED,
+    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_CORRECTING,
+    MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_PACKING, MP_SUPPLY_STATUS_HANDOVER,
+    MP_SUPPLY_STATUS_DONE, MP_SUPPLY_STATUS_CANCELLED,
 )
 
 MP_SUPPLY_STATUS_LABELS: dict[str, str] = {
-    MP_SUPPLY_STATUS_DRAFT: "Состав",
+    MP_SUPPLY_STATUS_DRAFT: "Создание",
     MP_SUPPLY_STATUS_CHECKING: "Проверка",
+    MP_SUPPLY_STATUS_CORRECTING: "Корректировка",
     MP_SUPPLY_STATUS_PICKING: "Сборка",
+    MP_SUPPLY_STATUS_PACKING: "Упаковка",
     MP_SUPPLY_STATUS_HANDOVER: "Передача",
     MP_SUPPLY_STATUS_DONE: "Передана",
     MP_SUPPLY_STATUS_CANCELLED: "Аннулирована",
 }
 
-# Приём открыт — заказы синка втекают в поставку сами.
+# Приём открыт — состав ещё правится менеджером.
 MP_SUPPLY_INTAKE_STATUSES: frozenset[str] = frozenset({
-    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING,
+    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_CORRECTING,
 })
 
 # Активные: занимают заказ и видны на доске.
 MP_SUPPLY_ACTIVE_STATUSES: frozenset[str] = frozenset({
-    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING,
-    MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_HANDOVER,
+    MP_SUPPLY_STATUS_DRAFT, MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_CORRECTING,
+    MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_PACKING, MP_SUPPLY_STATUS_HANDOVER,
+})
+
+# Принятое обязательство: состав утверждён, товар обещан площадке и резервирует
+# остаток для соседних поставок (до передачи включительно). Корректировка — та же
+# «Проверка» с открытым выбором, резерв под неё не снимается.
+MP_SUPPLY_COMMITTED_STATUSES: tuple[str, ...] = (
+    MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_CORRECTING, MP_SUPPLY_STATUS_PICKING,
+    MP_SUPPLY_STATUS_PACKING, MP_SUPPLY_STATUS_HANDOVER,
+)
+
+# Складские фазы поставки — работа сборщика на ТСД/станции упаковки.
+MP_SUPPLY_WORK_STATUSES: frozenset[str] = frozenset({
+    MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_PACKING,
+})
+
+# Когда можно брать ленту этикеток площадки: поставка уже передана площадке
+# (mp_transferred_at), а груз ещё нет — стикеры печатаются пачкой и клеятся на
+# заказы по ходу работы.
+MP_SUPPLY_LABEL_STATUSES: frozenset[str] = frozenset({
+    MP_SUPPLY_STATUS_CHECKING, MP_SUPPLY_STATUS_PICKING, MP_SUPPLY_STATUS_PACKING,
 })
 
 MP_SUPPLY_TERMINAL_STATUSES: frozenset[str] = frozenset({
@@ -992,16 +1062,52 @@ MP_SUPPLY_ORDER_HOLDING: frozenset[str] = frozenset({
 # За сколько минут до отсечки закрывается приём в поставку (умолчание кабинета).
 MP_SUPPLY_INTAKE_CLOSE_MINUTES = 30
 
+# Порог тревоги в пуле свободных заказов: поставки заводит человек, поэтому
+# «скоро дедлайн, а заказ ни в одной поставке» должно быть видно, а не подразумеваться.
+MP_SUPPLY_POOL_ALARM_HOURS = 6
+
 MP_SUPPLY_OP_CREATE       = "create"
 MP_SUPPLY_OP_ORDER_ADD    = "order_add"
 MP_SUPPLY_OP_ORDER_REMOVE = "order_remove"
 MP_SUPPLY_OP_ORDER_DOCK   = "order_dock"
+MP_SUPPLY_OP_ORDER_CANCELLED = "order_cancelled"  # заказ отменён площадкой после передачи ей
 MP_SUPPLY_OP_STATUS       = "status"
 MP_SUPPLY_OP_INTAKE_CLOSE = "intake_close"
 MP_SUPPLY_OP_CLAIM        = "claim"
 MP_SUPPLY_OP_RELEASE      = "release"
 MP_SUPPLY_OP_PICK         = "pick"
 MP_SUPPLY_OP_PICK_UNDO    = "pick_undo"
+MP_SUPPLY_OP_PACK         = "pack"           # единица уложена в заказ (ШК или КИЗ)
+MP_SUPPLY_OP_PACK_UNDO    = "pack_undo"
+MP_SUPPLY_OP_ORDER_PACKED = "order_packed"   # заказ укомплектован и закрыт
+MP_SUPPLY_OP_ORDER_UNPACKED = "order_unpacked"
+MP_SUPPLY_OP_MP_TRANSFER  = "mp_transfer"    # поставка передана площадке: состав зафиксирован, у WB заведена поставка продавца
+MP_SUPPLY_OP_MP_PUSH      = "mp_push"        # отправление собрано на площадке / этикетка получена
+MP_SUPPLY_OP_MP_ERROR     = "mp_error"       # площадка ответила ошибкой
+MP_SUPPLY_OP_CARGO        = "cargo"          # грузовое место: заведено / закрыто / переоткрыто
+MP_SUPPLY_OP_CARGO_ORDER  = "cargo_order"    # заказ уложен в ГМ / изъят из ГМ
+
+# ── Грузовые места FBS-поставки ────────────────────────────────────────────────
+# Короб или палета, которые уезжают на площадку. Свои этикетки (QR «wms:gm:<id>»),
+# потому что этикетку ГМ печатают до того, как площадка узнает о составе;
+# внешний id (короб WB) дописывается при передаче.
+MP_CARGO_KIND_BOX    = "box"
+MP_CARGO_KIND_PALLET = "pallet"
+MP_CARGO_KINDS: tuple[str, ...] = (MP_CARGO_KIND_BOX, MP_CARGO_KIND_PALLET)
+MP_CARGO_KIND_LABELS: dict[str, str] = {
+    MP_CARGO_KIND_BOX: "Короб",
+    MP_CARGO_KIND_PALLET: "Палета",
+}
+MP_CARGO_STATUS_OPEN   = "open"
+MP_CARGO_STATUS_CLOSED = "closed"
+MP_CARGO_STATUS_LABELS: dict[str, str] = {
+    MP_CARGO_STATUS_OPEN: "Набирается",
+    MP_CARGO_STATUS_CLOSED: "Закрыто",
+}
+MP_CARGO_QR_PREFIX = "wms:gm:"
+MP_CARGO_DOC_PREFIX = "GM-"
+MP_CARGO_DOC_WIDTH = 6
+MP_CARGO_LABELS_LIMIT = 200
 
 # Собирает поставку выделенный сборщик, но роль не эксклюзивная: на малом складе
 # отдельного человека нет, и очередь не должна вставать, если сборщик не в смене.

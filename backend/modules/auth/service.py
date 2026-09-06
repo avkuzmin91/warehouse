@@ -34,6 +34,7 @@ from security import (
     ensure_shipment_view_access,
     ensure_stock_write_access,
     ensure_supply_pick_access,
+    ensure_supply_work_access,
     ensure_task_view_access,
     ensure_warehouse_staff,
     user_client_id_opt,
@@ -302,6 +303,12 @@ def get_current_task_viewer(user=Depends(get_current_user)):
 def get_current_supply_picker(user=Depends(get_current_user)):
     """Сборка FBS-поставки на ТСД."""
     ensure_supply_pick_access(user)
+    return user
+
+
+def get_current_supply_worker(user=Depends(get_current_user)):
+    """Упаковка заказов и грузовые места FBS-поставки (склад + менеджер)."""
+    ensure_supply_work_access(user)
     return user
 
 

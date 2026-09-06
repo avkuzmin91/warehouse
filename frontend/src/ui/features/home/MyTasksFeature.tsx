@@ -24,6 +24,8 @@ const KIND_ICON: Record<TaskKind, IconName> = {
   shipment_defect_prepare: 'forklift',
   dispatch_prepare: 'forklift',
   mp_supply_pick: 'truckOut',
+  mp_supply_pack: 'box',
+  mp_supply_cargo: 'boxes',
   shipment_putaway: 'box',
   boxes_place: 'archive',
 }
@@ -41,6 +43,8 @@ const KIND_LABEL: Record<TaskKind, string> = {
   shipment_defect_prepare: 'Подготовить к отгрузке',
   dispatch_prepare: 'Подготовить отгрузку',
   mp_supply_pick: 'Собрать поставку FBS',
+  mp_supply_pack: 'Упаковать заказы FBS',
+  mp_supply_cargo: 'Сформировать грузовые места FBS',
   shipment_putaway: 'Собрать короба',
   boxes_place: 'Развезти по местам',
 }

@@ -26,7 +26,6 @@ import { Toggle } from '../../primitives/Checkbox'
 import { Badge } from '../../primitives/Badge'
 import { Skeleton } from '../../primitives/Skeleton'
 import { Icon } from '../../primitives/Icon'
-import { Select } from '../../primitives/Select'
 import { Tooltip } from '../../primitives/Tooltip'
 import { Table, Td } from '../../data/Table'
 import { useConfirm } from '../../feedback/ConfirmDialog'
@@ -106,6 +105,14 @@ export function ProductEditFeature({ id }: { id: string }) {
 
   const [colors, setColors] = useState<DictionaryItem[]>([])
   const [sizes, setSizes] = useState<DictionaryItem[]>([])
+  const colorOptions = useMemo<ComboboxOption[]>(
+    () => colors.map((c) => ({ value: c.id, label: c.name })),
+    [colors],
+  )
+  const sizeOptions = useMemo<ComboboxOption[]>(
+    () => sizes.map((s) => ({ value: s.id, label: s.name })),
+    [sizes],
+  )
   const { clients: clientLookups } = useLookups()
   const clients = useMemo<ComboboxOption[]>(
     () => clientLookups.map((item) => ({ value: item.id, label: item.name })),
@@ -664,9 +671,9 @@ export function ProductEditFeature({ id }: { id: string }) {
                 <Table>
                   <thead>
                     <tr>
-                      <th>SKU</th>
-                      <th>Цвет</th>
-                      {requiresSize && <th>Размер</th>}
+                      <th style={{ width: 110 }}>SKU</th>
+                      <th style={{ width: 200 }}>Цвет</th>
+                      {requiresSize && <th style={{ width: 150 }}>Размер</th>}
                       <th>Д x Ш x В (см)</th>
                       <th>Штрих-коды</th>
                       <th style={{ width: 28 }} />
@@ -695,15 +702,20 @@ export function ProductEditFeature({ id }: { id: string }) {
                       </Td>
                       <Td>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <Select
-                            value={row.color_id ?? ''}
-                            onChange={(v) => setRow(i, { color_id: v })}
-                            options={colors.map((c) => ({ value: c.id, label: c.name }))}
-                            placeholder="Цвет…"
-                            disabled={busy}
-                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <Combobox
+                              value={row.color_id ?? null}
+                              onChange={(v) => setRow(i, { color_id: v ? String(v) : '' })}
+                              options={colorOptions}
+                              placeholder="Цвет…"
+                              disabled={busy}
+                            />
+                          </div>
                           {locked && (
-                            <Tooltip content="По варианту есть поступления: при смене цвета остатки и история будут перенесены на новый цвет">
+                            <Tooltip
+                              content="По варианту есть поступления: при смене цвета остатки и история будут перенесены на новый цвет"
+                              maxWidth={230}
+                            >
                               <span style={{ cursor: 'help', color: 'var(--c-text-subtle)', flexShrink: 0 }}>
                                 <Icon name="refresh" size={13} />
                               </span>
@@ -714,15 +726,20 @@ export function ProductEditFeature({ id }: { id: string }) {
                       {requiresSize && (
                         <Td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                            <Select
-                              value={row.size_id ?? ''}
-                              onChange={(v) => setRow(i, { size_id: v || null })}
-                              options={sizes.map((s) => ({ value: s.id, label: s.name }))}
-                              placeholder="Размер…"
-                              disabled={busy}
-                            />
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <Combobox
+                                value={row.size_id ?? null}
+                                onChange={(v) => setRow(i, { size_id: v ? String(v) : null })}
+                                options={sizeOptions}
+                                placeholder="Размер…"
+                                disabled={busy}
+                              />
+                            </div>
                             {locked && (
-                              <Tooltip content="По варианту есть поступления: при смене размера остатки и история будут перенесены на новый размер">
+                              <Tooltip
+                                content="По варианту есть поступления: при смене размера остатки и история будут перенесены на новый размер"
+                                maxWidth={230}
+                              >
                                 <span style={{ cursor: 'help', color: 'var(--c-text-subtle)', flexShrink: 0 }}>
                                   <Icon name="refresh" size={13} />
                                 </span>

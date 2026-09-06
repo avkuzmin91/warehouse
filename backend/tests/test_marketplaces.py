@@ -405,6 +405,57 @@ def test_orders_list_and_summary(manager_client, ozon_account):
     assert len(r.json()["items"]) == 2
 
 
+def test_orders_monitor_fields(manager_client, ozon_account):
+    """Монитор отвечает на «смогу ли собрать» и «где заказ у нас», а не только
+    пересказывает статус площадки."""
+    account_id = ozon_account["id"]
+    _seed_order(account_id, "MON-1", deadline=datetime.now(UTC) + timedelta(days=1))
+
+    r = manager_client.get(f"/marketplaces/orders?account_id={account_id}&search=mon-1")
+    assert r.status_code == 200, r.text
+    item = r.json()["items"][0]
+    # Товар из заказа не связан с номенклатурой WMS → блокер и артикул для баннера.
+    assert item["stage"] == "pool"
+    assert item["blockers"] == ["unlinked"]
+    assert item["unlinked_offers"]
+    assert item["summary"]  # состав словами, а не «1 поз. / 1 шт.»
+
+    r = manager_client.get(f"/marketplaces/orders/summary?account_id={account_id}")
+    summary = r.json()
+    assert summary["unlinked_orders_count"] >= 1
+    assert summary["unlinked_offers"]
+    assert summary["no_supply_count"] >= 1
+    assert summary["error_count"] == 0
+
+    # Ошибка площадки — отдельный срез, а не строка, потерянная в общем списке.
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE mp_orders SET mp_error = ? WHERE account_id = ? AND external_id = ?",
+            ("Ozon: отправление не собрано", account_id, "MON-1"),
+        )
+        conn.commit()
+    r = manager_client.get(f"/marketplaces/orders?account_id={account_id}&has_error=true")
+    assert [i["external_id"] for i in r.json()["items"]] == ["MON-1"]
+    assert manager_client.get(
+        f"/marketplaces/orders/summary?account_id={account_id}",
+    ).json()["error_count"] == 1
+
+
+def test_order_stage_reads_our_process_not_marketplace():
+    """`mp_shipped_at` в стадию не входит: у WB отметка встаёт при добавлении
+    задания в поставку продавца, задолго до передачи груза."""
+    base = {"status": MP_ORDER_STATUS_NEW, "supply_id": None, "supply_status": None,
+            "packed_at": None, "mp_shipped_at": None}
+    assert mp_service.order_stage(base) == "pool"
+    assert mp_service.order_stage({**base, "supply_id": "s1", "supply_status": "picking"}) == "in_supply"
+    assert mp_service.order_stage({
+        **base, "supply_id": "s1", "supply_status": "packing",
+        "packed_at": "2026-09-05T10:00:00+00:00", "mp_shipped_at": "2026-09-05T09:00:00+00:00",
+    }) == "packed"
+    assert mp_service.order_stage({**base, "supply_id": "s1", "supply_status": "done"}) == "handed"
+    assert mp_service.order_stage({**base, "status": MP_ORDER_STATUS_CANCELLED}) == "cancelled"
+
+
 def test_order_detail_404(manager_client):
     assert manager_client.get(f"/marketplaces/orders/{uuid.uuid4()}").status_code == 404
 
@@ -539,6 +590,85 @@ def test_manual_link_and_unlink(manager_client, catalog_fixture):
     r = manager_client.delete(f"/marketplaces/products/{mp_id}/link")
     assert r.status_code == 200
     assert manager_client.delete(f"/marketplaces/products/{mp_id}/link").status_code == 404
+
+
+def test_product_mp_articles_follow_link(manager_client, admin_client, catalog_fixture):
+    """Артикул продавца в карточке товара — производное от связки: появляется
+    вместе со связкой и исчезает вместе с ней, без зачистки хранимых полей."""
+    mp_id = catalog_fixture["mp_product_id"]
+    pid = catalog_fixture["product_id"]
+
+    assert admin_client.get(f"/marketplaces/wms-products/{pid}/articles").json()["items"] == []
+
+    r = manager_client.post(f"/marketplaces/products/{mp_id}/link", json={
+        "product_id": pid, "variant_id": catalog_fixture["variant_id"],
+    })
+    assert r.status_code == 200, r.text
+
+    items = admin_client.get(f"/marketplaces/wms-products/{pid}/articles").json()["items"]
+    assert [i["offer_id"] for i in items] == ["ART-900001"]
+    assert items[0]["variant_id"] == catalog_fixture["variant_id"]
+    assert items[0]["marketplace"] == MP_OZON
+
+    # Товар ищется по артикулу продавца, а не только по своему SKU.
+    found = admin_client.get("/products?search=ART-900001").json()["items"]
+    assert pid in [i["id"] for i in found]
+
+    assert manager_client.delete(f"/marketplaces/products/{mp_id}/link").status_code == 200
+    assert admin_client.get(f"/marketplaces/wms-products/{pid}/articles").json()["items"] == []
+    found = admin_client.get("/products?search=ART-900001").json()["items"]
+    assert pid not in [i["id"] for i in found]
+
+
+def test_manual_link_pulls_card_barcodes(manager_client, catalog_fixture):
+    """Связка — утверждение «карточка = вариант», поэтому ШК карточки уезжают
+    в вариант; занятый другим вариантом код пропускается."""
+    pid = catalog_fixture["product_id"]
+    vid = catalog_fixture["variant_id"]
+    fresh = f"47{uuid.uuid4().hex[:10]}"
+    foreign = f"48{uuid.uuid4().hex[:10]}"
+    other_vid = str(uuid.uuid4())
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO product_variants (id, product_id, client_id, color_id, size_id, "
+            "length, width, height, sku, sku_pending, images_json, is_active, created_at, is_deleted) "
+            "VALUES (?, ?, ?, NULL, NULL, 1, 1, 1, ?, 0, '[]', 1, NOW(), 0)",
+            (other_vid, pid, catalog_fixture["client_id"], f"MP-V2-{other_vid[:8]}"),
+        )
+        conn.execute(
+            "INSERT INTO product_barcodes (id, product_id, variant_id, barcode, created_at, is_deleted) "
+            "VALUES (?, ?, ?, ?, NOW(), 0)",
+            (str(uuid.uuid4()), pid, other_vid, foreign),
+        )
+        conn.execute(
+            "UPDATE mp_products SET barcodes = ? WHERE id = ?",
+            (json.dumps([catalog_fixture["barcode"], fresh, foreign]),
+             catalog_fixture["mp_product_id"]),
+        )
+        conn.commit()
+
+    r = manager_client.post(
+        f"/marketplaces/products/{catalog_fixture['mp_product_id']}/link",
+        json={"product_id": pid, "variant_id": vid},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json() == {"message": "ok", "barcodes_written": 1, "barcodes_skipped": 1}
+
+    with get_connection() as conn:
+        codes = {
+            str(row["barcode"]) for row in conn.execute(
+                "SELECT barcode FROM product_barcodes WHERE variant_id = ? "
+                "AND COALESCE(is_deleted, 0) = 0",
+                (vid,),
+            ).fetchall()
+        }
+        owner = conn.execute(
+            "SELECT variant_id FROM product_barcodes WHERE barcode = ? "
+            "AND COALESCE(is_deleted, 0) = 0",
+            (foreign,),
+        ).fetchone()
+    assert codes == {catalog_fixture["barcode"], fresh}
+    assert str(owner["variant_id"]) == other_vid
 
 
 def test_link_foreign_client_product_rejected(manager_client, catalog_fixture):
