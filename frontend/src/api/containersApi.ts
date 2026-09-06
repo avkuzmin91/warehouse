@@ -299,6 +299,20 @@ export const CONTAINER_STATUS_LABELS: Record<ContainerStatus, string> = {
   placed: 'Размещён',
 }
 
+/** Подписи операций журнала короба — те же, что в backend/config.py. */
+export const CONTAINER_OP_LABELS: Record<string, string> = {
+  create: 'Заведён',
+  take: 'Взят в работу',
+  item_add: 'Товар в короб',
+  item_remove: 'Изъятие из короба',
+  close: 'Закрыт',
+  reopen: 'Открыт заново',
+  place: 'Размещён',
+  move: 'Перемещён',
+  release: 'Освобождён',
+  delete: 'Удалён',
+}
+
 export function containerStatusTone(status: ContainerStatus): string {
   if (status === 'placed') return 'success'
   if (status === 'closed') return 'info'

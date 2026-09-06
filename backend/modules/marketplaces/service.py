@@ -338,6 +338,42 @@ def upsert_order(connection, account_id: str, marketplace: str, parsed: dict) ->
     return "created"
 
 
+def relink_order_lines(connection, account) -> int:
+    """Дозаполнить карточку у строк заказов, приехавших раньше самой карточки.
+
+    Состав заказа пишется один раз при создании, поэтому заказ, синхронизированный
+    до первой загрузки каталога, навсегда остался бы без карточки — а значит и без
+    связки с товаром WMS, сколько её ни делай на карточке.
+    """
+    account_id = str(account["id"])
+    marketplace = str(account["marketplace"])
+    rows = connection.execute(
+        "SELECT l.id, l.offer_id, o.payload FROM mp_order_lines l "
+        "JOIN mp_orders o ON o.id = l.order_id "
+        "WHERE o.account_id = ? AND l.mp_product_id IS NULL",
+        (account_id,),
+    ).fetchall()
+    relinked = 0
+    for row in rows:
+        line: dict = {"offer_id": row["offer_id"]}
+        if marketplace == MP_WB:
+            try:
+                payload = json.loads(row["payload"] or "{}")
+            except ValueError:
+                payload = {}
+            line["nm_id"] = str(payload.get("nmId") or "") or None
+            line["barcodes"] = [str(b) for b in (payload.get("skus") or []) if str(b)]
+        mp_product_id = _find_mp_product_id(connection, account_id, marketplace, line)
+        if not mp_product_id:
+            continue
+        connection.execute(
+            "UPDATE mp_order_lines SET mp_product_id = ? WHERE id = ?",
+            (mp_product_id, str(row["id"])),
+        )
+        relinked += 1
+    return relinked
+
+
 def _apply_wb_status(connection, account_id: str, external_id: str, supplier_status: str, wb_status: str) -> bool:
     external = wb_external_status(supplier_status, wb_status)
     status = normalize_status(MP_WB, external)
@@ -562,7 +598,8 @@ def sync_account_catalog(connection, account) -> dict:
                     external_color=color,
                 )
     linked = auto_link_by_barcode(connection, account)
-    stats = {"fetched": fetched, "auto_linked": linked}
+    relinked = relink_order_lines(connection, account)
+    stats = {"fetched": fetched, "auto_linked": linked, "relinked_lines": relinked}
     write_sync_log(connection, account_id, MP_SYNC_KIND_CATALOG, ok=True, stats=stats)
     return stats
 

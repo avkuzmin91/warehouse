@@ -254,6 +254,45 @@ def test_sync_wb_new_and_cancel(monkeypatch, wb_account):
         assert str(row["status"]) == MP_ORDER_STATUS_CANCELLED
 
 
+def test_sync_catalog_relinks_orders_synced_before_cards(monkeypatch, wb_account):
+    """Заказ приехал раньше каталога: карточка догоняется обновлением карточек.
+
+    Иначе строка навсегда осталась бы без карточки, а значит и без связки с товаром.
+    """
+    barcode = "4650000000001"
+    monkeypatch.setattr(mp_clients, "wb_fetch_new_orders", lambda creds: [_wb_order(515, barcode=barcode)])
+    monkeypatch.setattr(mp_clients, "wb_fetch_order_statuses", lambda creds, ids: [])
+    monkeypatch.setattr(mp_clients, "wb_fetch_cards", lambda creds: [{
+        "nmID": 555000111,
+        "vendorCode": "wb-art-1",
+        "title": "Кроссовки WB",
+        "sizes": [
+            {"techSize": "41", "skus": ["4650000000009"]},
+            {"techSize": "42", "skus": [barcode]},
+        ],
+    }])
+    with get_connection() as conn:
+        account = conn.execute("SELECT * FROM mp_accounts WHERE id = ?", (wb_account["id"],)).fetchone()
+        mp_service.sync_account_orders(conn, account)
+        conn.commit()
+        line = conn.execute(
+            "SELECT l.id, l.mp_product_id FROM mp_order_lines l "
+            "JOIN mp_orders o ON o.id = l.order_id WHERE o.account_id = ?",
+            (wb_account["id"],),
+        ).fetchone()
+        assert line["mp_product_id"] is None
+
+        stats = mp_service.sync_account_catalog(conn, account)
+        conn.commit()
+        row = conn.execute(
+            "SELECT mp.external_size FROM mp_order_lines l "
+            "JOIN mp_products mp ON mp.id = l.mp_product_id WHERE l.id = ?",
+            (str(line["id"]),),
+        ).fetchone()
+    assert stats["relinked_lines"] == 1
+    assert str(row["external_size"]) == "42"
+
+
 def test_run_marketplace_sync_isolates_failure(monkeypatch, ozon_account, wb_account):
     def boom(creds):
         raise MpApiError("Неверный API-ключ или нет доступа (HTTP 401)")

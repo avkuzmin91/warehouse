@@ -9,7 +9,6 @@ import {
   isContainerCode,
   placeContainers,
   type ContainerItem,
-  type ContainerPendingBox,
   type ContainerPendingPlacement,
   type ContainerPlaceItemScan,
   type ContainerPlaceSource,
@@ -462,18 +461,6 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
     setBoxes((prev) => prev.filter((x) => x.id !== id))
   }
 
-  /** Тап по коробу в очереди = его скан: объект уникальный, пересчитывать нечего.
-   *
-   * Товар без короба так брать нельзя — его количество это число сканов, готовое
-   * `qty` из списка сломало бы поштучный пересчёт.
-   */
-  function takePendingBox(b: ContainerPendingBox) {
-    if (busy || source.kind !== 'collected') return
-    if (boxes.some((x) => x.id === b.id)) return
-    scanSuccessFeedback()
-    setBoxes((prev) => [{ id: b.id, doc_number: b.doc_number, items_qty: b.items_qty, moving: false }, ...prev])
-  }
-
   async function submit() {
     if (busy || empty || !target) return
     setBusy(true)
@@ -832,8 +819,6 @@ export function PlaceScreen({ init }: { init?: PlaceInit }) {
         <PendingPlacementSheet
           data={pending}
           takenIds={takenPendingIds}
-          canTake={source.kind === 'collected'}
-          onTake={takePendingBox}
           onClose={() => setShowPending(false)}
         />
       )}

@@ -229,7 +229,7 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
               <>
                 {status === 'open' && (
                   <div className="line-sub" style={{ marginTop: -2, marginBottom: 10 }}>
-                    Крестик изымает 1 шт. и отменяет запись упаковки за неё.
+                    Изъятие отменяет запись упаковки за единицу.
                   </div>
                 )}
                 {box.contents.map((c) => (
@@ -247,13 +247,11 @@ export function PutawayBoxScreen({ shipmentId, boxId }: { shipmentId: string; bo
                       </div>
                       {status === 'open' && c.line_id && (
                         <button
-                          className="icon-btn danger"
+                          className="btn ghost sm auto"
                           disabled={busy}
                           onClick={() => { void onRemove(c.line_id, 1) }}
-                          aria-label="Изъять 1 шт."
-                          title="Изъять 1 шт."
                         >
-                          <Icon name="x" size={18} />
+                          <Icon name="refresh" size={14} /> Изъять 1 шт.
                         </button>
                       )}
                     </div>

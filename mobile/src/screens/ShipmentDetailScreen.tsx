@@ -450,7 +450,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                           />
                         </div>
                       </div>
-                      {opts.length === 0 ? (
+                      {need === 0 ? null : opts.length === 0 ? (
                         <div className="line-sub" style={{ marginTop: 8, color: 'var(--c-warning)' }}>
                           Нет свободного товара на хранении для передачи.
                         </div>

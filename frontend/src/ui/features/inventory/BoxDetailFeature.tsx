@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import {
   getContainer,
@@ -9,6 +10,8 @@ import {
 } from '../../../api/containersApi'
 import type { ContainerDetailResponse } from '../../../api/containersApi'
 import { BoxTransferDrawer, type BoxTransferMode } from './BoxTransferDrawer'
+import { BoxContents } from './boxDetail/BoxContents'
+import { BoxHistory } from './boxDetail/BoxHistory'
 import { printBoxLabels, POPUP_BLOCKED_HINT } from './boxLabels'
 import { getLocations } from '../../../api/locationsApi'
 import type { LocationItem } from '../../../api/locationsApi'
@@ -21,7 +24,7 @@ import type { BadgeTone } from '../../primitives/Badge'
 import { Icon } from '../../primitives/Icon'
 import { EmptyState } from '../../primitives/EmptyState'
 import { useToast } from '../../feedback/Toast'
-import { MOSCOW_TZ, parseMoscow } from '../../../utils/format'
+import { MOSCOW_TZ, fmtDurationShort, parseMoscow } from '../../../utils/format'
 
 function fmtDateTime(iso: string | null): string {
   if (!iso) return '—'
@@ -29,6 +32,25 @@ function fmtDateTime(iso: string | null): string {
   return Number.isNaN(d.getTime())
     ? iso
     : d.toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short', timeZone: MOSCOW_TZ })
+}
+
+/** «стоит здесь 3 дн» — возраст важнее точной секунды: по нему видно залежавшийся короб. */
+function ageHint(iso: string | null): string | null {
+  if (!iso) return null
+  const d = parseMoscow(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const ms = Date.now() - d.getTime()
+  return ms < 60_000 ? null : fmtDurationShort(ms)
+}
+
+function InfoRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="row gap-8" style={{ alignItems: 'baseline' }}>
+      <span className="t-sub">{label}</span>
+      <span style={{ flex: 1 }} />
+      <span style={{ fontSize: 13, textAlign: 'right' }}>{children}</span>
+    </div>
+  )
 }
 
 /** Карточка короба: содержимое, история и ручные действия без ТСД.
@@ -46,6 +68,7 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [zoneId, setZoneId] = useState('')
+  const [moveOpen, setMoveOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [transfer, setTransfer] = useState<BoxTransferMode | null>(null)
 
@@ -87,6 +110,7 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
       const res = await placeContainers({ zone_id: zoneId, box_ids: [box.id] })
       toast(`Короб ${box.doc_number} → ${res.zone_name}`, 'success')
       setZoneId('')
+      setMoveOpen(false)
       await load()
     } catch (e) {
       toast(e instanceof Error ? e.message : 'Не удалось разместить короб', 'error')
@@ -111,7 +135,7 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
   }
 
   if (loading) {
-    return <DetailPage title="Короб" backTo="/inventory/boxes"><Card>Загрузка…</Card></DetailPage>
+    return <DetailPage title="Короб" backTo="/inventory/boxes"><Card><div style={{ padding: 14 }}>Загрузка…</div></Card></DetailPage>
   }
   if (error || !box) {
     return (
@@ -121,108 +145,79 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
     )
   }
 
-  const canPlace = box.status === 'closed' || box.status === 'placed'
+  const needsPlacement = box.status === 'closed'
+  const canMove = box.status === 'placed'
+  const placedAge = ageHint(box.placed_at)
+  const quality: 'good' | 'defect' | 'mixed' | null = contents.length === 0
+    ? null
+    : contents.every((c) => c.quality === 'defect')
+      ? 'defect'
+      : contents.every((c) => c.quality === 'good') ? 'good' : 'mixed'
 
   return (
     <DetailPage
       title={box.doc_number}
-      subtitle={box.doc_number_task ? `Собран в задаче ${box.doc_number_task}` : 'Короб'}
       backTo="/inventory/boxes"
       actions={
-        <button className="btn" disabled={busy} onClick={() => { void handlePrintLabel() }}>
-          <Icon name="print" size={14} />Печать этикетки
-        </button>
+        <>
+          <Badge tone={containerStatusTone(box.status) as BadgeTone}>
+            {CONTAINER_STATUS_LABELS[box.status]}
+          </Badge>
+          <button className="btn" disabled={busy} onClick={() => { void handlePrintLabel() }}>
+            <Icon name="print" size={14} />Печать этикетки
+          </button>
+        </>
       }
     >
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 332px', gap: 18, alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <Card>
-            <CardHead>
-              <span>Содержимое</span>
-              <span style={{ flex: 1 }} />
-              <span className="t-sub">{box.items_qty} шт.</span>
-              {box.status === 'placed' && (
-                <button
-                  className="btn sm ghost"
-                  disabled={busy}
-                  title="Со стола или с полки — в этот короб. Короб однороден по качеству."
-                  onClick={() => setTransfer({ kind: 'add' })}
-                >
-                  <Icon name="plus" size={13} /> Доложить товар
-                </button>
-              )}
-            </CardHead>
-            {contents.length === 0 ? (
-              <div className="t-sub" style={{ padding: '8px 2px' }}>Короб пуст.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {contents.map((c) => {
-                  const label = [c.product_name, c.color_name, c.size_name].filter(Boolean).join(' · ')
-                  return (
-                    <div key={`${c.product_id}-${c.color_id ?? ''}-${c.size_id ?? ''}-${c.quality}`}
-                      className="row gap-8" style={{ alignItems: 'center' }}>
-                      <span className="mono">{c.product_sku ?? '—'}</span>
-                      <span className="t-sub">{label}</span>
-                      {c.quality === 'defect' && (
-                        <span style={{ color: 'var(--c-danger)', fontSize: 12 }}>брак</span>
-                      )}
-                      <span style={{ flex: 1 }} />
-                      <span className="num">{c.qty}</span>
-                      {box.status === 'placed' && (
-                        <button
-                          className="btn sm ghost"
-                          disabled={busy}
-                          title="На эту же полку, в другое место или в другой короб"
-                          onClick={() => setTransfer({ kind: 'remove', line: c })}
-                        >
-                          Изъять
-                        </button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </Card>
-
-          <Card>
-            <CardHead>История</CardHead>
-            {ops.length === 0 ? (
-              <div className="t-sub" style={{ padding: '8px 2px' }}>Записей нет.</div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {ops.map((o) => (
-                  <div key={o.id} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    <div className="row gap-8" style={{ fontSize: 13 }}>
-                      <span>{o.comment ?? o.op_type}</span>
-                      {o.qty != null && <span className="num t-sub">{o.qty} шт.</span>}
-                    </div>
-                    <div className="t-sub" style={{ fontSize: 12 }}>
-                      {fmtDateTime(o.created_at)}
-                      {o.created_by_name ? ` · ${o.created_by_name}` : ''}
-                      {o.product_name ? ` · ${o.product_name}` : ''}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
+          <BoxContents
+            box={box}
+            contents={contents}
+            busy={busy}
+            onAdd={() => setTransfer({ kind: 'add' })}
+            onRemove={(line) => setTransfer({ kind: 'remove', line })}
+          />
+          <BoxHistory ops={ops} />
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <Card>
-            <CardHead>Короб</CardHead>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '0 2px' }}>
-              <div className="row gap-8">
-                <span className="t-sub">Статус</span>
+          {needsPlacement && (
+            <Card>
+              <CardHead>
+                <span className="card-head-title">Разместить</span>
                 <span style={{ flex: 1 }} />
-                <Badge tone={containerStatusTone(box.status) as BadgeTone}>
-                  {CONTAINER_STATUS_LABELS[box.status]}
-                </Badge>
+                <span className="t-sub">ждёт развозки</span>
+              </CardHead>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 14 }}>
+                <Combobox
+                  options={zoneOptions}
+                  value={zoneId}
+                  onChange={(v) => setZoneId(String(v ?? ''))}
+                  placeholder="Место хранения"
+                />
+                <button className="btn primary" disabled={busy || !zoneId} onClick={() => { void handlePlace() }}>
+                  <Icon name="archive" size={14} />Разместить
+                </button>
+                <div className="t-sub">
+                  Обычно короба развозят сканером на ТСД пачкой; здесь — когда сканера нет под рукой.
+                </div>
               </div>
-              <div className="row gap-8">
-                <span className="t-sub">Место</span>
-                <span style={{ flex: 1 }} />
+            </Card>
+          )}
+
+          <Card>
+            <CardHead><span className="card-head-title">Короб</span></CardHead>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9, padding: 14 }}>
+              <InfoRow label="Качество">
+                {quality === 'defect' ? <Badge tone="danger">Брак</Badge>
+                  : quality === 'mixed' ? <Badge tone="warning">Смешанный</Badge>
+                    : quality === 'good' ? 'Годный' : '—'}
+              </InfoRow>
+              <InfoRow label="Внутри">
+                {box.items_qty > 0 ? `${box.items_qty} шт.` : 'пусто'}
+              </InfoRow>
+              <InfoRow label="Место">
                 {box.zone_id ? (
                   <Link
                     to={`/inventory/balances?view=zone&place=${encodeURIComponent(box.zone_name ?? '')}`}
@@ -231,26 +226,64 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
                     {box.zone_name ?? '—'}
                   </Link>
                 ) : (
-                  <span>{box.zone_name ?? '—'}</span>
+                  box.zone_name ?? '—'
                 )}
-              </div>
-              <div className="row gap-8">
-                <span className="t-sub">Клиент</span>
-                <span style={{ flex: 1 }} />
-                <span>{box.client_name ?? '—'}</span>
-              </div>
-              <div className="row gap-8">
-                <span className="t-sub">Закрыт</span>
-                <span style={{ flex: 1 }} />
-                <span>{fmtDateTime(box.closed_at)}</span>
-              </div>
-              <div className="row gap-8">
-                <span className="t-sub">Размещён</span>
-                <span style={{ flex: 1 }} />
-                <span>{fmtDateTime(box.placed_at)}</span>
-              </div>
+              </InfoRow>
+              <InfoRow label="Клиент">{box.client_name ?? '—'}</InfoRow>
+              <InfoRow label="Задача">
+                {box.doc_id ? (
+                  <Link to={`/inventory/shipments/${box.doc_id}`}>{box.doc_number_task ?? 'Открыть'}</Link>
+                ) : (
+                  '—'
+                )}
+              </InfoRow>
+              <div style={{ borderTop: '1px solid var(--c-border)', margin: '2px 0' }} />
+              <InfoRow label="Заведён">{fmtDateTime(box.created_at)}</InfoRow>
+              <InfoRow label="Закрыт">{fmtDateTime(box.closed_at)}</InfoRow>
+              <InfoRow label="Размещён">
+                {fmtDateTime(box.placed_at)}
+                {placedAge && box.status === 'placed' && (
+                  <span className="t-sub" style={{ marginLeft: 6 }}>{placedAge} назад</span>
+                )}
+              </InfoRow>
             </div>
           </Card>
+
+          {canMove && (
+            <Card>
+              <CardHead><span className="card-head-title">Переместить</span></CardHead>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 14 }}>
+                {/* Переезд короба почти всегда идёт сканером, поэтому форма здесь свёрнута:
+                    в карточке она нужна как запасной путь, а не как главное действие. */}
+                {moveOpen ? (
+                  <>
+                    <Combobox
+                      options={zoneOptions}
+                      value={zoneId}
+                      onChange={(v) => setZoneId(String(v ?? ''))}
+                      placeholder="Место хранения"
+                    />
+                    <div className="row gap-8">
+                      <button className="btn primary" disabled={busy || !zoneId} onClick={() => { void handlePlace() }}>
+                        <Icon name="forklift" size={14} />Переместить
+                      </button>
+                      <button className="btn ghost" disabled={busy} onClick={() => { setMoveOpen(false); setZoneId('') }}>
+                        Отмена
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <button className="btn ghost" onClick={() => setMoveOpen(true)}>
+                    <Icon name="forklift" size={14} />Переместить в другое место
+                  </button>
+                )}
+                <div className="t-sub">
+                  Короб едет целиком: содержимое при переезде не меняется. Обычно это делают
+                  сканером на ТСД; здесь — когда сканера нет под рукой.
+                </div>
+              </div>
+            </Card>
+          )}
 
           {transfer && (
             <BoxTransferDrawer
@@ -260,27 +293,6 @@ export function BoxDetailFeature({ boxId }: { boxId: string }) {
               onClose={() => setTransfer(null)}
               onDone={() => { setTransfer(null); void load() }}
             />
-          )}
-
-          {canPlace && (
-            <Card>
-              <CardHead>{box.status === 'closed' ? 'Разместить' : 'Переместить'}</CardHead>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Combobox
-                  options={zoneOptions}
-                  value={zoneId}
-                  onChange={(v) => setZoneId(String(v ?? ''))}
-                  placeholder="Место хранения"
-                />
-                <button className="btn primary" disabled={busy || !zoneId} onClick={() => { void handlePlace() }}>
-                  <Icon name="archive" size={14} />
-                  {box.status === 'closed' ? 'Разместить' : 'Переместить'}
-                </button>
-                <div className="t-sub" style={{ fontSize: 12 }}>
-                  Обычно это делают сканером на ТСД; здесь — когда сканера нет под рукой.
-                </div>
-              </div>
-            </Card>
           )}
         </div>
       </div>

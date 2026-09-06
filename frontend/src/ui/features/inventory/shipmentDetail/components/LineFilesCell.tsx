@@ -73,6 +73,24 @@ export function LineFilesCell({
     e.target.value = ''
   }
 
+  function draggingFiles(e: React.DragEvent) {
+    return Array.from(e.dataTransfer.types ?? []).includes('Files')
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    if (!canEdit || !draggingFiles(e)) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setDragOver(true)
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    // Курсор, ушедший на вложенный элемент, тоже даёт dragleave — без этой проверки
+    // подсветка мигает, пока файл ведут над ячейкой.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragOver(false)
+  }
+
   function handleDrop(e: React.DragEvent) {
     e.preventDefault()
     setDragOver(false)
@@ -119,6 +137,7 @@ export function LineFilesCell({
     />
   )
 
+  function renderContent() {
   // Пусто + только просмотр → прочерк. Со сведениями об этикетке прочерк не ставим:
   // на закрытой задаче тоже видно, чем маркировали строку.
   if (entries.length === 0 && !canEdit && !label) {
@@ -186,7 +205,7 @@ export function LineFilesCell({
               )}
               <button
                 type="button"
-                title="Прикрепить файл этикетки (PDF, PNG, JPG)"
+                title="Прикрепить файл этикетки — PDF, PNG, JPG. Можно перетащить файл в ячейку"
                 disabled={uploading}
                 onClick={() => pickFile(null)}
                 className="btn ghost icon sm"
@@ -249,7 +268,7 @@ export function LineFilesCell({
           {canEdit && (
             <button
               type="button"
-              title="Прикрепить файл этикетки (PDF, PNG, JPG)"
+              title="Прикрепить файл этикетки — PDF, PNG, JPG. Можно перетащить файл в ячейку"
               disabled={uploading}
               onClick={() => pickFile(null)}
               className="btn ghost icon sm"
@@ -293,7 +312,7 @@ export function LineFilesCell({
           {canEdit && (
             <button
               type="button"
-              title="Прикрепить файл этикетки (PDF, PNG, JPG)"
+              title="Прикрепить файл этикетки — PDF, PNG, JPG. Можно перетащить файл в ячейку"
               disabled={uploading}
               onClick={() => pickFile(null)}
               className="btn ghost icon sm"
@@ -328,23 +347,18 @@ export function LineFilesCell({
   // Пусто + можно прикрепить → приглушённая ghost-кнопка (не «кричит» на пустых строках)
   if (entries.length === 0) {
     return (
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={handleDrop}
-        style={{ display: 'inline-flex', gap: 4 }}
-      >
+      <div style={{ display: 'inline-flex', gap: 4 }}>
         {hiddenInput}
         <button
           type="button"
-          title="Прикрепить файл (PDF, PNG, JPG)"
+          title="Прикрепить файл — PDF, PNG, JPG. Можно перетащить файл в ячейку"
           disabled={uploading}
           onClick={() => pickFile(null)}
           style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
             height: 28, width: 28, borderRadius: 'var(--r-md)',
-            border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}`,
-            background: dragOver ? 'var(--c-bg-hover)' : 'var(--c-bg-elev)',
+            border: '1px solid var(--c-border)',
+            background: 'var(--c-bg-elev)',
             color: 'var(--c-accent)',
             cursor: uploading ? 'default' : 'pointer', transition: 'all 120ms ease',
           }}
@@ -409,9 +423,6 @@ export function LineFilesCell({
 
   return (
     <div
-      onDragOver={(e) => { if (canEdit) { e.preventDefault(); setDragOver(true) } }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}
@@ -425,8 +436,8 @@ export function LineFilesCell({
           display: 'inline-flex', alignItems: 'center', gap: 6,
           height: 28, maxWidth: 180, padding: '0 4px 0 8px',
           borderRadius: 'var(--r-md)',
-          border: `1px solid ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}`,
-          background: dragOver ? 'var(--c-bg-hover)' : 'var(--c-bg-elev)',
+          border: '1px solid var(--c-border)',
+          background: 'var(--c-bg-elev)',
           cursor: many ? 'pointer' : 'default', transition: 'border-color 120ms ease',
         }}
       >
@@ -462,7 +473,7 @@ export function LineFilesCell({
               }}>
                 <button
                   type="button"
-                  title="Прикрепить ещё файл"
+                  title="Прикрепить ещё файл — или перетащите его в ячейку"
                   disabled={uploading}
                   onClick={(e) => { e.stopPropagation(); pickFile(null) }}
                   className="btn ghost icon sm"
@@ -614,6 +625,28 @@ export function LineFilesCell({
         </div>,
         document.body,
       )}
+    </div>
+    )
+  }
+
+  // Приём файла перетаскиванием — на общей обёртке: варианты ячейки (файл, код карточки,
+  // «нет ШК», выбор кода) рисуются разными ветками, а вести файл можно в любую из них.
+  return (
+    <div
+      onDragEnter={handleDragOver}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      style={{
+        display: 'inline-flex',
+        borderRadius: 'var(--r-md)',
+        transition: 'background-color 120ms ease',
+        ...(dragOver && canEdit
+          ? { outline: '2px dashed var(--c-accent)', outlineOffset: 3, background: 'var(--c-accent-bg)' }
+          : null),
+      }}
+    >
+      {renderContent()}
     </div>
   )
 }

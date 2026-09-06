@@ -34,21 +34,18 @@ function boxAge(b: ContainerPendingBox): number {
 
 /** Что стоит у стола и ждёт развозки: короба и собранное без короба.
  *
- * Лист подбора для одной ходки тележки: короб берётся тапом (объект уникальный,
- * тап равен скану), товар без короба — только справка, потому что его количество
- * это число сканов, и готовое `qty` из списка сломало бы поштучный пересчёт.
+ * Список только справочный — взять объект отсюда нельзя. В пачку он попадает
+ * лишь сканом своей этикетки: тап по строке жмут не глядя, и в ходку уезжает
+ * не тот короб, что взят с полки. То же и для товара без короба: его количество —
+ * это число сканов, готовое `qty` из списка сломало бы поштучный пересчёт.
  */
 export function PendingPlacementSheet({
   data,
   takenIds,
-  canTake,
-  onTake,
   onClose,
 }: {
   data: ContainerPendingPlacement
   takenIds: string[]
-  canTake: boolean
-  onTake: (box: ContainerPendingBox) => void
   onClose: () => void
 }) {
   const boxes = [...data.boxes].sort((a, b) => boxAge(a) - boxAge(b))
@@ -68,9 +65,7 @@ export function PendingPlacementSheet({
       {boxes.length > 0 && (
         <>
           <div className="line-sub" style={{ marginTop: 16 }}>
-            {canTake
-              ? 'Короба — нажмите, чтобы взять в ходку'
-              : 'Короба — чтобы взять, переключите «Откуда» на зону упаковки'}
+            Короба — возьмите нужный и отсканируйте его этикетку на шаге 2
           </div>
           <div className="combo-list" style={{ marginTop: 4 }}>
             {boxes.map((b) => {
@@ -82,12 +77,15 @@ export function PendingPlacementSheet({
                 w ? `у стола ${w.label}` : null,
               ].filter(Boolean).join(' · ')
               return (
-                <button
+                <div
                   key={b.id}
-                  className="combo-opt"
-                  style={taken ? { opacity: 0.6 } : undefined}
-                  disabled={!canTake || taken}
-                  onClick={() => onTake(b)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '10px 12px',
+                    opacity: taken ? 0.6 : undefined,
+                  }}
                 >
                   <Icon
                     name="box"
@@ -103,15 +101,13 @@ export function PendingPlacementSheet({
                       {meta}
                     </div>
                   </div>
-                  {taken ? (
+                  {taken && (
                     <span className="badge success" style={{ flex: '0 0 auto' }}>
                       <span className="dot" />
                       в пачке
                     </span>
-                  ) : canTake ? (
-                    <Icon name="plus" size={17} style={{ flex: '0 0 auto', color: 'var(--c-text-muted)' }} />
-                  ) : null}
-                </button>
+                  )}
+                </div>
               )
             })}
           </div>
