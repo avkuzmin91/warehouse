@@ -338,20 +338,28 @@ def upsert_order(connection, account_id: str, marketplace: str, parsed: dict) ->
     return "created"
 
 
-def relink_order_lines(connection, account) -> int:
+def relink_order_lines(connection, account, *, open_only: bool = False) -> int:
     """Дозаполнить карточку у строк заказов, приехавших раньше самой карточки.
 
     Состав заказа пишется один раз при создании, поэтому заказ, синхронизированный
     до первой загрузки каталога, навсегда остался бы без карточки — а значит и без
     связки с товаром WMS, сколько её ни делай на карточке.
+
+    `open_only` — для синка заказов: он идёт каждые пару минут, и перебирать там
+    всю историю ради строк, которые уже не поедут, незачем.
     """
     account_id = str(account["id"])
     marketplace = str(account["marketplace"])
+    where = "o.account_id = ? AND l.mp_product_id IS NULL"
+    params: list = [account_id]
+    if open_only:
+        placeholders = ",".join("?" for _ in MP_ORDER_TERMINAL_STATUSES)
+        where += f" AND o.status NOT IN ({placeholders})"
+        params.extend(sorted(MP_ORDER_TERMINAL_STATUSES))
     rows = connection.execute(
         "SELECT l.id, l.offer_id, o.payload FROM mp_order_lines l "
-        "JOIN mp_orders o ON o.id = l.order_id "
-        "WHERE o.account_id = ? AND l.mp_product_id IS NULL",
-        (account_id,),
+        f"JOIN mp_orders o ON o.id = l.order_id WHERE {where}",
+        params,
     ).fetchall()
     relinked = 0
     for row in rows:
@@ -470,6 +478,9 @@ def sync_account_orders(connection, account) -> dict:
                 ):
                     stats["updated"] += 1
 
+    # Карточка могла появиться в кэше уже после того, как заказ был записан:
+    # ждать ручного «Обновить карточки» значит держать заказ без связки.
+    stats["relinked_lines"] = relink_order_lines(connection, account, open_only=True)
     connection.execute(
         "UPDATE mp_accounts SET last_sync_at = ?, last_sync_error = NULL WHERE id = ?",
         (_now(), account_id),

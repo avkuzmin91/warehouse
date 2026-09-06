@@ -184,8 +184,8 @@ def test_sync_ozon_idempotent(monkeypatch, ozon_account):
         lines = conn.execute(
             "SELECT * FROM mp_order_lines WHERE order_id = ?", (str(orders[0]["id"]),)
         ).fetchall()
-    assert stats1 == {"fetched": 1, "created": 1, "updated": 0}
-    assert stats2 == {"fetched": 1, "created": 0, "updated": 0}
+    assert stats1 == {"fetched": 1, "created": 1, "updated": 0, "relinked_lines": 0}
+    assert stats2 == {"fetched": 1, "created": 0, "updated": 0, "relinked_lines": 0}
     assert len(orders) == 1
     assert len(lines) == 1
     assert int(orders[0]["total_qty"]) == 2
@@ -291,6 +291,38 @@ def test_sync_catalog_relinks_orders_synced_before_cards(monkeypatch, wb_account
         ).fetchone()
     assert stats["relinked_lines"] == 1
     assert str(row["external_size"]) == "42"
+
+
+def test_sync_orders_relinks_lines_without_card(monkeypatch, wb_account):
+    """Карточка появилась после заказа — связку догоняет обычный синк заказов,
+    без ручного «Обновить карточки»."""
+    barcode = "4650000000002"
+    monkeypatch.setattr(mp_clients, "wb_fetch_new_orders", lambda creds: [_wb_order(516, barcode=barcode)])
+    monkeypatch.setattr(mp_clients, "wb_fetch_order_statuses", lambda creds, ids: [])
+    with get_connection() as conn:
+        account = conn.execute("SELECT * FROM mp_accounts WHERE id = ?", (wb_account["id"],)).fetchone()
+        stats = mp_service.sync_account_orders(conn, account)
+        conn.commit()
+        assert stats["relinked_lines"] == 0
+
+        mp_product_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO mp_products (id, account_id, external_id, offer_id, title, barcodes, "
+            "external_size, payload, updated_at) VALUES (?,?,?,?,?,?,?,NULL,NOW())",
+            (mp_product_id, wb_account["id"], "555000111", "wb-art-1", "Кроссовки WB",
+             json.dumps([barcode]), "42"),
+        )
+        conn.commit()
+
+        stats = mp_service.sync_account_orders(conn, account)
+        conn.commit()
+        line = conn.execute(
+            "SELECT l.mp_product_id FROM mp_order_lines l JOIN mp_orders o ON o.id = l.order_id "
+            "WHERE o.account_id = ?",
+            (wb_account["id"],),
+        ).fetchone()
+    assert stats["relinked_lines"] == 1
+    assert str(line["mp_product_id"]) == mp_product_id
 
 
 def test_run_marketplace_sync_isolates_failure(monkeypatch, ozon_account, wb_account):
