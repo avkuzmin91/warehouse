@@ -3,6 +3,7 @@ import { newRequestId } from '../api/http'
 import { useNav } from '../nav/NavContext'
 import { getUnloadingZones, type Zone } from '../api/lookupsApi'
 import { getBalancesByZone, type ZoneBalance } from '../api/balancesApi'
+import { allocateSources } from '../utils/allocateSources'
 import { balanceKey } from '../utils/balanceKey'
 import {
   advanceShipment,
@@ -28,6 +29,34 @@ import { fmtDate, variantTitle } from '../utils/format'
 
 type Row = { zoneId: string; qty: number }
 type MoveZoneOption = { id: string; name: string; available: number }
+
+function sourceZonesFor(balances: ZoneBalance[], doc: ShipmentDetail, line: ShipmentLine): MoveZoneOption[] {
+  const key = balanceKey(line)
+  const quality = doc.cargo_type === 'defect' ? 'defect' : 'good'
+  return balances
+    .filter(
+      (z) =>
+        z.op_status === 'storage' &&
+        z.quality === quality &&
+        z.location_id &&
+        z.qty > 0 &&
+        z.client_id === doc.client_id &&
+        balanceKey(z) === key,
+    )
+    .map((z) => ({ id: z.location_id!, name: z.location_name ?? z.location_id!, available: z.qty }))
+}
+
+// Строки передачи на упаковку заполняются сами: количество и места-источники
+// подбираются по остаткам, кладовщику остаётся нажать «Передать».
+function autofillMoveRows(doc: ShipmentDetail, balances: ZoneBalance[]): Record<string, Row[]> {
+  const next: Record<string, Row[]> = {}
+  for (const l of doc.lines) {
+    const need = Math.max(0, l.qty - l.available_for_pack)
+    const rows = allocateSources(need, sourceZonesFor(balances, doc, l))
+    next[l.id] = rows.length ? rows : [{ zoneId: '', qty: need }]
+  }
+  return next
+}
 
 function lineTitle(l: ShipmentLine): string {
   return variantTitle(l.product_name, [l.color_name, l.size_name])
@@ -126,7 +155,13 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
     if (!needSources) return
     const ac = new AbortController()
     getBalancesByZone({ clientId: doc.client_id }, ac.signal)
-      .then((r) => setZoneBalances(r.items))
+      .then((r) => {
+        if (ac.signal.aborted) return
+        setZoneBalances(r.items)
+        // Остатки приходят сразу после загрузки документа, когда строки передачи
+        // только что сброшены, — поэтому автоподбор не затирает правки кладовщика.
+        if (doc.status === 'packing') setMoveRows(autofillMoveRows(doc, r.items))
+      })
       .catch(() => {})
     return () => ac.abort()
   }, [doc])
@@ -135,19 +170,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
 
   function sourceZones(line: ShipmentLine): MoveZoneOption[] {
     if (!doc) return []
-    const key = balanceKey(line)
-    const quality = doc.cargo_type === 'defect' ? 'defect' : 'good'
-    return zoneBalances
-      .filter(
-        (z) =>
-          z.op_status === 'storage' &&
-          z.quality === quality &&
-          z.location_id &&
-          z.qty > 0 &&
-          z.client_id === doc.client_id &&
-          balanceKey(z) === key,
-      )
-      .map((z) => ({ id: z.location_id!, name: z.location_name ?? z.location_id!, available: z.qty }))
+    return sourceZonesFor(zoneBalances, doc, line)
   }
 
   // Стабильный request_id на логическое действие (идемпотентность при обрыве сети,
@@ -385,7 +408,6 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                   const opts = sourceZones(l)
                   const need = Math.max(0, l.qty - l.available_for_pack)
                   const rows = moveRows[l.id] ?? []
-                  const availById = new Map(opts.map((o) => [o.id, o.available]))
                   return (
                     <div key={l.id} className="line">
                       <div className="line-head">
@@ -453,10 +475,7 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                               />
                               <ZoneField
                                 value={row.zoneId}
-                                options={opts.map((o) => ({
-                                  value: o.id,
-                                  label: `${o.name} (на хранении ${o.available})`,
-                                }))}
+                                options={opts.map((o) => ({ value: o.id, label: `${o.name} · ${o.available} шт` }))}
                                 placeholder="Место-источник…"
                                 title="Откуда передать"
                                 onError={setError}
@@ -467,13 +486,20 @@ export function ShipmentDetailScreen({ shipmentId }: { shipmentId: string }) {
                                   }))
                                 }
                               />
+                              {rows.length > 1 && (
+                                <button
+                                  className="appbar-back"
+                                  style={{ flex: '0 0 50px', height: 50 }}
+                                  aria-label="Убрать строку"
+                                  onClick={() =>
+                                    setMoveRows((p) => ({ ...p, [l.id]: rows.filter((_, idx) => idx !== i) }))
+                                  }
+                                >
+                                  <Icon name="x" size={18} />
+                                </button>
+                              )}
                             </div>
                           ))}
-                          {rows.length > 0 && rows[0].zoneId && (
-                            <div className="line-sub" style={{ marginTop: 6 }}>
-                              доступно в выбранном месте: {availById.get(rows[0].zoneId) ?? 0} шт
-                            </div>
-                          )}
                           <div className="line-row">
                             {rows.length < opts.length && (
                               <button
